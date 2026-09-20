@@ -15,6 +15,7 @@ artifacts/
 # Secrets and local config
 .env
 .env.*
+!.env.example
 *.pfx
 *.key
 appsettings.*.json
