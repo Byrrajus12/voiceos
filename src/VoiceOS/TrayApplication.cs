@@ -67,6 +67,8 @@ public sealed class TrayApplication : ApplicationContext
         {
             ActivationState.Recording => "VoiceOS — Recording",
             ActivationState.Stopping => "VoiceOS — Stopping",
+            ActivationState.Transcribing => "VoiceOS — Transcribing",
+            ActivationState.Understanding => "VoiceOS — Understanding",
             _ => "VoiceOS — Idle"
         };
     }
@@ -77,6 +79,8 @@ public sealed class TrayApplication : ApplicationContext
         {
             ActivationState.Recording => Color.Crimson,
             ActivationState.Stopping => Color.DarkOrange,
+            ActivationState.Transcribing => Color.DodgerBlue,
+            ActivationState.Understanding => Color.MediumPurple,
             _ => Color.SlateGray
         };
 

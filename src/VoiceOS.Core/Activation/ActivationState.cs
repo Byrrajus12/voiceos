@@ -4,5 +4,7 @@ public enum ActivationState
 {
     Idle,
     Recording,
-    Stopping
+    Stopping,
+    Transcribing,
+    Understanding
 }

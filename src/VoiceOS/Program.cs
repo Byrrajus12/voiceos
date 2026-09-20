@@ -3,6 +3,8 @@ using Microsoft.Extensions.Logging;
 using VoiceOS.Core.Activation;
 using VoiceOS.Core.Audio;
 using VoiceOS.Core.Config;
+using VoiceOS.Core.Decision;
+using VoiceOS.Core.Speech;
 
 namespace VoiceOS;
 
@@ -24,6 +26,8 @@ internal static class Program
             return;
         }
 
+        DotEnvLoader.Load();
+
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
 
@@ -42,11 +46,51 @@ internal static class Program
             ? new RecordingDebugWriter(writerLogger)
             : null;
 
-        var orchestrator = new ActivationOrchestrator(hook, audio, debugWriter, config, orchestratorLogger);
-        using var trayApp = new TrayApplication(orchestrator);
+        ISpeechRecognizer? speechRecognizer = null;
+        var modelDir = ResolvePath(config.ModelDirectory);
+        var (modelValid, missingFiles) = ModelManager.ValidateModelFiles(modelDir);
+        if (modelValid)
+        {
+            var sttLogger = loggerFactory.CreateLogger<ParakeetSpeechRecognizer>();
+            speechRecognizer = new ParakeetSpeechRecognizer(modelDir, sttLogger);
+        }
+        else
+        {
+            var startupLogger = loggerFactory.CreateLogger("VoiceOS.Startup");
+            startupLogger.LogWarning(
+                "Parakeet model not found in {Dir} — missing: {Files}. STT disabled.\n{Instructions}",
+                modelDir, string.Join(", ", missingFiles), ModelManager.DownloadInstructions);
+        }
 
+        IDecisionEngine? decisionEngine = null;
+        var apiKey = Environment.GetEnvironmentVariable("TYPESAFE_API_KEY");
+        if (!string.IsNullOrWhiteSpace(apiKey))
+        {
+            var jevLogger = loggerFactory.CreateLogger<TypeSafeJevDecisionEngine>();
+            decisionEngine = new TypeSafeJevDecisionEngine(
+                apiKey,
+                new HttpClient(),
+                config.TypeSafeModel,
+                config.JevCommandThreshold,
+                config.JevActionThreshold,
+                jevLogger);
+        }
+        else
+        {
+            var startupLogger = loggerFactory.CreateLogger("VoiceOS.Startup");
+            startupLogger.LogWarning("TYPESAFE_API_KEY not set — Jev decision engine disabled.");
+        }
+
+        var orchestrator = new ActivationOrchestrator(
+            hook, audio, debugWriter, config, orchestratorLogger,
+            speechRecognizer, decisionEngine);
+
+        using var trayApp = new TrayApplication(orchestrator);
         Application.Run(trayApp);
     }
+
+    private static string ResolvePath(string path)
+        => Path.IsPathRooted(path) ? path : Path.Combine(AppContext.BaseDirectory, path);
 
     private static VoiceOSConfig LoadConfig()
     {

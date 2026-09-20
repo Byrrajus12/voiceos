@@ -32,12 +32,16 @@ Do not build elaborate fake Windows environments to increase test counts.
 
 ## Agent/model delegation
 
-- **Opus**: architecture, decomposition, integration judgment, coordination
-- **Sonnet** (`implementer`, `reviewer`): implementation and substantive review
-- **Haiku** (`code-scout`): read/search/source inspection, mechanical analysis
-- Agent Teams only when work is independently parallelizable
-- Avoid multiple agents editing overlapping production files
-- Normal subagents preferred for small isolated tasks
+- Work directly in the current session by default.
+- Do not create or propose Agent Teams.
+- Do not delegate routine repository exploration, implementation, testing, debugging, or self-review.
+- Prefer direct `rg`/search/read operations over spawning an agent solely to inspect code.
+- A single narrowly scoped subagent may be used when an independent investigation clearly benefits from isolated context.
+- Do not spawn multiple subagents unless explicitly requested.
+- Sonnet is the default model for implementation work.
+- Opus is appropriate for difficult architecture, debugging, integration judgment, or high-value review.
+- Haiku may be used for a small, bounded read-only investigation when delegation is genuinely cheaper than doing it directly.
+- Be selective with file reads: locate relevant code first and avoid repeatedly reading large files or unchanged material.
 
 ## Repo discipline
 

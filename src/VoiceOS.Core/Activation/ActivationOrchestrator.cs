@@ -1,6 +1,10 @@
 using Microsoft.Extensions.Logging;
+using NAudio.Wave;
 using VoiceOS.Core.Audio;
+using VoiceOS.Core.Candidates;
 using VoiceOS.Core.Config;
+using VoiceOS.Core.Decision;
+using VoiceOS.Core.Speech;
 
 namespace VoiceOS.Core.Activation;
 
@@ -12,7 +16,8 @@ namespace VoiceOS.Core.Activation;
 ///     Windows removes the hook if the callback blocks for ~300ms. Both methods
 ///     capture the timestamp and offload all work to Task.Run immediately.
 ///   - Grace timer (OnGraceTimerExpired) already fires on a thread-pool thread.
-///   - All state transitions and effects are serialized under _stateLock.
+///   - State transitions and synchronous effects are serialized under _stateLock.
+///   - The async pipeline (STT + Jev) runs OUTSIDE the lock on a background task.
 ///   - StateChanged is always invoked outside _stateLock to prevent lock-order issues.
 /// </summary>
 public sealed class ActivationOrchestrator : IDisposable
@@ -20,6 +25,8 @@ public sealed class ActivationOrchestrator : IDisposable
     private readonly GlobalKeyboardHook _hook;
     private readonly AudioCaptureService _audio;
     private readonly RecordingDebugWriter? _debugWriter;
+    private readonly ISpeechRecognizer? _speechRecognizer;
+    private readonly IDecisionEngine? _decisionEngine;
     private readonly VoiceOSConfig _config;
     private readonly ILogger<ActivationOrchestrator> _logger;
 
@@ -41,13 +48,17 @@ public sealed class ActivationOrchestrator : IDisposable
         AudioCaptureService audio,
         RecordingDebugWriter? debugWriter,
         VoiceOSConfig config,
-        ILogger<ActivationOrchestrator> logger)
+        ILogger<ActivationOrchestrator> logger,
+        ISpeechRecognizer? speechRecognizer = null,
+        IDecisionEngine? decisionEngine = null)
     {
         _hook = hook;
         _audio = audio;
         _debugWriter = debugWriter;
         _config = config;
         _logger = logger;
+        _speechRecognizer = speechRecognizer;
+        _decisionEngine = decisionEngine;
 
         _hook.KeyDown += OnKeyDown;
         _hook.KeyUp += OnKeyUp;
@@ -58,7 +69,6 @@ public sealed class ActivationOrchestrator : IDisposable
     private void OnKeyDown(object? sender, EventArgs e)
     {
         var now = DateTimeOffset.UtcNow;
-        // Return immediately — hook callbacks must not block or Windows removes the hook.
         _ = Task.Run(() => ProcessEvent(ActivationEvent.KeyDown, now));
     }
 
@@ -71,6 +81,7 @@ public sealed class ActivationOrchestrator : IDisposable
     private void ProcessEvent(ActivationEvent evt, DateTimeOffset now)
     {
         ActivationState newState;
+        PipelineInput? pipeline = null;
 
         lock (_stateLock)
         {
@@ -78,18 +89,21 @@ public sealed class ActivationOrchestrator : IDisposable
                 _ctx, evt, _config.ActivationMode,
                 _config.GracePeriod, _config.HoldThreshold, now);
             _ctx = next;
-            ExecuteActions(actions, now);
-            // Read state after ExecuteActions — it may have rolled back to Idle on mic failure.
+            pipeline = ExecuteActions(actions, now);
             newState = _ctx.State;
         }
 
         StateChanged?.Invoke(this, newState);
+
+        if (pipeline != null)
+            _ = RunPipelineAsync(pipeline);
     }
 
     private void OnGraceTimerExpired(object? state)
     {
         var now = DateTimeOffset.UtcNow;
         ActivationState newState;
+        PipelineInput? pipeline = null;
 
         lock (_stateLock)
         {
@@ -97,17 +111,21 @@ public sealed class ActivationOrchestrator : IDisposable
                 _ctx, ActivationEvent.GraceTimerExpired, _config.ActivationMode,
                 _config.GracePeriod, _config.HoldThreshold, now);
             _ctx = next;
-            ExecuteActions(actions, now);
+            pipeline = ExecuteActions(actions, now);
             newState = _ctx.State;
         }
 
         StateChanged?.Invoke(this, newState);
+
+        if (pipeline != null)
+            _ = RunPipelineAsync(pipeline);
     }
 
-    // Called inside _stateLock. Never raises StateChanged — callers read _ctx.State
-    // after this method returns and fire StateChanged outside the lock.
-    private void ExecuteActions(IReadOnlyList<ActivationAction> actions, DateTimeOffset now)
+    // Called inside _stateLock. Returns PipelineInput when a recording was finalized.
+    private PipelineInput? ExecuteActions(IReadOnlyList<ActivationAction> actions, DateTimeOffset now)
     {
+        PipelineInput? pipeline = null;
+
         foreach (var action in actions)
         {
             switch (action)
@@ -121,7 +139,6 @@ public sealed class ActivationOrchestrator : IDisposable
                     {
                         _logger.LogWarning("Mic capture failed — rolling back to Idle");
                         _ctx = MachineContext.Initial;
-                        // _ctx.State is now Idle; caller reads it and fires StateChanged outside the lock.
                     }
                     else
                     {
@@ -131,7 +148,7 @@ public sealed class ActivationOrchestrator : IDisposable
 
                 case ActivationAction.StopRecording:
                     _stopActivationTime = now;
-                    FinalizeRecording(now);
+                    pipeline = FinalizeRecordingSync(now);
                     break;
 
                 case ActivationAction.StartGraceTimer(var duration):
@@ -147,10 +164,12 @@ public sealed class ActivationOrchestrator : IDisposable
                     break;
             }
         }
+
+        return pipeline;
     }
 
-    // Called inside _stateLock.
-    private void FinalizeRecording(DateTimeOffset stopTime)
+    // Called inside _stateLock. Stops capture and saves debug WAV; returns pipeline input for async processing.
+    private PipelineInput? FinalizeRecordingSync(DateTimeOffset stopTime)
     {
         _graceTimer?.Dispose();
         _graceTimer = null;
@@ -159,17 +178,17 @@ public sealed class ActivationOrchestrator : IDisposable
 
         var (pcm, format) = _audio.StopCaptureAndGetPcm();
 
+        var metadata = new RecordingMetadata(
+            ActivationPressTime: _activationPressTime,
+            RecordingStart: _recordingStartTime,
+            MicCaptureStarted: _micCaptureStartedTime,
+            StopActivationTime: _stopActivationTime,
+            CaptureStopped: stopTime,
+            WavFinalized: DateTimeOffset.UtcNow,
+            TotalDurationSeconds: (stopTime - _recordingStartTime).TotalSeconds);
+
         if (_debugWriter != null && _config.DebugOutputEnabled && pcm.Length > 0)
         {
-            var metadata = new RecordingMetadata(
-                ActivationPressTime: _activationPressTime,
-                RecordingStart: _recordingStartTime,
-                MicCaptureStarted: _micCaptureStartedTime,
-                StopActivationTime: _stopActivationTime,
-                CaptureStopped: stopTime,
-                WavFinalized: DateTimeOffset.UtcNow,
-                TotalDurationSeconds: (stopTime - _recordingStartTime).TotalSeconds);
-
             try
             {
                 _debugWriter.Save(pcm, format, metadata);
@@ -180,6 +199,108 @@ public sealed class ActivationOrchestrator : IDisposable
                 _logger.LogError(ex, "Failed to save debug recording");
             }
         }
+
+        if (pcm.Length == 0) return null;
+
+        return new PipelineInput(pcm, format, metadata, DateTimeOffset.UtcNow);
+    }
+
+    private async Task RunPipelineAsync(PipelineInput input)
+    {
+        var pipelineStart = input.PipelineStart;
+        TranscriptionResult? transcription = null;
+        DecisionResult? decision = null;
+        DateTimeOffset? sttStart = null, sttEnd = null;
+        DateTimeOffset? jevStart = null, jevEnd = null;
+
+        try
+        {
+            // ── STT ──────────────────────────────────────────────────────────────────
+            StateChanged?.Invoke(this, ActivationState.Transcribing);
+
+            if (_speechRecognizer != null)
+            {
+                sttStart = DateTimeOffset.UtcNow;
+                try
+                {
+                    var samples = PcmToFloatConverter.Convert16BitPcmToFloat(input.Pcm);
+                    transcription = await _speechRecognizer.TranscribeAsync(samples.AsMemory())
+                        .ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "STT error");
+                }
+                sttEnd = DateTimeOffset.UtcNow;
+            }
+
+            if (transcription == null || !transcription.Success || string.IsNullOrWhiteSpace(transcription.Transcript))
+            {
+                var reason = transcription?.Error ?? (_speechRecognizer == null ? "No STT service" : "Empty transcript");
+                _logger.LogInformation("Skipping Jev — {Reason}", reason);
+                return;
+            }
+
+            _logger.LogInformation("Transcript: \"{Text}\" ({SttMs:F0}ms STT)",
+                transcription.Transcript, transcription.TranscriptionDurationMs);
+
+            // ── JEV ──────────────────────────────────────────────────────────────────
+            StateChanged?.Invoke(this, ActivationState.Understanding);
+
+            if (_decisionEngine != null)
+            {
+                jevStart = DateTimeOffset.UtcNow;
+                try
+                {
+                    var state = BuildDecisionState(transcription.Transcript);
+                    decision = await _decisionEngine.DecideAsync(state).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Decision engine error");
+                }
+                jevEnd = DateTimeOffset.UtcNow;
+            }
+        }
+        finally
+        {
+            var pipelineEnd = DateTimeOffset.UtcNow;
+            var result = new PipelineResult(
+                input.Metadata, transcription, decision, decision?.Plan,
+                pipelineStart, sttStart, sttEnd, jevStart, jevEnd, pipelineEnd);
+
+            LogPipelineSummary(result);
+            StateChanged?.Invoke(this, ActivationState.Idle);
+        }
+    }
+
+    private static DecisionState BuildDecisionState(string transcript)
+    {
+        var apps = CandidateBuilder.GetInstalledApps();
+        var windows = CandidateBuilder.GetOpenWindows();
+        var foreground = CandidateBuilder.GetForegroundAppName();
+
+        return new DecisionState(
+            transcript, foreground, apps, windows,
+            [MediaOperation.Play, MediaOperation.Pause, MediaOperation.Toggle, MediaOperation.Next, MediaOperation.Previous],
+            [SnapDirection.Left, SnapDirection.Right]);
+    }
+
+    private void LogPipelineSummary(PipelineResult r)
+    {
+        var totalMs = (r.PipelineEnd - r.PipelineStart).TotalMilliseconds;
+        var sttMs = r.SttStart.HasValue && r.SttEnd.HasValue
+            ? (r.SttEnd.Value - r.SttStart.Value).TotalMilliseconds : 0;
+        var jevMs = r.JevStart.HasValue && r.JevEnd.HasValue
+            ? (r.JevEnd.Value - r.JevStart.Value).TotalMilliseconds : 0;
+
+        var action = r.Plan?.Action.ToString() ?? "none";
+        var confidence = r.Plan?.Confidence ?? 0;
+        var transcript = r.Transcription?.Transcript ?? "(none)";
+
+        _logger.LogInformation(
+            "Pipeline: speech={SpeechMs:F0}ms STT={SttMs:F0}ms Jev={JevMs:F0}ms total={TotalMs:F0}ms | \"{Transcript}\" → {Action} ({Confidence:P0})",
+            r.Recording.TotalDurationSeconds * 1000, sttMs, jevMs, totalMs, transcript, action, confidence);
     }
 
     public void Dispose()
@@ -192,5 +313,8 @@ public sealed class ActivationOrchestrator : IDisposable
         _graceTimer?.Dispose();
         _hook.Dispose();
         _audio.Dispose();
+        _speechRecognizer?.Dispose();
     }
+
+    private sealed record PipelineInput(byte[] Pcm, WaveFormat Format, RecordingMetadata Metadata, DateTimeOffset PipelineStart);
 }
