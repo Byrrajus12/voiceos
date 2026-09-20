@@ -1,9 +1,11 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using VoiceOS.Core.Activation;
+using VoiceOS.Core.Apps;
 using VoiceOS.Core.Audio;
 using VoiceOS.Core.Config;
 using VoiceOS.Core.Decision;
+using VoiceOS.Core.Execution;
 using VoiceOS.Core.Speech;
 
 namespace VoiceOS;
@@ -38,6 +40,10 @@ internal static class Program
         var audioLogger = loggerFactory.CreateLogger<AudioCaptureService>();
         var writerLogger = loggerFactory.CreateLogger<RecordingDebugWriter>();
         var orchestratorLogger = loggerFactory.CreateLogger<ActivationOrchestrator>();
+
+        // ── App catalog ───────────────────────────────────────────────────────────
+        var catalogLogger = loggerFactory.CreateLogger<WindowsAppCatalog>();
+        IAppCatalog catalog = new WindowsAppCatalog(catalogLogger);
 
         var vkCode = ResolveVirtualKey(config.ActivationKey);
         var hook = new GlobalKeyboardHook(vkCode, hookLogger);
@@ -81,9 +87,17 @@ internal static class Program
             startupLogger.LogWarning("TYPESAFE_API_KEY not set — Jev decision engine disabled.");
         }
 
+        // ── Execution layer ───────────────────────────────────────────────────────
+        var launcher = new AppLauncher(catalog, loggerFactory.CreateLogger<AppLauncher>());
+        var windows = new WindowService(loggerFactory.CreateLogger<WindowService>());
+        var media = new MediaService(loggerFactory.CreateLogger<MediaService>());
+        var volume = new VolumeService(loggerFactory.CreateLogger<VolumeService>());
+        var executor = new PlanExecutor(launcher, windows, media, volume,
+            loggerFactory.CreateLogger<PlanExecutor>());
+
         var orchestrator = new ActivationOrchestrator(
             hook, audio, debugWriter, config, orchestratorLogger,
-            speechRecognizer, decisionEngine);
+            speechRecognizer, decisionEngine, executor, catalog);
 
         using var trayApp = new TrayApplication(orchestrator);
         Application.Run(trayApp);

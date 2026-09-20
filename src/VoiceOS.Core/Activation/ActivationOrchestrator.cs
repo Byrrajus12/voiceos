@@ -1,9 +1,11 @@
 using Microsoft.Extensions.Logging;
 using NAudio.Wave;
+using VoiceOS.Core.Apps;
 using VoiceOS.Core.Audio;
 using VoiceOS.Core.Candidates;
 using VoiceOS.Core.Config;
 using VoiceOS.Core.Decision;
+using VoiceOS.Core.Execution;
 using VoiceOS.Core.Speech;
 
 namespace VoiceOS.Core.Activation;
@@ -17,7 +19,7 @@ namespace VoiceOS.Core.Activation;
 ///     capture the timestamp and offload all work to Task.Run immediately.
 ///   - Grace timer (OnGraceTimerExpired) already fires on a thread-pool thread.
 ///   - State transitions and synchronous effects are serialized under _stateLock.
-///   - The async pipeline (STT + Jev) runs OUTSIDE the lock on a background task.
+///   - The async pipeline (STT + Jev + execution) runs OUTSIDE the lock on a background task.
 ///   - StateChanged is always invoked outside _stateLock to prevent lock-order issues.
 /// </summary>
 public sealed class ActivationOrchestrator : IDisposable
@@ -27,6 +29,8 @@ public sealed class ActivationOrchestrator : IDisposable
     private readonly RecordingDebugWriter? _debugWriter;
     private readonly ISpeechRecognizer? _speechRecognizer;
     private readonly IDecisionEngine? _decisionEngine;
+    private readonly PlanExecutor? _executor;
+    private readonly IAppCatalog? _catalog;
     private readonly VoiceOSConfig _config;
     private readonly ILogger<ActivationOrchestrator> _logger;
 
@@ -50,7 +54,9 @@ public sealed class ActivationOrchestrator : IDisposable
         VoiceOSConfig config,
         ILogger<ActivationOrchestrator> logger,
         ISpeechRecognizer? speechRecognizer = null,
-        IDecisionEngine? decisionEngine = null)
+        IDecisionEngine? decisionEngine = null,
+        PlanExecutor? executor = null,
+        IAppCatalog? catalog = null)
     {
         _hook = hook;
         _audio = audio;
@@ -59,6 +65,8 @@ public sealed class ActivationOrchestrator : IDisposable
         _logger = logger;
         _speechRecognizer = speechRecognizer;
         _decisionEngine = decisionEngine;
+        _executor = executor;
+        _catalog = catalog;
 
         _hook.KeyDown += OnKeyDown;
         _hook.KeyUp += OnKeyUp;
@@ -210,6 +218,7 @@ public sealed class ActivationOrchestrator : IDisposable
         var pipelineStart = input.PipelineStart;
         TranscriptionResult? transcription = null;
         DecisionResult? decision = null;
+        ExecutionResult? execution = null;
         DateTimeOffset? sttStart = null, sttEnd = null;
         DateTimeOffset? jevStart = null, jevEnd = null;
 
@@ -246,14 +255,15 @@ public sealed class ActivationOrchestrator : IDisposable
 
             // ── JEV ──────────────────────────────────────────────────────────────────
             StateChanged?.Invoke(this, ActivationState.Understanding);
+            DecisionState? decisionState = null;
 
             if (_decisionEngine != null)
             {
                 jevStart = DateTimeOffset.UtcNow;
                 try
                 {
-                    var state = BuildDecisionState(transcription.Transcript);
-                    decision = await _decisionEngine.DecideAsync(state).ConfigureAwait(false);
+                    decisionState = BuildDecisionState(transcription.Transcript);
+                    decision = await _decisionEngine.DecideAsync(decisionState).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -261,22 +271,39 @@ public sealed class ActivationOrchestrator : IDisposable
                 }
                 jevEnd = DateTimeOffset.UtcNow;
             }
+
+            // ── EXECUTION ─────────────────────────────────────────────────────────────
+            if (_executor != null && decision?.Plan != null && decisionState != null)
+            {
+                try
+                {
+                    execution = await _executor.ExecuteAsync(
+                        decision.Plan, decisionState.OpenWindows).ConfigureAwait(false);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Execution error for plan {Action}", decision.Plan.Action);
+                    execution = ExecutionResult.Fail(ExecutionStatus.PlatformError, ex.Message);
+                }
+            }
         }
         finally
         {
             var pipelineEnd = DateTimeOffset.UtcNow;
             var result = new PipelineResult(
                 input.Metadata, transcription, decision, decision?.Plan,
-                pipelineStart, sttStart, sttEnd, jevStart, jevEnd, pipelineEnd);
+                pipelineStart, sttStart, sttEnd, jevStart, jevEnd, pipelineEnd, execution);
 
             LogPipelineSummary(result);
             StateChanged?.Invoke(this, ActivationState.Idle);
         }
     }
 
-    private static DecisionState BuildDecisionState(string transcript)
+    private DecisionState BuildDecisionState(string transcript)
     {
-        var apps = CandidateBuilder.GetInstalledApps();
+        var apps = _catalog != null
+            ? CandidateBuilder.GetInstalledApps(_catalog)
+            : [];
         var windows = CandidateBuilder.GetOpenWindows();
         var foreground = CandidateBuilder.GetForegroundAppName();
 
@@ -297,10 +324,11 @@ public sealed class ActivationOrchestrator : IDisposable
         var action = r.Plan?.Action.ToString() ?? "none";
         var confidence = r.Plan?.Confidence ?? 0;
         var transcript = r.Transcription?.Transcript ?? "(none)";
+        var execStatus = r.Execution?.Status.ToString() ?? "-";
 
         _logger.LogInformation(
-            "Pipeline: speech={SpeechMs:F0}ms STT={SttMs:F0}ms Jev={JevMs:F0}ms total={TotalMs:F0}ms | \"{Transcript}\" → {Action} ({Confidence:P0})",
-            r.Recording.TotalDurationSeconds * 1000, sttMs, jevMs, totalMs, transcript, action, confidence);
+            "Pipeline: speech={SpeechMs:F0}ms STT={SttMs:F0}ms Jev={JevMs:F0}ms total={TotalMs:F0}ms | \"{Transcript}\" → {Action} ({Confidence:P0}) exec={ExecStatus}",
+            r.Recording.TotalDurationSeconds * 1000, sttMs, jevMs, totalMs, transcript, action, confidence, execStatus);
     }
 
     public void Dispose()

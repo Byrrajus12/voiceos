@@ -1,5 +1,6 @@
 using VoiceOS.Core.Audio;
 using VoiceOS.Core.Decision;
+using VoiceOS.Core.Execution;
 using VoiceOS.Core.Speech;
 
 namespace VoiceOS.Core.Activation;
@@ -14,4 +15,5 @@ public record PipelineResult(
     DateTimeOffset? SttEnd,
     DateTimeOffset? JevStart,
     DateTimeOffset? JevEnd,
-    DateTimeOffset PipelineEnd);
+    DateTimeOffset PipelineEnd,
+    ExecutionResult? Execution = null);

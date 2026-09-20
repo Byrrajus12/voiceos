@@ -1,42 +1,25 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
+using VoiceOS.Core.Apps;
 
 namespace VoiceOS.Core.Candidates;
 
+/// <summary>
+/// Builds candidate snapshots for the planning layer.
+/// AppCandidate lists are derived from the IAppCatalog; window snapshots include HWNDs for execution.
+/// </summary>
 public static class CandidateBuilder
 {
-    private static readonly AppCandidate[] DevCatalog =
-    [
-        new AppCandidate("chrome", "Google Chrome", "chrome"),
-        new AppCandidate("firefox", "Firefox", "firefox"),
-        new AppCandidate("edge", "Microsoft Edge", "msedge"),
-        new AppCandidate("vscode", "Visual Studio Code", "Code"),
-        new AppCandidate("vs", "Visual Studio", "devenv"),
-        new AppCandidate("terminal", "Windows Terminal", "WindowsTerminal"),
-        new AppCandidate("cmd", "Command Prompt", "cmd"),
-        new AppCandidate("powershell", "PowerShell", "pwsh"),
-        new AppCandidate("explorer", "File Explorer", "explorer"),
-        new AppCandidate("notepad", "Notepad", "notepad"),
-        new AppCandidate("spotify", "Spotify", "Spotify"),
-        new AppCandidate("slack", "Slack", "slack"),
-        new AppCandidate("discord", "Discord", "Discord"),
-        new AppCandidate("teams", "Microsoft Teams", "ms-teams"),
-        new AppCandidate("outlook", "Outlook", "olk"),
-        new AppCandidate("obs", "OBS Studio", "obs64"),
-        new AppCandidate("obsidian", "Obsidian", "Obsidian"),
-        new AppCandidate("telegram", "Telegram", "Telegram"),
-        new AppCandidate("whatsapp", "WhatsApp", "WhatsApp"),
-        new AppCandidate("calc", "Calculator", "CalculatorApp"),
-    ];
-
-    public static IReadOnlyList<AppCandidate> GetInstalledApps() => DevCatalog;
+    public static IReadOnlyList<AppCandidate> GetInstalledApps(IAppCatalog catalog)
+        => catalog.GetAll()
+                  .Select(e => new AppCandidate(e.Id, e.DisplayName, e.ProcessName))
+                  .ToList();
 
     public static IReadOnlyList<WindowCandidate> GetOpenWindows()
     {
         var windows = new List<WindowCandidate>();
-
-        IntPtr foreground = GetForegroundWindow();
+        var foreground = GetForegroundWindow();
         var titleBuf = new StringBuilder(512);
 
         EnumWindows((hWnd, _) =>
@@ -54,7 +37,8 @@ public static class CandidateBuilder
                 Id: $"w{windows.Count}",
                 ProcessName: processName,
                 Title: title,
-                IsForeground: hWnd == foreground));
+                IsForeground: hWnd == foreground,
+                Hwnd: hWnd));
 
             return true;
         }, IntPtr.Zero);
