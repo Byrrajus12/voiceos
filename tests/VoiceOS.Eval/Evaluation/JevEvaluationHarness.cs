@@ -129,7 +129,9 @@ public static class JevEvaluationHarness
 
     private static DecisionState BuildBaseState()
     {
-        var apps = CandidateBuilder.GetInstalledApps();
+        var apps = new VoiceOS.Core.Apps.WindowsAppCatalog().GetAll()
+            .Select(e => new VoiceOS.Core.Candidates.AppCandidate(e.Id, e.DisplayName, e.ProcessName))
+            .ToList();
         return new DecisionState(
             Transcript: "",
             ForegroundApp: "Notepad",

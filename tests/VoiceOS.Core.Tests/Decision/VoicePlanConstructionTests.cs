@@ -125,15 +125,16 @@ public class VoicePlanConstructionTests
             "MediaControl with Pause op is complete; generic is_complete must not cause false clarification");
     }
 
-    // Task 2: MaximizeCurrentWindow requires no extra target — must never require clarification.
+    // Task 2: MaximizeCurrentWindow with Current mode — no named target required.
     [Fact]
-    public async Task MaximizeCurrentWindow_AlwaysComplete_NoClarificationRequired()
+    public async Task MaximizeCurrentWindow_CurrentMode_NoClarificationRequired()
     {
         var json = """
             {
               "answers": {
                 "is_command": {"type":"noul","noul":0.95},
                 "action_kind": {"type":"choice","choice":"MaximizeCurrentWindow","confidence":0.91},
+                "window_target_mode": {"type":"choice","choice":"Current","confidence":0.90},
                 "target_app": {"type":"choice","choice":"chrome","confidence":0.30},
                 "target_window": {"type":"choice","choice":"w0","confidence":0.20}
               }, "usage": {}
@@ -143,8 +144,10 @@ public class VoicePlanConstructionTests
         var result = await MakeEngine(json).DecideAsync(MakeState("maximize this"));
 
         Assert.Equal(VoiceAction.MaximizeCurrentWindow, result.Plan.Action);
+        Assert.Equal(WindowTargetMode.Current, result.Plan.WindowTargetMode);
+        Assert.Null(result.Plan.WindowCandidateId); // Current mode: speculative window discarded
         Assert.False(result.Plan.RequiresClarification);
-        // Only action confidence is used; speculative answers must not lower it
+        // Only action confidence used; speculative target_window (low conf) must not lower it
         Assert.InRange(result.Plan.Confidence, 0.90, 0.92);
     }
 
@@ -249,6 +252,140 @@ public class VoicePlanConstructionTests
         Assert.Equal(VoiceAction.Rejected, result.Plan.Action);
     }
 
+    // ── SetVolume: exact live transcripts ─────────────────────────────────────
+
+    [Theory]
+    [InlineData("Set volume to fifteen.", 15)]
+    [InlineData("Set volume to fifty.", 50)]
+    [InlineData("Set volume to 15.", 15)]
+    [InlineData("Set volume to zero.", 0)]
+    [InlineData("Set volume to one hundred.", 100)]
+    [InlineData("SET VOLUME TO FIFTEEN.", 15)]   // case insensitive
+    [InlineData("volume at 50 percent", 50)]
+    public async Task SetVolume_LiveTranscriptForms_ExtractsCorrectValue(string transcript, int expected)
+    {
+        var json = """
+            {
+              "answers": {
+                "is_command": {"type":"noul","noul":0.98},
+                "action_kind": {"type":"choice","choice":"SetVolume","confidence":1.0}
+              }, "usage": {}
+            }
+            """;
+
+        var result = await MakeEngine(json).DecideAsync(MakeState(transcript));
+
+        Assert.Equal(VoiceAction.SetVolume, result.Plan.Action);
+        Assert.Equal(expected, result.Plan.VolumeValue);
+        Assert.False(result.Plan.RequiresClarification);
+    }
+
+    [Fact]
+    public async Task SetVolume_MissingNumber_RequiresClarification()
+    {
+        var json = """
+            {
+              "answers": {
+                "is_command": {"type":"noul","noul":0.95},
+                "action_kind": {"type":"choice","choice":"SetVolume","confidence":0.90}
+              }, "usage": {}
+            }
+            """;
+
+        var result = await MakeEngine(json).DecideAsync(MakeState("set the volume"));
+
+        Assert.Equal(VoiceAction.SetVolume, result.Plan.Action);
+        Assert.Null(result.Plan.VolumeValue);
+        Assert.True(result.Plan.RequiresClarification);
+    }
+
+    // ── AdjustVolume: typed Jev volume_direction ──────────────────────────────
+
+    [Theory]
+    [InlineData("turn volume down", "Down")]
+    [InlineData("lower the volume", "Down")]
+    [InlineData("Reduced volume", "Down")]
+    [InlineData("make it quieter", "Down")]
+    public async Task AdjustVolume_DownDirection_CorrectPlan(string transcript, string choice)
+    {
+        var json = $$"""
+            {
+              "answers": {
+                "is_command": {"type":"noul","noul":0.97},
+                "action_kind": {"type":"choice","choice":"AdjustVolume","confidence":0.98},
+                "volume_direction": {"type":"choice","choice":"{{choice}}","confidence":0.95}
+              }, "usage": {}
+            }
+            """;
+
+        var result = await MakeEngine(json).DecideAsync(MakeState(transcript));
+
+        Assert.Equal(VoiceAction.AdjustVolume, result.Plan.Action);
+        Assert.Equal(VolumeDirection.Down, result.Plan.VolumeAdjust);
+        Assert.False(result.Plan.RequiresClarification);
+    }
+
+    [Theory]
+    [InlineData("turn it up", "Up")]
+    [InlineData("make it louder", "Up")]
+    public async Task AdjustVolume_UpDirection_CorrectPlan(string transcript, string choice)
+    {
+        var json = $$"""
+            {
+              "answers": {
+                "is_command": {"type":"noul","noul":0.97},
+                "action_kind": {"type":"choice","choice":"AdjustVolume","confidence":0.95},
+                "volume_direction": {"type":"choice","choice":"{{choice}}","confidence":0.93}
+              }, "usage": {}
+            }
+            """;
+
+        var result = await MakeEngine(json).DecideAsync(MakeState(transcript));
+
+        Assert.Equal(VoiceAction.AdjustVolume, result.Plan.Action);
+        Assert.Equal(VolumeDirection.Up, result.Plan.VolumeAdjust);
+        Assert.False(result.Plan.RequiresClarification);
+    }
+
+    [Fact]
+    public async Task AdjustVolume_MissingDirectionAnswer_RequiresClarification()
+    {
+        var json = """
+            {
+              "answers": {
+                "is_command": {"type":"noul","noul":0.95},
+                "action_kind": {"type":"choice","choice":"AdjustVolume","confidence":0.92}
+              }, "usage": {}
+            }
+            """;
+
+        var result = await MakeEngine(json).DecideAsync(MakeState("adjust the volume"));
+
+        Assert.Equal(VoiceAction.AdjustVolume, result.Plan.Action);
+        Assert.Null(result.Plan.VolumeAdjust);
+        Assert.True(result.Plan.RequiresClarification);
+    }
+
+    [Fact]
+    public async Task AdjustVolume_LowConfidenceDirection_RequiresClarification()
+    {
+        var json = """
+            {
+              "answers": {
+                "is_command": {"type":"noul","noul":0.95},
+                "action_kind": {"type":"choice","choice":"AdjustVolume","confidence":0.92},
+                "volume_direction": {"type":"choice","choice":"Down","confidence":0.30}
+              }, "usage": {}
+            }
+            """;
+
+        var result = await MakeEngine(json).DecideAsync(MakeState("volume"));
+
+        Assert.Equal(VoiceAction.AdjustVolume, result.Plan.Action);
+        Assert.Null(result.Plan.VolumeAdjust);
+        Assert.True(result.Plan.RequiresClarification);
+    }
+
     // Task 8: Verify action_kind request criteria contain examples and contrastive descriptions.
     [Fact]
     public void ActionKind_Criteria_ContainExamplesAndContrastiveDescriptions()
@@ -272,6 +409,12 @@ public class VoicePlanConstructionTests
         // is_complete must not be in the request (removed)
         Assert.False(req.Questions.ContainsKey("is_complete"),
             "is_complete must be removed from the Jev request");
+
+        // volume_direction must be present with Up/Down criteria
+        Assert.True(req.Questions.TryGetValue("volume_direction", out var volDirQ));
+        Assert.NotNull(volDirQ.Criteria);
+        Assert.True(volDirQ.Criteria.ContainsKey("Up"));
+        Assert.True(volDirQ.Criteria.ContainsKey("Down"));
     }
 
     private sealed class FakeHttpHandler : HttpMessageHandler
