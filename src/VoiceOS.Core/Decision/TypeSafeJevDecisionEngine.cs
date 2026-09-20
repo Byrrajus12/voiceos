@@ -166,13 +166,13 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         double isCmdProb = isCmd.QuestionType == "noul"
             ? isCmd.Probabilities.GetValueOrDefault("noul")
             : isCmd.Confidence;
-        _logger.LogDebug("Jev gate: is_command noul={Prob:F3} selectedChoice={Choice} threshold={Thr:F2}",
-            isCmdProb, isCmd.SelectedChoice, _commandThreshold);
+        _logger.LogDebug("Jev gate: is_command noul={Prob:F3} threshold={Thr:F2}",
+            isCmdProb, _commandThreshold);
 
-        if (isCmd.SelectedChoice != "true" || isCmd.Confidence < _commandThreshold)
+        if (isCmdProb < _commandThreshold)
         {
-            _logger.LogDebug("Jev gate: rejected – is_command selectedChoice={Choice} confidence={Conf:F3}",
-                isCmd.SelectedChoice, isCmd.Confidence);
+            _logger.LogDebug("Jev gate: rejected – is_command noul={Prob:F3} below threshold {Thr:F2}",
+                isCmdProb, _commandThreshold);
             return new VoicePlan(VoiceAction.None,
                 RejectionReason: "Not recognized as a command");
         }

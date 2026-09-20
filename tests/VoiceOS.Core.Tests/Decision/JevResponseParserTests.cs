@@ -260,6 +260,92 @@ public class JevResponseParserTests
         Assert.Equal("true", result.RawAnswers["is_command"].SelectedChoice);
     }
 
+    // Noul threshold tests — verifying the configured threshold is the sole gate
+    [Fact]
+    public async Task NoulAboveThresholdButBelowHalf_PassesCommandGate()
+    {
+        // Regression: noul=0.48 with threshold=0.35 must pass (was incorrectly rejected by hard 0.5 cutoff)
+        var json = """
+            {
+              "model": "jev-latest",
+              "answers": {
+                "is_command": {"type":"noul","noul":0.48},
+                "action_kind": {"type":"choice","choice":"CloseCurrentWindow","CloseCurrentWindow":0.80,"confidence":0.80}
+              },
+              "usage": {"input_tokens":80,"output_tokens":20}
+            }
+            """;
+
+        var engine = MakeEngineWithResponse(json);
+        var result = await engine.DecideAsync(MakeState("close this"));
+
+        Assert.Equal(VoiceAction.CloseCurrentWindow, result.Plan.Action);
+    }
+
+    [Fact]
+    public async Task NoulBelowThreshold_RejectsCommandGate()
+    {
+        var json = """
+            {
+              "model": "jev-latest",
+              "answers": {
+                "is_command": {"type":"noul","noul":0.30},
+                "action_kind": {"type":"choice","choice":"CloseCurrentWindow","CloseCurrentWindow":0.90,"confidence":0.90}
+              },
+              "usage": {"input_tokens":80,"output_tokens":20}
+            }
+            """;
+
+        var engine = MakeEngineWithResponse(json);
+        var result = await engine.DecideAsync(MakeState("just thinking"));
+
+        Assert.Equal(VoiceAction.None, result.Plan.Action);
+    }
+
+    [Fact]
+    public async Task NoulAtExactThreshold_PassesCommandGate()
+    {
+        // noul exactly equal to threshold (0.35) must pass (>= semantics)
+        var json = """
+            {
+              "model": "jev-latest",
+              "answers": {
+                "is_command": {"type":"noul","noul":0.35},
+                "action_kind": {"type":"choice","choice":"CloseCurrentWindow","CloseCurrentWindow":0.85,"confidence":0.85}
+              },
+              "usage": {"input_tokens":80,"output_tokens":20}
+            }
+            """;
+
+        var engine = MakeEngineWithResponse(json);
+        var result = await engine.DecideAsync(MakeState("close this"));
+
+        Assert.Equal(VoiceAction.CloseCurrentWindow, result.Plan.Action);
+    }
+
+    [Fact]
+    public async Task LiveStyleSkipThis_MediaControlNext()
+    {
+        // Mirrors the observed live failure: is_command=0.48, action_kind=MediaControl 0.96, media_op=Next 1.00
+        var json = """
+            {
+              "model": "jev-latest",
+              "answers": {
+                "is_command": {"type":"noul","noul":0.48},
+                "action_kind": {"type":"choice","choice":"MediaControl","MediaControl":0.96,"confidence":0.96},
+                "media_op": {"type":"choice","choice":"Next","Next":1.0,"confidence":1.0}
+              },
+              "usage": {"input_tokens":100,"output_tokens":30}
+            }
+            """;
+
+        var engine = MakeEngineWithResponse(json);
+        var result = await engine.DecideAsync(MakeState("skip this"));
+
+        Assert.Equal(VoiceAction.MediaControl, result.Plan.Action);
+        Assert.Equal(MediaOperation.Next, result.Plan.Media);
+    }
+
     private sealed class FakeHttpHandler : HttpMessageHandler
     {
         private readonly string _body;
