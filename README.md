@@ -2,7 +2,7 @@
 
 VoiceOS is an experimental voice-first control layer for Windows. The goal is to make natural language a fast, practical way to work with your computer while keeping execution structured, typed, and bounded.
 
-> **Early prototype — actively under development. Currently implemented through M4.**
+> **Early prototype — actively under development. Currently implemented through M5.**
 
 ## What works today
 
@@ -13,8 +13,11 @@ VoiceOS currently supports:
 * Semantic command interpretation with TypeSafe Jev
 * Live app and window discovery
 * Focus-or-launch app behavior
+* Compound multi-step commands ("open Chrome and snap it right")
 * Window focus, close, minimize, maximize, and snap
 * Named-window vs. current-window targeting
+* Pronoun resolution across steps ("open Chrome and snap it right" → snap the opened window)
+* Chrome profile-aware new-window launch
 * Media playback controls
 * Absolute and relative system volume control
 * Confidence-based clarification/no-op behavior
@@ -26,13 +29,15 @@ Natural language is interpreted semantically; commands do not need to match hard
 ```text
 Voice
   → local Parakeet STT
-  → live desktop candidates
-  → Jev semantic planning
-  → typed VoicePlan
-  → trusted Windows execution
+  → live desktop candidates (cached process metadata)
+  → Jev semantic planning (single pass for simple; two passes for compound)
+  → typed VoiceProgram (one or more typed VoiceSteps)
+  → sequential trusted Windows execution
 ```
 
 The deterministic part of VoiceOS is the execution layer, not the language interface. Different natural phrases can resolve to the same bounded capability, while transcripts and model output never become arbitrary shell commands.
+
+Multi-step programs execute sequentially and stop on failure. Each step's output window (its exact HWND) is available as a reference target for later steps in the same utterance.
 
 ## Current status
 
@@ -43,9 +48,8 @@ The deterministic part of VoiceOS is the execution layer, not the language inter
 | M2        | Local speech recognition                        | ✓      |
 | M3        | Semantic planning and safety model              | ✓      |
 | M4        | Native app, window, media, and volume execution | ✓      |
-| M5        | Compositional commands and richer targeting     | Next   |
-
-The current system still executes one action per utterance. Multi-step commands, better same-app window disambiguation, and richer desktop context are next.
+| M5        | Compositional commands and richer targeting     | ✓      |
+| M6        | TBD                                             |        |
 
 ## Project structure
 
@@ -109,14 +113,20 @@ dotnet run --project src/VoiceOS
 dotnet test
 ```
 
-## Limitations
+## Known limitations (deferred to M6+)
 
-* One action per utterance
-* Limited disambiguation between multiple windows of the same app
-* App-specific new-window behavior is not guaranteed
+* Quantity semantics not supported ("open two new Chrome windows")
+* Monitor-aware placement not supported ("snap to the left monitor")
+* Arbitrary relative volume amounts not supported ("turn volume up by 10")
+* Recent-window references not supported ("the existing one", "the last window I had open")
+* Same-app multi-window disambiguation is limited; multiple open windows of one app are ambiguous
+* Explicit Chrome profile selection not supported (uses last-used profile automatically)
+* STT alias robustness: unusual pronunciation may not match catalog entries
+* Richer failure/clarification UX not implemented (failures are silent to the user)
+* Browser navigation not implemented
+* UIA/structured desktop interaction not implemented
+* Agent delegation not implemented
 * No dictation/text manipulation yet
-* No general UI Automation layer yet
-* No open-ended agent/tool layer yet
 * Developer-oriented setup; no installer yet
 
 ## Direction
