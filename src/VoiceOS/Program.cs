@@ -6,7 +6,9 @@ using VoiceOS.Core.Audio;
 using VoiceOS.Core.Config;
 using VoiceOS.Core.Decision;
 using VoiceOS.Core.Execution;
+using VoiceOS.Core.Monitors;
 using VoiceOS.Core.Speech;
+using VoiceOS.Core.Windows;
 
 namespace VoiceOS;
 
@@ -92,6 +94,8 @@ internal static class Program
 
         // ── Execution layer ───────────────────────────────────────────────────────
         var windows = new WindowService(loggerFactory.CreateLogger<WindowService>());
+        var windowMover = new WindowMoveService(loggerFactory.CreateLogger<WindowMoveService>());
+        IDisplayTopologyService topoService = new DisplayTopologyService(loggerFactory.CreateLogger<DisplayTopologyService>());
         var media = new MediaService(loggerFactory.CreateLogger<MediaService>());
         var volume = new VolumeService(loggerFactory.CreateLogger<VolumeService>());
 
@@ -100,12 +104,12 @@ internal static class Program
             newInstanceArgsProvider: new ChromeNewInstanceArgsProvider());
 
         var programExecutor = new ProgramExecutor(
-            windowAwareLauncher, catalog, windows, media, volume,
+            windowAwareLauncher, catalog, windows, media, volume, windowMover, topoService,
             loggerFactory.CreateLogger<ProgramExecutor>());
 
         var orchestrator = new ActivationOrchestrator(
             hook, audio, debugWriter, config, orchestratorLogger,
-            speechRecognizer, decisionEngine, programExecutor, catalog);
+            speechRecognizer, decisionEngine, programExecutor, catalog, topoService);
 
         using var trayApp = new TrayApplication(orchestrator);
         Application.Run(trayApp);

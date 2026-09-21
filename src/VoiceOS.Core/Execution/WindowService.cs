@@ -27,6 +27,8 @@ public sealed class WindowService : IWindowService
 
     public WindowService(ILogger<WindowService> logger) => _logger = logger;
 
+    public nint GetForegroundWindowHwnd() => GetForegroundWindow();
+
     public ExecutionResult Focus(string? windowCandidateId, IReadOnlyList<WindowCandidate> snapshot)
     {
         if (string.IsNullOrEmpty(windowCandidateId))

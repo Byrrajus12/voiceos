@@ -1,4 +1,5 @@
 using VoiceOS.Core.Candidates;
+using VoiceOS.Core.Monitors;
 
 namespace VoiceOS.Core.Decision;
 
@@ -8,4 +9,5 @@ public record DecisionState(
     IReadOnlyList<AppCandidate> InstalledApps,
     IReadOnlyList<WindowCandidate> OpenWindows,
     IReadOnlyList<MediaOperation> AvailableMediaOps,
-    IReadOnlyList<SnapDirection> AvailableSnapDirs);
+    IReadOnlyList<SnapDirection> AvailableSnapDirs,
+    DisplayTopology? Topology = null);

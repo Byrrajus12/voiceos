@@ -1,4 +1,5 @@
 using VoiceOS.Core.Decision;
+using VoiceOS.Core.Monitors;
 
 namespace VoiceOS.Core.Execution;
 
@@ -54,6 +55,16 @@ public sealed record MaximizeWindowStep(string StepId, VoiceTarget Target) : Voi
 /// <summary>Snap a window to a screen side. Direction is required; invalid combos cannot be constructed.</summary>
 public sealed record SnapWindowStep(string StepId, VoiceTarget Target, SnapDirection Direction) : VoiceStep(StepId);
 
+/// <summary>
+/// Move a window to a different monitor.
+/// On success, produces the same window as its Result so StepResultTarget references remain valid.
+/// </summary>
+public sealed record MoveWindowStep(string StepId, VoiceTarget Target, MonitorTarget Monitor) : VoiceStep(StepId);
+
 public sealed record MediaControlStep(string StepId, MediaOperation Operation) : VoiceStep(StepId);
 public sealed record SetVolumeStep(string StepId, int Value) : VoiceStep(StepId);
-public sealed record AdjustVolumeStep(string StepId, VolumeDirection Direction) : VoiceStep(StepId);
+/// <summary>
+/// Adjust volume by a relative amount. When Amount is null, applies the default step.
+/// When Amount is set (1–100), adjusts by that many percentage points (e.g. Amount=10 → ±0.10 scalar).
+/// </summary>
+public sealed record AdjustVolumeStep(string StepId, VolumeDirection Direction, int? Amount = null) : VoiceStep(StepId);

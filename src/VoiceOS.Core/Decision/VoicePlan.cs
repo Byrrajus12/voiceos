@@ -1,3 +1,5 @@
+using VoiceOS.Core.Monitors;
+
 namespace VoiceOS.Core.Decision;
 
 public enum VoiceAction
@@ -9,6 +11,7 @@ public enum VoiceAction
     MaximizeCurrentWindow,
     MinimizeCurrentWindow,
     SnapCurrentWindow,
+    MoveWindow,
     MediaControl,
     SetVolume,
     AdjustVolume,
@@ -44,4 +47,15 @@ public record VoicePlan(
     string? AppProcessName = null,
     string? AppUserModelId = null,
     AppActivationMode ActivationMode = AppActivationMode.FocusOrLaunch,
-    WindowTargetMode WindowTargetMode = WindowTargetMode.Current);
+    WindowTargetMode WindowTargetMode = WindowTargetMode.Current,
+    MonitorTarget? MonitorMove = null,
+    /// <summary>
+    /// For Named-mode window operations, the catalog app ID of the targeted app.
+    /// Used to build AppTarget in PlanToStep, enabling execution-time ambiguity detection.
+    /// </summary>
+    string? WindowAppCandidateId = null,
+    /// <summary>
+    /// Explicit relative volume amount in percentage points (e.g. 10 → ±10 points).
+    /// Null means use the service default step.
+    /// </summary>
+    int? VolumeAdjustAmount = null);

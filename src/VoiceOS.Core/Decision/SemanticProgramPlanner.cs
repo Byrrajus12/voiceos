@@ -1,5 +1,6 @@
 using VoiceOS.Core.Candidates;
 using VoiceOS.Core.Execution;
+using VoiceOS.Core.Monitors;
 
 namespace VoiceOS.Core.Decision;
 
@@ -136,7 +137,8 @@ public sealed class SemanticProgramPlanner
         CloseWindowStep or
         MinimizeWindowStep or
         MaximizeWindowStep or
-        SnapWindowStep;
+        SnapWindowStep or
+        MoveWindowStep;
 
     // Strips "unit_N_" prefix from answer keys, giving a flat view for BuildUnitStep.
     private static Dictionary<string, JevAnswer> ExtractUnitAnswers(
@@ -224,6 +226,19 @@ public sealed class SemanticProgramPlanner
             volumeValue = pct;
         }
 
+        // Relative volume amount for AdjustVolume (deterministic — VoiceOS-owned)
+        int? volumeAdjustAmount = null;
+        if (action == VoiceAction.AdjustVolume
+            && VolumeExtractor.TryExtractPercent(state.Transcript, out int adjAmt))
+        {
+            volumeAdjustAmount = adjAmt;
+        }
+
+        // Monitor target (for MoveWindow)
+        MonitorTarget? monitorTarget = null;
+        if (unitAnswers.TryGetValue("monitor_target", out var monitorAnswer) && monitorAnswer.SelectedChoice != null)
+            monitorTarget = ParseMonitorTarget(monitorAnswer.SelectedChoice);
+
         return action switch
         {
             VoiceAction.OpenApp when appCandidateId != null =>
@@ -251,41 +266,69 @@ public sealed class SemanticProgramPlanner
                 new SetVolumeStep(stepId, volumeValue.Value),
 
             VoiceAction.AdjustVolume when volDir.HasValue =>
-                new AdjustVolumeStep(stepId, volDir.Value),
+                new AdjustVolumeStep(stepId, volDir.Value, volumeAdjustAmount),
+
+            VoiceAction.MoveWindow when monitorTarget != null =>
+                new MoveWindowStep(stepId, BuildWindowTarget(), monitorTarget),
 
             _ => null
         };
     }
 
+    internal static MonitorTarget? ParseMonitorTargetPublic(string choice) => ParseMonitorTarget(choice);
+
+    private static MonitorTarget? ParseMonitorTarget(string choice) => choice switch
+    {
+        "Primary"  => new PrimaryMonitor(),
+        "Current"  => new CurrentMonitor(),
+        "Other"    => new OtherMonitor(),
+        "Internal" => new InternalMonitor(),
+        "External" => new ExternalMonitor(),
+        "Left"     => new RelativeMonitor(RelativeMonitorDirection.Left),
+        "Right"    => new RelativeMonitor(RelativeMonitorDirection.Right),
+        "Above"    => new RelativeMonitor(RelativeMonitorDirection.Above),
+        "Below"    => new RelativeMonitor(RelativeMonitorDirection.Below),
+        _          => null
+    };
+
     // ── VoicePlan → VoiceStep adapter (single-unit fallback) ─────────────────────
 
     private static VoiceStep? PlanToStep(string stepId, VoicePlan plan)
     {
-        VoiceTarget WindowTarget() =>
-            plan.WindowTargetMode == WindowTargetMode.Named && plan.WindowCandidateId != null
-                ? new CandidateWindowTarget(plan.WindowCandidateId)
-                : new CurrentWindowTarget();
+        // For Named-mode window ops, prefer AppTarget (ambiguity-detecting at the shared
+        // resolution boundary in ResolveWindowTarget) over a planning-time CandidateWindowTarget,
+        // which could be an arbitrary pick when multiple same-app windows exist.
+        VoiceTarget NamedOrCurrentTarget()
+        {
+            if (plan.WindowTargetMode == WindowTargetMode.Named)
+            {
+                if (plan.WindowAppCandidateId != null)
+                    return new AppTarget(plan.WindowAppCandidateId);
+                if (plan.WindowCandidateId != null)
+                    return new CandidateWindowTarget(plan.WindowCandidateId);
+            }
+            return new CurrentWindowTarget();
+        }
 
         return plan.Action switch
         {
             VoiceAction.OpenApp when plan.AppCandidateId != null =>
                 new OpenAppStep(stepId, new AppTarget(plan.AppCandidateId), plan.ActivationMode),
 
-            VoiceAction.FocusWindow when
-                plan.WindowTargetMode == WindowTargetMode.Named && plan.WindowCandidateId != null =>
-                new FocusWindowStep(stepId, new CandidateWindowTarget(plan.WindowCandidateId)),
+            VoiceAction.FocusWindow when plan.WindowTargetMode == WindowTargetMode.Named =>
+                new FocusWindowStep(stepId, NamedOrCurrentTarget()),
 
             VoiceAction.CloseCurrentWindow =>
-                new CloseWindowStep(stepId, WindowTarget()),
+                new CloseWindowStep(stepId, NamedOrCurrentTarget()),
 
             VoiceAction.MaximizeCurrentWindow =>
-                new MaximizeWindowStep(stepId, WindowTarget()),
+                new MaximizeWindowStep(stepId, NamedOrCurrentTarget()),
 
             VoiceAction.MinimizeCurrentWindow =>
-                new MinimizeWindowStep(stepId, WindowTarget()),
+                new MinimizeWindowStep(stepId, NamedOrCurrentTarget()),
 
             VoiceAction.SnapCurrentWindow when plan.Snap.HasValue =>
-                new SnapWindowStep(stepId, WindowTarget(), plan.Snap.Value),
+                new SnapWindowStep(stepId, NamedOrCurrentTarget(), plan.Snap.Value),
 
             VoiceAction.MediaControl when plan.Media.HasValue =>
                 new MediaControlStep(stepId, plan.Media.Value),
@@ -294,7 +337,10 @@ public sealed class SemanticProgramPlanner
                 new SetVolumeStep(stepId, plan.VolumeValue.Value),
 
             VoiceAction.AdjustVolume when plan.VolumeAdjust.HasValue =>
-                new AdjustVolumeStep(stepId, plan.VolumeAdjust.Value),
+                new AdjustVolumeStep(stepId, plan.VolumeAdjust.Value, plan.VolumeAdjustAmount),
+
+            VoiceAction.MoveWindow when plan.MonitorMove != null =>
+                new MoveWindowStep(stepId, NamedOrCurrentTarget(), plan.MonitorMove),
 
             _ => null
         };

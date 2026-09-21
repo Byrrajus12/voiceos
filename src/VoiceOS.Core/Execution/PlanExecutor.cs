@@ -80,7 +80,7 @@ public sealed class PlanExecutor
                 _volume.SetVolume(plan.VolumeValue.Value),
 
             VoiceAction.AdjustVolume when plan.VolumeAdjust.HasValue =>
-                _volume.AdjustVolume(plan.VolumeAdjust.Value),
+                _volume.AdjustVolume(plan.VolumeAdjust.Value, plan.VolumeAdjustAmount),
 
             _ => ExecutionResult.Fail(ExecutionStatus.NoAction, $"Incomplete plan for {plan.Action}")
         };
@@ -103,8 +103,8 @@ public sealed class PlanExecutor
         {
             // Multiple windows open — do not silently pick one.
             _logger.LogInformation("FocusOrLaunch: multiple {App} windows — ambiguous", plan.AppCandidate);
-            return ExecutionResult.Fail(ExecutionStatus.NoAction,
-                $"Multiple {plan.AppCandidate} windows are open. Use 'switch to [window]' to pick one.");
+            return ExecutionResult.Fail(ExecutionStatus.WindowAmbiguous,
+                $"Multiple {plan.AppCandidate} windows are open — use monitor context to specify which one.");
         }
 
         _logger.LogInformation("FocusOrLaunch: launching {App}", plan.AppCandidate);

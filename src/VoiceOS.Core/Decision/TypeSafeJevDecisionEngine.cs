@@ -4,6 +4,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.Extensions.Logging;
 using VoiceOS.Core.Candidates;
+using VoiceOS.Core.Monitors;
 
 namespace VoiceOS.Core.Decision;
 
@@ -302,7 +303,8 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             VoiceAction.CloseCurrentWindow or
             VoiceAction.MaximizeCurrentWindow or
             VoiceAction.MinimizeCurrentWindow or
-            VoiceAction.SnapCurrentWindow;
+            VoiceAction.SnapCurrentWindow or
+            VoiceAction.MoveWindow;
 
         // Step 1: Speculative resolution — only used when mode is confirmed Named.
         if (isWindowTargetedAction && winAnswer?.SelectedChoice != null &&
@@ -384,6 +386,17 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             confidence = Math.Min(confidence, snapAnswer.Confidence);
         }
 
+        // ── Monitor target (MoveWindow) ───────────────────────────────────────
+        MonitorTarget? monitorTarget = null;
+        if (action == VoiceAction.MoveWindow &&
+            answers.TryGetValue("monitor_target", out var monitorAnswer) &&
+            monitorAnswer.SelectedChoice != null)
+        {
+            monitorTarget = SemanticProgramPlanner.ParseMonitorTargetPublic(monitorAnswer.SelectedChoice);
+            if (monitorTarget != null)
+                confidence = Math.Min(confidence, monitorAnswer.Confidence);
+        }
+
         // ── Volume (deterministic extraction — VoiceOS-owned, not LLM-generated) ──
         int? volumeValue = null;
         if (action == VoiceAction.SetVolume &&
@@ -393,6 +406,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         }
 
         VolumeDirection? volumeAdjust = null;
+        int? volumeAdjustAmount = null;
         if (action == VoiceAction.AdjustVolume &&
             answers.TryGetValue("volume_direction", out var dirAnswer) &&
             dirAnswer.SelectedChoice != null &&
@@ -401,6 +415,8 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         {
             volumeAdjust = dir;
             confidence = Math.Min(confidence, dirAnswer.Confidence);
+            if (VolumeExtractor.TryExtractPercent(state.Transcript, out int adjAmt))
+                volumeAdjustAmount = adjAmt;
         }
 
         // ── Activation mode (OpenApp only) ────────────────────────────────────
@@ -424,6 +440,9 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             // Snap: needs direction; uncertain mode or Named-without-candidate also block execution
             VoiceAction.SnapCurrentWindow => snapDir == null || windowTargetModeUncertain ||
                 (windowTargetMode == WindowTargetMode.Named && windowCandidateId == null),
+            // MoveWindow: needs monitor target; uncertain mode or Named-without-candidate also block
+            VoiceAction.MoveWindow => monitorTarget == null || windowTargetModeUncertain ||
+                (windowTargetMode == WindowTargetMode.Named && windowCandidateId == null),
             VoiceAction.SetVolume => volumeValue == null,
             VoiceAction.AdjustVolume => volumeAdjust == null,
             // Close/Maximize/Minimize: uncertain mode blocks; Named requires a resolved candidate
@@ -438,6 +457,12 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         _logger.LogDebug(
             "Jev gate: approved action={Action} confidence={Conf:F3} requiresClarification={Rc}",
             action, confidence, requiresClarification);
+
+        // For Named-mode window ops, carry the app candidate ID so PlanToStep can use AppTarget
+        // (enabling execution-time ambiguity detection at the shared resolution boundary).
+        string? windowAppCandidateId = null;
+        if (isWindowTargetedAction && windowTargetMode == WindowTargetMode.Named)
+            windowAppCandidateId = appCandidateId;
 
         return new VoicePlan(
             action,
@@ -455,7 +480,10 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             AppProcessName: action is VoiceAction.OpenApp ? appProcessName : null,
             AppUserModelId: action is VoiceAction.OpenApp ? appUserModelId : null,
             ActivationMode: activationMode,
-            WindowTargetMode: isWindowTargetedAction ? windowTargetMode : WindowTargetMode.Current);
+            WindowTargetMode: isWindowTargetedAction ? windowTargetMode : WindowTargetMode.Current,
+            MonitorMove: action is VoiceAction.MoveWindow ? monitorTarget : null,
+            WindowAppCandidateId: windowAppCandidateId,
+            VolumeAdjustAmount: volumeAdjustAmount);
     }
 
     private static readonly string[] Ordinals = ["first", "second", "third", "fourth"];
@@ -491,6 +519,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
                     ["MaximizeCurrentWindow"] = "Maximize or make fullscreen a window — the current one ('maximize this', 'make it fullscreen', 'make this bigger') or a named one ('maximize Chrome', 'fullscreen VS Code').",
                     ["MinimizeCurrentWindow"] = "Minimize or hide a window — the current one ('minimize this', 'hide this', 'send it to the taskbar') or a named one ('minimize Chrome', 'hide VS Code', 'send Discord to taskbar').",
                     ["SnapCurrentWindow"] = "Snap or tile a window to a side of the screen — the current one ('snap left', 'snap this right') or a named one ('snap Chrome to the left', 'snap VS Code right', 'tile Discord on the left').",
+                    ["MoveWindow"] = "Move a window to a different monitor or display — 'move Chrome to the other monitor', 'move this to my laptop screen', 'put VS Code on the external display', 'move this to the monitor on the left', 'send this to the other screen'.",
                     ["MediaControl"] = "Control music or video playback: play, pause, resume, stop, next track, skip, previous track (e.g. 'pause this', 'skip this', 'next song', 'play', 'stop the music', 'previous track')",
                     ["SetVolume"] = "Set system volume to a specific level or percentage (e.g. 'set volume to 50', 'make it 30 percent', 'volume at 80', 'volume fifteen')",
                     ["AdjustVolume"] = "Increase or decrease system volume without a specific target level (e.g. 'turn it up', 'louder', 'volume down', 'a bit quieter', 'increase volume', 'lower the volume')",
@@ -555,6 +584,23 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
                 "Return true for 'Open Chrome and minimize Discord', 'Snap Chrome right and VS Code left', " +
                 "'Open Chrome, turn the volume down, and minimize Discord'. Return false for a single action.",
                 null),
+
+            ["monitor_target"] = new JevQuestionDto(
+                "choice",
+                "Assume the user wants to move a window to a different monitor. Which monitor is the target?",
+                new Dictionary<string, string>
+                {
+                    ["Primary"]  = "The primary or main monitor",
+                    ["Current"]  = "The monitor the window is currently on (same display, current monitor)",
+                    ["Other"]    = "The other monitor when exactly two monitors are connected (the other one, the other screen, the other display)",
+                    ["Internal"] = "The laptop's built-in or internal display (laptop screen, built-in display, laptop display, notebook screen, internal monitor)",
+                    ["External"] = "An external display connected via HDMI, DisplayPort, etc. (external monitor, external display, the external screen, my monitor, my external monitor, my external display, my screen)",
+                    ["Left"]     = "The monitor physically to the left of the current one",
+                    ["Right"]    = "The monitor physically to the right of the current one",
+                    ["Above"]    = "The monitor physically above the current one",
+                    ["Below"]    = "The monitor physically below the current one",
+                    ["UnsupportedExplicitTarget"] = "A monitor reference using a numeric position, ordinal, or explicit name that cannot be deterministically grounded — such as 'monitor 2', 'second monitor', 'display 1', 'screen number 3', or any other numbered or positionally-indexed display identifier. VoiceOS cannot safely resolve these.",
+                }),
         };
 
         if (appCandidates.Count > 0)
@@ -615,9 +661,24 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             ["MaximizeCurrentWindow"] = "Maximize or fullscreen a window",
             ["MinimizeCurrentWindow"] = "Minimize or hide a window",
             ["SnapCurrentWindow"] = "Snap or tile a window to a screen side",
+            ["MoveWindow"] = "Move a window to a different monitor or display",
             ["MediaControl"] = "Control media playback (play, pause, skip, etc.)",
             ["SetVolume"] = "Set system volume to a specific level",
             ["AdjustVolume"] = "Increase or decrease system volume",
+        };
+
+        var monitorTargetChoices = new Dictionary<string, string>
+        {
+            ["Primary"]  = "The primary or main monitor",
+            ["Current"]  = "The monitor the window is currently on",
+            ["Other"]    = "The other monitor (two-monitor setup, not an ordinal reference)",
+            ["Internal"] = "The laptop's built-in or internal display",
+            ["External"] = "An external display connected via cable — natural references like 'my monitor', 'my external monitor', 'my external display', or 'my screen' map here (not 'second monitor' or any ordinal)",
+            ["Left"]     = "The monitor to the left of the current one",
+            ["Right"]    = "The monitor to the right of the current one",
+            ["Above"]    = "The monitor above the current one",
+            ["Below"]    = "The monitor below the current one",
+            ["UnsupportedExplicitTarget"] = "Numeric or ordinal monitor reference ('monitor 2', 'second monitor', 'display 1') — cannot be safely grounded",
         };
 
         var windowTargetModeChoices = new Dictionary<string, string>
@@ -697,6 +758,11 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
                     $"Return true only for clear referential language pointing to the output of an earlier step.",
                     null);
             }
+
+            questions[$"unit_{i}_monitor_target"] = new JevQuestionDto(
+                "choice",
+                $"For the {ord} action unit in `utterance` (assume it is a move-to-monitor action): which monitor is the target?",
+                monitorTargetChoices);
 
             if (appCandidates.Count > 0)
             {

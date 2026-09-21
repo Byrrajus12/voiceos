@@ -5,6 +5,13 @@ namespace VoiceOS.Core.Execution;
 
 public interface IWindowService
 {
+    /// <summary>
+    /// Returns the HWND of the current foreground window, or 0 if there is none.
+    /// Callers that need to operate on the foreground window must sample this once
+    /// and use the same value for all subsequent operations in that step.
+    /// </summary>
+    nint GetForegroundWindowHwnd();
+
     /// <summary>Bring a specific window (by planning-time HWND) to foreground.</summary>
     ExecutionResult Focus(string? windowCandidateId, IReadOnlyList<WindowCandidate> snapshot);
 

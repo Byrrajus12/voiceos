@@ -7,6 +7,9 @@ public enum ExecutionStatus
     AppNotFound,
     WindowNotFound,
     WindowStale,
+    WindowAmbiguous,
+    TopologyStale,
+    UnsupportedMonitorTarget,
     PlatformError
 }
 

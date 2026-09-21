@@ -7,6 +7,7 @@ using VoiceOS.Core.Candidates;
 using VoiceOS.Core.Config;
 using VoiceOS.Core.Decision;
 using VoiceOS.Core.Execution;
+using VoiceOS.Core.Monitors;
 using VoiceOS.Core.Speech;
 
 namespace VoiceOS.Core.Activation;
@@ -32,6 +33,7 @@ public sealed class ActivationOrchestrator : IDisposable
     private readonly IDecisionEngine? _decisionEngine;
     private readonly ProgramExecutor? _programExecutor;
     private readonly IAppCatalog? _catalog;
+    private readonly IDisplayTopologyService? _topoService;
     private readonly VoiceOSConfig _config;
     private readonly ILogger<ActivationOrchestrator> _logger;
 
@@ -57,7 +59,8 @@ public sealed class ActivationOrchestrator : IDisposable
         ISpeechRecognizer? speechRecognizer = null,
         IDecisionEngine? decisionEngine = null,
         ProgramExecutor? programExecutor = null,
-        IAppCatalog? catalog = null)
+        IAppCatalog? catalog = null,
+        IDisplayTopologyService? topoService = null)
     {
         _hook = hook;
         _audio = audio;
@@ -68,6 +71,7 @@ public sealed class ActivationOrchestrator : IDisposable
         _decisionEngine = decisionEngine;
         _programExecutor = programExecutor;
         _catalog = catalog;
+        _topoService = topoService;
 
         _hook.KeyDown += OnKeyDown;
         _hook.KeyUp += OnKeyUp;
@@ -271,19 +275,24 @@ public sealed class ActivationOrchestrator : IDisposable
                     : (IReadOnlyList<AppCandidate>)[];
                 appsSw.Stop();
 
+                var topoSw = Stopwatch.StartNew();
+                var topology = _topoService?.CaptureTopology() ?? DisplayTopology.Empty;
+                topoSw.Stop();
+
                 var stateSw = Stopwatch.StartNew();
                 var foreground = CandidateBuilder.GetForegroundAppName();
                 decisionState = new DecisionState(
                     transcription.Transcript, foreground, apps, windows,
                     [MediaOperation.Play, MediaOperation.Pause, MediaOperation.Toggle, MediaOperation.Next, MediaOperation.Previous],
-                    [SnapDirection.Left, SnapDirection.Right]);
+                    [SnapDirection.Left, SnapDirection.Right],
+                    topology);
                 stateSw.Stop();
 
                 _logger.LogInformation(
-                    "Decision prep: windows={WindowsMs:F0}ms (enum={EnumMs:F0}ms proc={ProcMs:F0}ms aumid={AumidMs:F0}ms hit={CacheHits} miss={CacheMisses}) apps={AppsMs:F0}ms state={StateMs:F0}ms",
+                    "Decision prep: windows={WindowsMs:F0}ms (enum={EnumMs:F0}ms proc={ProcMs:F0}ms aumid={AumidMs:F0}ms hit={CacheHits} miss={CacheMisses}) apps={AppsMs:F0}ms topo={TopoMs:F0}ms state={StateMs:F0}ms",
                     windowsSw.ElapsedMilliseconds, winTimings.EnumerateMs, winTimings.ProcessMs, winTimings.AumidMs,
                     winTimings.CacheHits, winTimings.CacheMisses,
-                    appsSw.ElapsedMilliseconds, stateSw.ElapsedMilliseconds);
+                    appsSw.ElapsedMilliseconds, topoSw.ElapsedMilliseconds, stateSw.ElapsedMilliseconds);
 
                 jevStart = DateTimeOffset.UtcNow;
                 try
@@ -317,7 +326,7 @@ public sealed class ActivationOrchestrator : IDisposable
                     try
                     {
                         programResult = await _programExecutor
-                            .ExecuteAsync(program, decisionState.OpenWindows)
+                            .ExecuteAsync(program, decisionState.OpenWindows, decisionState.Topology)
                             .ConfigureAwait(false);
                     }
                     catch (Exception ex)

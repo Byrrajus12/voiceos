@@ -22,12 +22,14 @@ public sealed class VolumeService : IVolumeService
         return Apply(scalar => clamped / 100f, $"Set volume to {clamped}%");
     }
 
-    public ExecutionResult AdjustVolume(VolumeDirection direction)
+    public ExecutionResult AdjustVolume(VolumeDirection direction, int? amount = null)
     {
-        float delta = direction == VolumeDirection.Up ? StepFraction : -StepFraction;
+        float fraction = amount.HasValue ? amount.Value / 100f : StepFraction;
+        float delta = direction == VolumeDirection.Up ? fraction : -fraction;
+        int displayPct = amount ?? (int)(StepFraction * 100);
         return Apply(
             current => Math.Clamp(current + delta, 0f, 1f),
-            $"Volume {direction} by {(int)(StepFraction * 100)}%");
+            $"Volume {direction} by {displayPct}%");
     }
 
     private ExecutionResult Apply(Func<float, float> compute, string description)
@@ -56,6 +58,13 @@ public sealed class VolumeService : IVolumeService
     public static float ComputeRelative(float current, VolumeDirection direction)
     {
         float delta = direction == VolumeDirection.Up ? StepFraction : -StepFraction;
+        return Math.Clamp(current + delta, 0f, 1f);
+    }
+
+    public static float ComputeRelativeWithAmount(float current, VolumeDirection direction, int amount)
+    {
+        float fraction = amount / 100f;
+        float delta = direction == VolumeDirection.Up ? fraction : -fraction;
         return Math.Clamp(current + delta, 0f, 1f);
     }
 }
