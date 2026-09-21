@@ -2,7 +2,7 @@
 
 VoiceOS is an experimental voice-first control layer for Windows. The goal is to make natural language a fast, practical way to work with your computer while keeping execution structured, typed, and bounded.
 
-> **Early prototype — actively under development. Currently implemented through M5.**
+> **Phase 1 complete.** All planned Phase 1 milestones (M0–M6) are implemented and physically validated on the dev machine.
 
 ## What works today
 
@@ -12,15 +12,18 @@ VoiceOS currently supports:
 * Local speech recognition with NVIDIA Parakeet via sherpa-onnx
 * Semantic command interpretation with TypeSafe Jev
 * Live app and window discovery
-* Focus-or-launch app behavior
+* Focus-or-launch and new-instance app behavior
 * Compound multi-step commands ("open Chrome and snap it right")
 * Window focus, close, minimize, maximize, and snap
 * Named-window vs. current-window targeting
-* Pronoun resolution across steps ("open Chrome and snap it right" → snap the opened window)
+* Exact step-result chaining across steps ("open Chrome and snap it right" → snap the opened window)
 * Chrome profile-aware new-window launch
 * Media playback controls
-* Absolute and relative system volume control
+* Absolute volume and relative volume with explicit amounts ("volume up 10%")
 * Confidence-based clarification/no-op behavior
+* Monitor topology awareness (internal, external, primary, left/right/above/below)
+* Moving windows across monitors, including maximized/minimized state and mixed-DPI
+* Same-app ambiguity detection — multiple indistinguishable windows of the same app produce a typed failure rather than an arbitrary selection
 
 Natural language is interpreted semantically; commands do not need to match hardcoded phrases.
 
@@ -49,7 +52,8 @@ Multi-step programs execute sequentially and stop on failure. Each step's output
 | M3        | Semantic planning and safety model              | ✓      |
 | M4        | Native app, window, media, and volume execution | ✓      |
 | M5        | Compositional commands and richer targeting     | ✓      |
-| M6        | TBD                                             |        |
+| M6        | Monitor move, ambiguity detection, numeric volume, hardening | ✓ |
+| Phase 2   | Clarification UX, dictation, browser, agents, richer context | — |
 
 ## Project structure
 
@@ -64,6 +68,8 @@ src/
     Decision/           Jev planning and VoicePlan
     Execution/          Native Windows actions
     Apps/               App discovery/catalog
+    Monitors/           Display topology types and resolution
+    Windows/            WindowMoveService, DisplayTopologyService
 
 tests/
   VoiceOS.Core.Tests/
@@ -113,21 +119,34 @@ dotnet run --project src/VoiceOS
 dotnet test
 ```
 
-## Known limitations (deferred to M6+)
+517 tests pass as of Phase 1 completion. Tests cover state machines, parsing, candidate construction, routing/decision logic, risk logic, transformations, topology resolution, ambiguity detection, and numeric volume math. Global hooks, microphone behavior, and real Windows UI integration are validated physically.
 
-* Quantity semantics not supported ("open two new Chrome windows")
-* Monitor-aware placement not supported ("snap to the left monitor")
-* Arbitrary relative volume amounts not supported ("turn volume up by 10")
-* Recent-window references not supported ("the existing one", "the last window I had open")
-* Same-app multi-window disambiguation is limited; multiple open windows of one app are ambiguous
-* Explicit Chrome profile selection not supported (uses last-used profile automatically)
-* STT alias robustness: unusual pronunciation may not match catalog entries
-* Richer failure/clarification UX not implemented (failures are silent to the user)
-* Browser navigation not implemented
-* UIA/structured desktop interaction not implemented
-* Agent delegation not implemented
-* No dictation/text manipulation yet
-* Developer-oriented setup; no installer yet
+## Known limitations
+
+**Window targeting**
+* Same-app multi-window disambiguation is not implemented — when multiple indistinguishable windows of the same app are open, the command produces a typed failure rather than guessing. Monitor-context disambiguation ("Chrome on the left monitor") and a user-facing clarification flow are Phase 2.
+* Recent-window references ("the existing one", "the last window I had open") are not supported.
+
+**Monitor targeting**
+* Friendly monitor names ("MSI monitor", "the big screen") are not supported.
+* Explicit ordinal targeting ("monitor 2", "the third display") is intentionally unsupported — relative semantics (left/right/above/below, primary/other, internal/external) cover the practical cases.
+* MoveWindow does not implicitly focus the moved window.
+
+**Volume**
+* Compound commands containing multiple numeric volume values (e.g. "set it to 50 and turn the other one up 10") can mis-associate the amount because the extractor sees the full utterance.
+
+**Compound execution**
+* An occasional compound follow-up execution inconsistency (e.g. a snap step not applying after a window move) has been observed but is not reliably reproducible.
+
+**Future phases**
+* Dictation and text manipulation — not implemented.
+* Browser navigation and tab control — not implemented.
+* Wake word / semantic VAD — not implemented.
+* General UI Automation — not implemented.
+* Conversational memory and cross-utterance references — not implemented.
+* Agent delegation for multi-step tasks — not implemented.
+* Explicit Chrome profile selection not supported (uses last-used profile automatically).
+* Developer-oriented setup; no installer yet.
 
 ## Direction
 
