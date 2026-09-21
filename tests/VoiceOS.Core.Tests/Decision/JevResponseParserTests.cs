@@ -631,7 +631,7 @@ public class JevResponseParserTests
     {
         var engine = MakeEngineWithResponse("{}");
         var state = MakeState();
-        var req = engine.BuildRequest(state);
+        var req = engine.BuildBaseRequest(state);
 
         Assert.True(req.Questions.ContainsKey("activation_mode"));
         Assert.True(req.Questions["activation_mode"].Criteria!.ContainsKey("FocusOrLaunch"));
@@ -644,7 +644,7 @@ public class JevResponseParserTests
     public void ActionKind_CloseCurrentWindow_DescriptionMentionsNamedTargets()
     {
         var engine = MakeEngineWithResponse("{}");
-        var req = engine.BuildRequest(MakeState());
+        var req = engine.BuildBaseRequest(MakeState());
 
         var closeDesc = req.Questions["action_kind"].Criteria!["CloseCurrentWindow"];
         // Must mention named-app examples so Jev prefers this over OpenApp for "close Chrome"
@@ -657,7 +657,7 @@ public class JevResponseParserTests
     public void ActionKind_OpenApp_DescriptionExcludesCloseIntent()
     {
         var engine = MakeEngineWithResponse("{}");
-        var req = engine.BuildRequest(MakeState());
+        var req = engine.BuildBaseRequest(MakeState());
 
         var openDesc = req.Questions["action_kind"].Criteria!["OpenApp"];
         // Must explicitly say not to use for close/quit
@@ -1061,7 +1061,7 @@ public class JevResponseParserTests
     public void Request_HasWindowTargetModeQuestion()
     {
         var engine = MakeEngineWithResponse("{}");
-        var req = engine.BuildRequest(MakeState());
+        var req = engine.BuildBaseRequest(MakeState());
 
         Assert.True(req.Questions.ContainsKey("window_target_mode"));
         Assert.True(req.Questions["window_target_mode"].Criteria!.ContainsKey("Current"));

@@ -1,3 +1,4 @@
+using System.Diagnostics;
 using Microsoft.Extensions.Logging;
 using NAudio.Wave;
 using VoiceOS.Core.Apps;
@@ -29,7 +30,7 @@ public sealed class ActivationOrchestrator : IDisposable
     private readonly RecordingDebugWriter? _debugWriter;
     private readonly ISpeechRecognizer? _speechRecognizer;
     private readonly IDecisionEngine? _decisionEngine;
-    private readonly PlanExecutor? _executor;
+    private readonly ProgramExecutor? _programExecutor;
     private readonly IAppCatalog? _catalog;
     private readonly VoiceOSConfig _config;
     private readonly ILogger<ActivationOrchestrator> _logger;
@@ -55,7 +56,7 @@ public sealed class ActivationOrchestrator : IDisposable
         ILogger<ActivationOrchestrator> logger,
         ISpeechRecognizer? speechRecognizer = null,
         IDecisionEngine? decisionEngine = null,
-        PlanExecutor? executor = null,
+        ProgramExecutor? programExecutor = null,
         IAppCatalog? catalog = null)
     {
         _hook = hook;
@@ -65,7 +66,7 @@ public sealed class ActivationOrchestrator : IDisposable
         _logger = logger;
         _speechRecognizer = speechRecognizer;
         _decisionEngine = decisionEngine;
-        _executor = executor;
+        _programExecutor = programExecutor;
         _catalog = catalog;
 
         _hook.KeyDown += OnKeyDown;
@@ -218,7 +219,7 @@ public sealed class ActivationOrchestrator : IDisposable
         var pipelineStart = input.PipelineStart;
         TranscriptionResult? transcription = null;
         DecisionResult? decision = null;
-        ExecutionResult? execution = null;
+        ProgramResult? programResult = null;
         DateTimeOffset? sttStart = null, sttEnd = null;
         DateTimeOffset? jevStart = null, jevEnd = null;
 
@@ -259,10 +260,19 @@ public sealed class ActivationOrchestrator : IDisposable
 
             if (_decisionEngine != null)
             {
+                var windows = CandidateBuilder.GetOpenWindows();
+                var apps = _catalog != null
+                    ? CandidateBuilder.GetInstalledApps(_catalog)
+                    : (IReadOnlyList<AppCandidate>)[];
+                var foreground = CandidateBuilder.GetForegroundAppName();
+                decisionState = new DecisionState(
+                    transcription.Transcript, foreground, apps, windows,
+                    [MediaOperation.Play, MediaOperation.Pause, MediaOperation.Toggle, MediaOperation.Next, MediaOperation.Previous],
+                    [SnapDirection.Left, SnapDirection.Right]);
+
                 jevStart = DateTimeOffset.UtcNow;
                 try
                 {
-                    decisionState = BuildDecisionState(transcription.Transcript);
                     decision = await _decisionEngine.DecideAsync(decisionState).ConfigureAwait(false);
                 }
                 catch (Exception ex)
@@ -273,17 +283,35 @@ public sealed class ActivationOrchestrator : IDisposable
             }
 
             // ── EXECUTION ─────────────────────────────────────────────────────────────
-            if (_executor != null && decision?.Plan != null && decisionState != null)
+            // Prefer the typed VoiceProgram from the decision engine.
+            // Single-plan fallback applies ONLY when compound was not detected (unit_N_* answers absent);
+            // if compound was attempted but TryBuildProgram returned null, fail silently rather than
+            // partially executing the first action of a failed compound command.
+            if (_programExecutor != null && decision != null && decisionState != null)
             {
-                try
+                bool compoundAttempted = decision.RawAnswers.TryGetValue("is_compound", out var cmpAns)
+                    && cmpAns.QuestionType == "noul"
+                    && cmpAns.Probabilities.GetValueOrDefault("noul") >= SemanticProgramPlanner.NoulDecisionBoundary;
+
+                var program = decision.Program
+                    ?? (compoundAttempted ? null : SemanticProgramPlanner.ToSingleStepProgram(decision.Plan));
+
+                if (program != null)
                 {
-                    execution = await _executor.ExecuteAsync(
-                        decision.Plan, decisionState.OpenWindows).ConfigureAwait(false);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogError(ex, "Execution error for plan {Action}", decision.Plan.Action);
-                    execution = ExecutionResult.Fail(ExecutionStatus.PlatformError, ex.Message);
+                    var execSw = Stopwatch.StartNew();
+                    try
+                    {
+                        programResult = await _programExecutor
+                            .ExecuteAsync(program, decisionState.OpenWindows)
+                            .ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Execution error for program ({Steps} steps)",
+                            program.Steps.Count);
+                    }
+                    execSw.Stop();
+                    _logger.LogInformation("Execution={ExecMs:F0}ms", execSw.ElapsedMilliseconds);
                 }
             }
         }
@@ -292,25 +320,11 @@ public sealed class ActivationOrchestrator : IDisposable
             var pipelineEnd = DateTimeOffset.UtcNow;
             var result = new PipelineResult(
                 input.Metadata, transcription, decision, decision?.Plan,
-                pipelineStart, sttStart, sttEnd, jevStart, jevEnd, pipelineEnd, execution);
+                pipelineStart, sttStart, sttEnd, jevStart, jevEnd, pipelineEnd, programResult);
 
             LogPipelineSummary(result);
             StateChanged?.Invoke(this, ActivationState.Idle);
         }
-    }
-
-    private DecisionState BuildDecisionState(string transcript)
-    {
-        var apps = _catalog != null
-            ? CandidateBuilder.GetInstalledApps(_catalog)
-            : [];
-        var windows = CandidateBuilder.GetOpenWindows();
-        var foreground = CandidateBuilder.GetForegroundAppName();
-
-        return new DecisionState(
-            transcript, foreground, apps, windows,
-            [MediaOperation.Play, MediaOperation.Pause, MediaOperation.Toggle, MediaOperation.Next, MediaOperation.Previous],
-            [SnapDirection.Left, SnapDirection.Right]);
     }
 
     private void LogPipelineSummary(PipelineResult r)
@@ -324,7 +338,10 @@ public sealed class ActivationOrchestrator : IDisposable
         var action = r.Plan?.Action.ToString() ?? "none";
         var confidence = r.Plan?.Confidence ?? 0;
         var transcript = r.Transcription?.Transcript ?? "(none)";
-        var execStatus = r.Execution?.Status.ToString() ?? "-";
+        var execStatus = r.ProgramExecution == null ? "-"
+            : r.ProgramExecution.AllSucceeded
+                ? $"ok({r.ProgramExecution.ExecutedCount})"
+                : $"fail({r.ProgramExecution.FirstFailure?.Status})";
 
         _logger.LogInformation(
             "Pipeline: speech={SpeechMs:F0}ms STT={SttMs:F0}ms Jev={JevMs:F0}ms total={TotalMs:F0}ms | \"{Transcript}\" → {Action} ({Confidence:P0}) exec={ExecStatus}",

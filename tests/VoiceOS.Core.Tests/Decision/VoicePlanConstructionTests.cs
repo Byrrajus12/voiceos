@@ -391,7 +391,7 @@ public class VoicePlanConstructionTests
     public void ActionKind_Criteria_ContainExamplesAndContrastiveDescriptions()
     {
         var engine = MakeEngine("{}");
-        var req = engine.BuildRequest(MakeState());
+        var req = engine.BuildBaseRequest(MakeState());
 
         Assert.True(req.Questions.TryGetValue("action_kind", out var q));
         Assert.NotNull(q.Criteria);

@@ -32,13 +32,74 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         _commandThreshold = commandThreshold;
         _actionThreshold = actionThreshold;
         _logger = logger;
+        _planner = new SemanticProgramPlanner(commandThreshold, actionThreshold);
     }
 
     public async Task<DecisionResult> DecideAsync(DecisionState state, CancellationToken ct = default)
     {
-        var sw = Stopwatch.StartNew();
-        var request = BuildRequest(state);
+        var totalSw = Stopwatch.StartNew();
 
+        // ── Pass 1: base request (is_command + single-action questions + is_compound) ──
+        var buildBaseSw = Stopwatch.StartNew();
+        var baseReq = BuildBaseRequest(state);
+        buildBaseSw.Stop();
+
+        var baseHttpSw = Stopwatch.StartNew();
+        var baseResp = await SendAndParseAsync(baseReq, ct);
+        baseHttpSw.Stop();
+
+        if (baseResp == null)
+        {
+            totalSw.Stop();
+            return ErrorResult(totalSw.Elapsed.TotalMilliseconds, "Base Jev request failed");
+        }
+
+        // ── Pass 2: compound-detail request (only when is_compound fires) ──────────────
+        JevResponse? compoundResp = null;
+        double buildCompoundMs = 0, compoundHttpMs = 0;
+
+        bool isCompound = baseResp.Answers.TryGetValue("is_compound", out var icAns)
+            && icAns.QuestionType == "noul"
+            && icAns.Probabilities.GetValueOrDefault("noul") >= SemanticProgramPlanner.NoulDecisionBoundary;
+
+        if (isCompound)
+        {
+            var buildCompoundSw = Stopwatch.StartNew();
+            var compoundReq = BuildCompoundRequest(state);
+            buildCompoundSw.Stop();
+            buildCompoundMs = buildCompoundSw.Elapsed.TotalMilliseconds;
+
+            var compoundHttpSw = Stopwatch.StartNew();
+            compoundResp = await SendAndParseAsync(compoundReq, ct);
+            compoundHttpSw.Stop();
+            compoundHttpMs = compoundHttpSw.Elapsed.TotalMilliseconds;
+        }
+
+        // Merge answers: base provides single-action context; compound overrides/adds unit_N_* answers
+        var mergedAnswers = new Dictionary<string, JevAnswer>(baseResp.Answers);
+        if (compoundResp != null)
+            foreach (var kv in compoundResp.Answers)
+                mergedAnswers[kv.Key] = kv.Value;
+
+        int inputTokens = baseResp.InputTokens + (compoundResp?.InputTokens ?? 0);
+        int outputTokens = baseResp.OutputTokens + (compoundResp?.OutputTokens ?? 0);
+
+        var planSw = Stopwatch.StartNew();
+        var result = ParseResponseFromAnswers(mergedAnswers, state, totalSw.Elapsed.TotalMilliseconds,
+            inputTokens, outputTokens);
+        planSw.Stop();
+
+        totalSw.Stop();
+        _logger.LogInformation(
+            "Jev: buildBase={BuildBaseMs:F0}ms baseHttp={BaseHttpMs:F0}ms buildCompound={BuildCompoundMs:F0}ms compoundHttp={CompoundHttpMs:F0}ms plan={PlanMs:F0}ms",
+            buildBaseSw.Elapsed.TotalMilliseconds, baseHttpSw.Elapsed.TotalMilliseconds,
+            buildCompoundMs, compoundHttpMs, planSw.Elapsed.TotalMilliseconds);
+
+        return result;
+    }
+
+    private async Task<JevResponse?> SendAndParseAsync(JevRequestDto request, CancellationToken ct)
+    {
         using var req = new HttpRequestMessage(HttpMethod.Post, Endpoint);
         req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
         req.Content = JsonContent.Create(request, options: JsonOptions);
@@ -50,9 +111,8 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         }
         catch (Exception ex)
         {
-            sw.Stop();
             _logger.LogError(ex, "Jev HTTP request failed");
-            return ErrorResult(sw.Elapsed.TotalMilliseconds, $"HTTP error: {ex.Message}");
+            return null;
         }
 
         string body;
@@ -62,23 +122,16 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         }
         catch (Exception ex)
         {
-            sw.Stop();
-            return ErrorResult(sw.Elapsed.TotalMilliseconds, $"Failed to read response: {ex.Message}");
+            _logger.LogError(ex, "Failed to read Jev response body");
+            return null;
         }
 
         if (!resp.IsSuccessStatusCode)
         {
-            sw.Stop();
             _logger.LogError("Jev returned {Status}: {Body}", (int)resp.StatusCode, body);
-            return ErrorResult(sw.Elapsed.TotalMilliseconds, $"HTTP {(int)resp.StatusCode}");
+            return null;
         }
 
-        sw.Stop();
-        return ParseResponse(body, state, sw.Elapsed.TotalMilliseconds);
-    }
-
-    private DecisionResult ParseResponse(string body, DecisionState state, double durationMs)
-    {
         try
         {
             using var doc = JsonDocument.Parse(body);
@@ -93,18 +146,42 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
 
             var answers = new Dictionary<string, JevAnswer>();
             if (root.TryGetProperty("answers", out var answersEl))
-            {
                 foreach (var prop in answersEl.EnumerateObject())
                     answers[prop.Name] = ParseAnswer(prop.Value);
-            }
 
-            var textCandidates = TextCandidateExtractor.Extract(state.Transcript);
-            var plan = BuildPlan(answers, state, textCandidates);
-            return new DecisionResult(plan, answers, durationMs, inputTokens, outputTokens);
+            return new JevResponse(answers, inputTokens, outputTokens);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to parse Jev response");
+            return null;
+        }
+    }
+
+    private sealed record JevResponse(
+        Dictionary<string, JevAnswer> Answers,
+        int InputTokens,
+        int OutputTokens);
+
+    private readonly SemanticProgramPlanner _planner;
+
+    private DecisionResult ParseResponseFromAnswers(
+        Dictionary<string, JevAnswer> answers,
+        DecisionState state,
+        double durationMs,
+        int inputTokens,
+        int outputTokens)
+    {
+        try
+        {
+            var textCandidates = TextCandidateExtractor.Extract(state.Transcript);
+            var plan = BuildPlan(answers, state, textCandidates);
+            var program = _planner.TryBuildProgram(answers, state, textCandidates);
+            return new DecisionResult(plan, program, answers, durationMs, inputTokens, outputTokens);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to build decision from Jev answers");
             return ErrorResult(durationMs, $"Parse error: {ex.Message}");
         }
     }
@@ -381,7 +458,15 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             WindowTargetMode: isWindowTargetedAction ? windowTargetMode : WindowTargetMode.Current);
     }
 
-    public JevRequestDto BuildRequest(DecisionState state)
+    private static readonly string[] Ordinals = ["first", "second", "third", "fourth"];
+    private static string Ordinal(int i) => i >= 1 && i <= 4 ? Ordinals[i - 1] : i.ToString();
+
+    /// <summary>
+    /// Builds the base request: single-action questions plus is_compound routing signal.
+    /// Does NOT include unit_count or unit_N_* questions — those are in BuildCompoundRequest.
+    /// Sent for every utterance; drives both simple commands and compound routing.
+    /// </summary>
+    public JevRequestDto BuildBaseRequest(DecisionState state)
     {
         var textCandidates = TextCandidateExtractor.Extract(state.Transcript);
         var appCandidates = state.InstalledApps.ToDictionary(a => a.Id, a => a.DisplayName);
@@ -446,7 +531,6 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
                     ["Down"] = "Decrease volume: turn it down, quieter, lower the volume, reduce volume, decreased volume, softer, bring the sound down, less",
                 }),
 
-            // Speculative: determines whether to focus an existing window or open a new instance.
             ["activation_mode"] = new JevQuestionDto(
                 "choice",
                 "Assume the user wants to open or activate an application. Should it focus an existing window if one is available, or open a brand-new instance?",
@@ -456,7 +540,6 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
                     ["NewInstance"] = "Explicitly request a new window or instance: 'new Chrome window', 'another VS Code window', 'open a new terminal', 'new instance of Discord'.",
                 }),
 
-            // Speculative: distinguishes "close this" (Current foreground) from "close Chrome" (Named app).
             ["window_target_mode"] = new JevQuestionDto(
                 "choice",
                 "Assume the user is issuing a window operation (close, maximize, minimize, snap). Is the target the current foreground window, or a specific named application window?",
@@ -465,6 +548,13 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
                     ["Current"] = "User refers to the current or foreground window using words like 'this', 'the current window', 'it', 'the window'. No specific application name is mentioned as the target.",
                     ["Named"] = "User names a specific application as the target — 'Chrome', 'VS Code', 'Discord', 'the terminal', 'Google Chrome'. The command is directed at that particular named app's window.",
                 }),
+
+            ["is_compound"] = new JevQuestionDto(
+                "noul",
+                "Does `utterance` contain two or more independent action units that should be executed sequentially? " +
+                "Return true for 'Open Chrome and minimize Discord', 'Snap Chrome right and VS Code left', " +
+                "'Open Chrome, turn the volume down, and minimize Discord'. Return false for a single action.",
+                null),
         };
 
         if (appCandidates.Count > 0)
@@ -493,6 +583,140 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             Questions: questions);
     }
 
+    /// <summary>
+    /// Builds the compound-detail request: unit_count + unit_N_* questions only.
+    /// Sent only when the base request confirms is_compound. Never sent for simple commands.
+    /// </summary>
+    public JevRequestDto BuildCompoundRequest(DecisionState state)
+    {
+        var appCandidates = state.InstalledApps.ToDictionary(a => a.Id, a => a.DisplayName);
+        var textCandidates = TextCandidateExtractor.Extract(state.Transcript);
+
+        var questions = new Dictionary<string, JevQuestionDto>
+        {
+            ["unit_count"] = new JevQuestionDto(
+                "choice",
+                "How many distinct, independent action units does `utterance` contain? Each unit is a separate action the user wants performed.",
+                new Dictionary<string, string>
+                {
+                    ["1"] = "A single action (Open Chrome, Snap left, Turn volume down, Pause)",
+                    ["2"] = "Exactly two actions (Open Chrome and minimize Discord, Snap Chrome right and VS Code left)",
+                    ["3"] = "Exactly three actions (Open Chrome, turn the volume down, and minimize Discord)",
+                    ["4"] = "Four or more actions",
+                }),
+        };
+
+        var actionKindChoices = new Dictionary<string, string>
+        {
+            ["None"] = "This slot does not represent a valid action unit (utterance has fewer units than this position)",
+            ["OpenApp"] = "Activate or open an application",
+            ["FocusWindow"] = "Switch focus to a specific named window",
+            ["CloseCurrentWindow"] = "Close or quit a window",
+            ["MaximizeCurrentWindow"] = "Maximize or fullscreen a window",
+            ["MinimizeCurrentWindow"] = "Minimize or hide a window",
+            ["SnapCurrentWindow"] = "Snap or tile a window to a screen side",
+            ["MediaControl"] = "Control media playback (play, pause, skip, etc.)",
+            ["SetVolume"] = "Set system volume to a specific level",
+            ["AdjustVolume"] = "Increase or decrease system volume",
+        };
+
+        var windowTargetModeChoices = new Dictionary<string, string>
+        {
+            ["Current"] = "The current foreground window ('this', 'it', 'the window') — no specific app named",
+            ["Named"] = "A specific named application window ('Chrome', 'VS Code', 'Discord')",
+        };
+
+        var snapDirChoices = new Dictionary<string, string>
+        {
+            ["Left"] = "Snap to left half",
+            ["Right"] = "Snap to right half",
+        };
+
+        var activationModeChoices = new Dictionary<string, string>
+        {
+            ["FocusOrLaunch"] = "Focus existing window or launch if not running",
+            ["NewInstance"] = "Open a new instance ('new Chrome window', 'another VS Code')",
+        };
+
+        var volumeDirChoices = new Dictionary<string, string>
+        {
+            ["Up"] = "Increase volume (louder, turn it up, raise)",
+            ["Down"] = "Decrease volume (quieter, turn it down, lower)",
+        };
+
+        var mediaOpChoices = new Dictionary<string, string>
+        {
+            ["Play"] = "Start or resume playback",
+            ["Pause"] = "Pause playback",
+            ["Toggle"] = "Toggle play/pause",
+            ["Next"] = "Skip to next track",
+            ["Previous"] = "Go to previous track",
+        };
+
+        for (int i = 1; i <= SemanticProgramPlanner.MaxUnits; i++)
+        {
+            var ord = Ordinal(i);
+            var ifFewer = i > 1 ? $" If fewer than {i} units exist in the utterance, choose None." : "";
+
+            questions[$"unit_{i}_action_kind"] = new JevQuestionDto(
+                "choice",
+                $"Assume `utterance` contains multiple independent actions. What is the action kind of the {ord} action unit?{ifFewer}",
+                actionKindChoices);
+
+            questions[$"unit_{i}_window_target_mode"] = new JevQuestionDto(
+                "choice",
+                $"For the {ord} action unit in `utterance`: is the window/app target the current foreground window, or a specific named application?",
+                windowTargetModeChoices);
+
+            questions[$"unit_{i}_snap_dir"] = new JevQuestionDto(
+                "choice",
+                $"For the {ord} action unit in `utterance` (assume it is a snap/tile action): which direction?",
+                snapDirChoices);
+
+            questions[$"unit_{i}_activation_mode"] = new JevQuestionDto(
+                "choice",
+                $"For the {ord} action unit in `utterance` (assume it is an open/activate action): focus existing or open new instance?",
+                activationModeChoices);
+
+            questions[$"unit_{i}_volume_direction"] = new JevQuestionDto(
+                "choice",
+                $"For the {ord} action unit in `utterance` (assume it is a volume-adjustment action): which direction?",
+                volumeDirChoices);
+
+            questions[$"unit_{i}_media_op"] = new JevQuestionDto(
+                "choice",
+                $"For the {ord} action unit in `utterance` (assume it is a media-control action): which operation?",
+                mediaOpChoices);
+
+            if (i > 1)
+            {
+                questions[$"unit_{i}_prior_ref"] = new JevQuestionDto(
+                    "noul",
+                    $"For the {ord} action unit in `utterance`: does its target explicitly reference the RESULT of a prior action unit " +
+                    $"using a pronoun or reference like 'it', 'that', 'the one you just opened'? " +
+                    $"Return true only for clear referential language pointing to the output of an earlier step.",
+                    null);
+            }
+
+            if (appCandidates.Count > 0)
+            {
+                questions[$"unit_{i}_target_app"] = new JevQuestionDto(
+                    "choice",
+                    $"Which application is the target of the {ord} action unit in `utterance`?",
+                    appCandidates);
+            }
+        }
+
+        return new JevRequestDto(
+            State: new JevStateDto(
+                Utterance: state.Transcript,
+                FrontmostApp: state.ForegroundApp,
+                Apps: state.InstalledApps.Select(a => a.DisplayName).ToList(),
+                Candidates: new Dictionary<string, string>(textCandidates)),
+            Model: _model,
+            Questions: questions);
+    }
+
     private static Dictionary<string, string> BuildTextCriteria(IReadOnlyDictionary<string, string> candidates)
     {
         var criteria = new Dictionary<string, string>(candidates) { ["none"] = "No specific text content is needed" };
@@ -501,6 +725,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
 
     private static DecisionResult ErrorResult(double durationMs, string reason)
         => new(new VoicePlan(VoiceAction.Rejected, RejectionReason: reason),
+               null,
                new Dictionary<string, JevAnswer>(), durationMs, 0, 0);
 
     private static readonly JsonSerializerOptions JsonOptions = new()

@@ -44,6 +44,9 @@ internal static class Program
         // ── App catalog ───────────────────────────────────────────────────────────
         var catalogLogger = loggerFactory.CreateLogger<WindowsAppCatalog>();
         IAppCatalog catalog = new WindowsAppCatalog(catalogLogger);
+        // Warm up the catalog in the background so the first utterance doesn't pay discovery cost.
+        // Runs concurrently with Parakeet initialization below.
+        Task.Run(() => catalog.GetAll());
 
         var vkCode = ResolveVirtualKey(config.ActivationKey);
         var hook = new GlobalKeyboardHook(vkCode, hookLogger);
@@ -88,16 +91,20 @@ internal static class Program
         }
 
         // ── Execution layer ───────────────────────────────────────────────────────
-        var launcher = new AppLauncher(catalog, loggerFactory.CreateLogger<AppLauncher>());
         var windows = new WindowService(loggerFactory.CreateLogger<WindowService>());
         var media = new MediaService(loggerFactory.CreateLogger<MediaService>());
         var volume = new VolumeService(loggerFactory.CreateLogger<VolumeService>());
-        var executor = new PlanExecutor(launcher, windows, media, volume,
-            loggerFactory.CreateLogger<PlanExecutor>());
+
+        var windowAwareLauncher = new WindowAwareLauncher(
+            catalog, windows, loggerFactory.CreateLogger<WindowAwareLauncher>());
+
+        var programExecutor = new ProgramExecutor(
+            windowAwareLauncher, catalog, windows, media, volume,
+            loggerFactory.CreateLogger<ProgramExecutor>());
 
         var orchestrator = new ActivationOrchestrator(
             hook, audio, debugWriter, config, orchestratorLogger,
-            speechRecognizer, decisionEngine, executor, catalog);
+            speechRecognizer, decisionEngine, programExecutor, catalog);
 
         using var trayApp = new TrayApplication(orchestrator);
         Application.Run(trayApp);

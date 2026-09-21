@@ -16,4 +16,4 @@ public record PipelineResult(
     DateTimeOffset? JevStart,
     DateTimeOffset? JevEnd,
     DateTimeOffset PipelineEnd,
-    ExecutionResult? Execution = null);
+    ProgramResult? ProgramExecution = null);
