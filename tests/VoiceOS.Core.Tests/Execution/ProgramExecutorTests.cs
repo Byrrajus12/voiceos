@@ -3,6 +3,7 @@ using VoiceOS.Core.Apps;
 using VoiceOS.Core.Candidates;
 using VoiceOS.Core.Decision;
 using VoiceOS.Core.Execution;
+using VoiceOS.Core.Monitors;
 using Xunit;
 
 namespace VoiceOS.Core.Tests.Execution;
@@ -568,13 +569,17 @@ public class ProgramExecutorTests
         StubWindowService? windows = null,
         IMediaService? media = null,
         StubVolumeService? volume = null,
-        StubCatalog? catalog = null)
+        StubCatalog? catalog = null,
+        IWindowMoveService? windowMover = null,
+        IDisplayTopologyService? topoService = null)
         => new(
             launcher ?? new StubLauncher(),
             catalog ?? DefaultCatalog(),
             windows ?? new StubWindowService(),
             media ?? new StubMediaService(),
             volume ?? new StubVolumeService(),
+            windowMover ?? new NoOpWindowMoveService(),
+            topoService ?? new NoOpTopologyService(),
             NullLogger<ProgramExecutor>.Instance);
 
     // ── Stub implementations ──────────────────────────────────────────────────
@@ -626,6 +631,8 @@ public class ProgramExecutorTests
         public ExecutionResult FocusResult { get; set; } = ExecutionResult.Ok("focused");
         public ExecutionResult CurrentResult { get; set; } = ExecutionResult.Ok("done");
         public ExecutionResult SnapResult { get; set; } = ExecutionResult.Ok("snapped");
+        public nint ForegroundHwnd { get; set; } = 0;
+        public nint GetForegroundWindowHwnd() => ForegroundHwnd;
 
         public string? LastFocusedId { get; private set; }
         public string? LastCurrentId { get; private set; }
@@ -695,8 +702,14 @@ public class ProgramExecutorTests
         public ExecutionResult AdjustResult { get; set; } = ExecutionResult.Ok("ok");
         public int? LastSetPercent { get; private set; }
         public VolumeDirection? LastAdjustDirection { get; private set; }
+        public int? LastAdjustAmount { get; private set; }
         public ExecutionResult SetVolume(int pct) { LastSetPercent = pct; return SetResult; }
-        public ExecutionResult AdjustVolume(VolumeDirection dir) { LastAdjustDirection = dir; return AdjustResult; }
+        public ExecutionResult AdjustVolume(VolumeDirection dir, int? amount = null)
+        {
+            LastAdjustDirection = dir;
+            LastAdjustAmount = amount;
+            return AdjustResult;
+        }
     }
 
     private sealed class TrackingMediaService : IMediaService
@@ -718,5 +731,18 @@ public class ProgramExecutorTests
             _order.Add($"{id}:{op}");
             return ExecutionResult.Ok(op.ToString());
         }
+    }
+
+    private sealed class NoOpWindowMoveService : IWindowMoveService
+    {
+        public ExecutionResult MoveToMonitor(nint hwnd, MonitorInfo targetMonitor, DisplayTopology topology)
+            => ExecutionResult.Fail(ExecutionStatus.PlatformError, "NoOp");
+    }
+
+    private sealed class NoOpTopologyService : IDisplayTopologyService
+    {
+        public DisplayTopology CaptureTopology() => DisplayTopology.Empty;
+        public MonitorInfo? GetCurrentMonitor(nint hwnd, DisplayTopology topology) => null;
+        public MonitorInfo? GetForegroundMonitor(DisplayTopology topology) => null;
     }
 }

@@ -280,6 +280,7 @@ public class WindowAwareLauncherTests
     {
         private readonly ExecutionResult _focusResult;
         public StubWindowService(ExecutionResult focusResult) => _focusResult = focusResult;
+        public nint GetForegroundWindowHwnd() => 0;
         public ExecutionResult Focus(string? id, IReadOnlyList<WindowCandidate> snap) => _focusResult;
         public ExecutionResult Close(string? id, IReadOnlyList<WindowCandidate> snap) => ExecutionResult.Ok("ok");
         public ExecutionResult Maximize(string? id, IReadOnlyList<WindowCandidate> snap) => ExecutionResult.Ok("ok");

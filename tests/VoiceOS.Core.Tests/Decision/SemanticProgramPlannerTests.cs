@@ -1,6 +1,7 @@
 using VoiceOS.Core.Candidates;
 using VoiceOS.Core.Decision;
 using VoiceOS.Core.Execution;
+using VoiceOS.Core.Monitors;
 using Xunit;
 
 namespace VoiceOS.Core.Tests.Decision;
@@ -64,7 +65,8 @@ public class SemanticProgramPlannerTests
         string? activationMode = null,
         string? volumeDir = null,
         string? mediaOp = null,
-        double priorRef = 0.0)
+        double priorRef = 0.0,
+        string? monitorTarget = null)
     {
         d[$"unit_{i}_action_kind"] = Choice(action);
         if (targetApp != null) d[$"unit_{i}_target_app"] = Choice(targetApp);
@@ -74,6 +76,7 @@ public class SemanticProgramPlannerTests
         if (volumeDir != null) d[$"unit_{i}_volume_direction"] = Choice(volumeDir);
         if (mediaOp != null) d[$"unit_{i}_media_op"] = Choice(mediaOp);
         if (i > 1) d[$"unit_{i}_prior_ref"] = Noul(priorRef);
+        if (monitorTarget != null) d[$"unit_{i}_monitor_target"] = Choice(monitorTarget);
     }
 
     // ── Single-command tests ──────────────────────────────────────────────────
@@ -481,6 +484,202 @@ public class SemanticProgramPlannerTests
         Assert.Single(program!.Steps);
     }
 
+    // ── MoveWindow: simple semantics ──────────────────────────────────────────
+
+    [Fact]
+    public void Single_MoveWindowToOtherMonitor_CurrentWindowTarget()
+    {
+        // "move this to the other monitor"
+        var answers = new Dictionary<string, JevAnswer>();
+        AddCommand(answers);
+        answers["unit_count"] = Choice("1");
+        AddUnit(answers, 1, "MoveWindow", windowTargetMode: "Current", monitorTarget: "Other");
+
+        var program = Planner.TryBuildProgram(answers, MakeState(), NoText);
+
+        Assert.NotNull(program);
+        var step = Assert.IsType<MoveWindowStep>(program!.Steps[0]);
+        Assert.IsType<CurrentWindowTarget>(step.Target);
+        Assert.IsType<OtherMonitor>(step.Monitor);
+    }
+
+    [Fact]
+    public void Single_MoveWindowToInternalMonitor_NamedChrome()
+    {
+        // "move Chrome to my laptop screen"
+        var answers = new Dictionary<string, JevAnswer>();
+        AddCommand(answers);
+        answers["unit_count"] = Choice("1");
+        AddUnit(answers, 1, "MoveWindow",
+            targetApp: "google-chrome",
+            windowTargetMode: "Named",
+            monitorTarget: "Internal");
+
+        var program = Planner.TryBuildProgram(answers, MakeState(), NoText);
+
+        Assert.NotNull(program);
+        var step = Assert.IsType<MoveWindowStep>(program!.Steps[0]);
+        var target = Assert.IsType<AppTarget>(step.Target);
+        Assert.Equal("google-chrome", target.AppCandidateId);
+        Assert.IsType<InternalMonitor>(step.Monitor);
+    }
+
+    [Fact]
+    public void Single_MoveWindowToExternalMonitor_NamedTarget()
+    {
+        var answers = new Dictionary<string, JevAnswer>();
+        AddCommand(answers);
+        answers["unit_count"] = Choice("1");
+        AddUnit(answers, 1, "MoveWindow",
+            targetApp: "visual-studio-code",
+            windowTargetMode: "Named",
+            monitorTarget: "External");
+
+        var program = Planner.TryBuildProgram(answers, MakeState(), NoText);
+
+        Assert.NotNull(program);
+        var step = Assert.IsType<MoveWindowStep>(program!.Steps[0]);
+        Assert.IsType<AppTarget>(step.Target);
+        Assert.IsType<ExternalMonitor>(step.Monitor);
+    }
+
+    [Theory]
+    [InlineData("Left",  RelativeMonitorDirection.Left)]
+    [InlineData("Right", RelativeMonitorDirection.Right)]
+    [InlineData("Above", RelativeMonitorDirection.Above)]
+    [InlineData("Below", RelativeMonitorDirection.Below)]
+    public void Single_MoveWindowRelativeDirection_ProducesRelativeMonitor(
+        string dirString, RelativeMonitorDirection expected)
+    {
+        var answers = new Dictionary<string, JevAnswer>();
+        AddCommand(answers);
+        answers["unit_count"] = Choice("1");
+        AddUnit(answers, 1, "MoveWindow", windowTargetMode: "Current", monitorTarget: dirString);
+
+        var program = Planner.TryBuildProgram(answers, MakeState(), NoText);
+
+        Assert.NotNull(program);
+        var step = Assert.IsType<MoveWindowStep>(program!.Steps[0]);
+        Assert.IsType<CurrentWindowTarget>(step.Target);
+        var monitor = Assert.IsType<RelativeMonitor>(step.Monitor);
+        Assert.Equal(expected, monitor.Direction);
+    }
+
+    [Fact]
+    public void Single_MoveWindowToPrimaryMonitor()
+    {
+        var answers = new Dictionary<string, JevAnswer>();
+        AddCommand(answers);
+        answers["unit_count"] = Choice("1");
+        AddUnit(answers, 1, "MoveWindow", windowTargetMode: "Current", monitorTarget: "Primary");
+
+        var program = Planner.TryBuildProgram(answers, MakeState(), NoText);
+
+        Assert.NotNull(program);
+        var step = Assert.IsType<MoveWindowStep>(program!.Steps[0]);
+        Assert.IsType<CurrentWindowTarget>(step.Target);
+        Assert.IsType<PrimaryMonitor>(step.Monitor);
+    }
+
+    [Fact]
+    public void Single_MoveWindowToExternalMonitor_MyMonitorPhrasing_ProducesExternalMonitor()
+    {
+        // Regression: "my monitor" / "my external monitor" should produce ExternalMonitor,
+        // not UnsupportedExplicitTarget. Jev must select External for these natural phrases.
+        var answers = new Dictionary<string, JevAnswer>();
+        AddCommand(answers);
+        answers["unit_count"] = Choice("1");
+        AddUnit(answers, 1, "MoveWindow",
+            targetApp: "google-chrome",
+            windowTargetMode: "Named",
+            monitorTarget: "External");
+
+        var program = Planner.TryBuildProgram(answers, MakeState(), NoText);
+
+        Assert.NotNull(program);
+        var step = Assert.IsType<MoveWindowStep>(program!.Steps[0]);
+        Assert.IsType<ExternalMonitor>(step.Monitor);
+    }
+
+    // ── MoveWindow: unsupported ordinal target ────────────────────────────────
+
+    [Fact]
+    public void Single_MoveWindow_UnsupportedOrdinalTarget_ProducesNoExecutableStep()
+    {
+        // Regression: explicit ordinal/numeric references ('monitor 2', 'second monitor',
+        // 'display 1') are represented as UnsupportedExplicitTarget in Jev answers.
+        // ParseMonitorTarget returns null → MoveWindowStep cannot be built → program is null.
+        // The ordinal must NOT be silently aliased to OtherMonitor or ExternalMonitor.
+        var answers = new Dictionary<string, JevAnswer>();
+        AddCommand(answers);
+        answers["unit_count"] = Choice("1");
+        AddUnit(answers, 1, "MoveWindow",
+            windowTargetMode: "Current",
+            monitorTarget: "UnsupportedExplicitTarget");
+
+        var program = Planner.TryBuildProgram(answers, MakeState(), NoText);
+
+        Assert.Null(program);  // requires clarification — non-executable
+    }
+
+    // ── MoveWindow: compound programs ────────────────────────────────────────
+
+    [Fact]
+    public void Compound_OpenChrome_MoveToOtherMonitor_StepResultReference()
+    {
+        // "open a new Chrome window and move it to the other monitor"
+        var answers = new Dictionary<string, JevAnswer>();
+        AddCommand(answers);
+        answers["unit_count"] = Choice("2");
+        AddUnit(answers, 1, "OpenApp", targetApp: "google-chrome", activationMode: "NewInstance");
+        AddUnit(answers, 2, "MoveWindow", monitorTarget: "Other", priorRef: 0.9);
+
+        var program = Planner.TryBuildProgram(answers, MakeState(), NoText);
+
+        Assert.NotNull(program);
+        Assert.Equal(2, program!.Steps.Count);
+
+        var s1 = Assert.IsType<OpenAppStep>(program.Steps[0]);
+        Assert.Equal(AppActivationMode.NewInstance, s1.ActivationMode);
+        Assert.Equal("google-chrome", s1.App.AppCandidateId);
+
+        var s2 = Assert.IsType<MoveWindowStep>(program.Steps[1]);
+        var ref2 = Assert.IsType<StepResultTarget>(s2.Target);
+        Assert.Equal("s1", ref2.StepId);
+        Assert.IsType<OtherMonitor>(s2.Monitor);
+    }
+
+    [Fact]
+    public void Compound_MinimizeVSCode_MoveChromeToLaptopScreen_TwoIndependentSteps()
+    {
+        // "minimize VS Code and move Chrome to the laptop screen"
+        // MoveWindow must compose without disrupting existing compound unit construction
+        var answers = new Dictionary<string, JevAnswer>();
+        AddCommand(answers);
+        answers["unit_count"] = Choice("2");
+        AddUnit(answers, 1, "MinimizeCurrentWindow",
+            targetApp: "visual-studio-code",
+            windowTargetMode: "Named");
+        AddUnit(answers, 2, "MoveWindow",
+            targetApp: "google-chrome",
+            windowTargetMode: "Named",
+            monitorTarget: "Internal",
+            priorRef: 0.05);
+
+        var program = Planner.TryBuildProgram(answers, MakeState(), NoText);
+
+        Assert.NotNull(program);
+        Assert.Equal(2, program!.Steps.Count);
+
+        var s1 = Assert.IsType<MinimizeWindowStep>(program.Steps[0]);
+        Assert.Equal("visual-studio-code", ((AppTarget)s1.Target).AppCandidateId);
+
+        var s2 = Assert.IsType<MoveWindowStep>(program.Steps[1]);
+        var s2Target = Assert.IsType<AppTarget>(s2.Target);
+        Assert.Equal("google-chrome", s2Target.AppCandidateId);
+        Assert.IsType<InternalMonitor>(s2.Monitor);
+    }
+
     // ── ToSingleStepProgram adapter ───────────────────────────────────────────
 
     [Fact]
@@ -556,6 +755,58 @@ public class SemanticProgramPlannerTests
         Assert.NotNull(program);
         var step = Assert.IsType<AdjustVolumeStep>(program!.Steps[0]);
         Assert.Equal(VolumeDirection.Down, step.Direction);
+    }
+
+    // ── ToSingleStepProgram adapter: MoveWindow ───────────────────────────────
+
+    [Fact]
+    public void Adapter_MoveWindow_CurrentMode_OtherMonitor_ProducesMoveWindowStep()
+    {
+        var plan = new VoicePlan(
+            VoiceAction.MoveWindow,
+            WindowTargetMode: WindowTargetMode.Current,
+            MonitorMove: new OtherMonitor());
+
+        var program = SemanticProgramPlanner.ToSingleStepProgram(plan);
+
+        Assert.NotNull(program);
+        Assert.Single(program!.Steps);
+        var step = Assert.IsType<MoveWindowStep>(program.Steps[0]);
+        Assert.Equal("s1", step.StepId);
+        Assert.IsType<CurrentWindowTarget>(step.Target);
+        Assert.IsType<OtherMonitor>(step.Monitor);
+    }
+
+    [Fact]
+    public void Adapter_MoveWindow_NamedChrome_InternalMonitor_UsesCandidateWindowTarget()
+    {
+        var plan = new VoicePlan(
+            VoiceAction.MoveWindow,
+            WindowTargetMode: WindowTargetMode.Named,
+            WindowCandidateId: "chrome-win-1",
+            MonitorMove: new InternalMonitor());
+
+        var program = SemanticProgramPlanner.ToSingleStepProgram(plan);
+
+        Assert.NotNull(program);
+        Assert.Single(program!.Steps);
+        var step = Assert.IsType<MoveWindowStep>(program!.Steps[0]);
+        var target = Assert.IsType<CandidateWindowTarget>(step.Target);
+        Assert.Equal("chrome-win-1", target.WindowCandidateId);
+        Assert.IsType<InternalMonitor>(step.Monitor);
+    }
+
+    [Fact]
+    public void Adapter_MoveWindow_NullMonitorMove_ReturnsNull()
+    {
+        var plan = new VoicePlan(
+            VoiceAction.MoveWindow,
+            WindowTargetMode: WindowTargetMode.Current,
+            MonitorMove: null);
+
+        var program = SemanticProgramPlanner.ToSingleStepProgram(plan);
+
+        Assert.Null(program);
     }
 
     // ── Compound-detected, invalid ref: guard against single-plan fallback ───

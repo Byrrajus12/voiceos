@@ -3,6 +3,7 @@ using VoiceOS.Core.Apps;
 using VoiceOS.Core.Candidates;
 using VoiceOS.Core.Decision;
 using VoiceOS.Core.Execution;
+using VoiceOS.Core.Monitors;
 using Xunit;
 
 namespace VoiceOS.Core.Tests.Activation;
@@ -223,6 +224,8 @@ public class ProgramOrchestratorTests
             windows ?? new StubWindowService(),
             media ?? new StubMediaService(),
             volume ?? new StubVolumeService(),
+            new NoOpWindowMoveService(),
+            new NoOpTopologyService(),
             NullLogger<ProgramExecutor>.Instance);
 
         return executor.ExecuteAsync(
@@ -265,6 +268,7 @@ public class ProgramOrchestratorTests
 
     private sealed class StubWindowService : IWindowService
     {
+        public nint GetForegroundWindowHwnd() => 0;
         public ExecutionResult CurrentResult { get; set; } = ExecutionResult.Ok("done");
         public string? LastCurrentId { get; private set; }
 
@@ -319,6 +323,19 @@ public class ProgramOrchestratorTests
         public ExecutionResult AdjustResult { get; set; } = ExecutionResult.Ok("ok");
         public VolumeDirection? LastAdjustDirection { get; private set; }
         public ExecutionResult SetVolume(int pct) => ExecutionResult.Ok(pct.ToString());
-        public ExecutionResult AdjustVolume(VolumeDirection dir) { LastAdjustDirection = dir; return AdjustResult; }
+        public ExecutionResult AdjustVolume(VolumeDirection dir, int? amount = null) { LastAdjustDirection = dir; return AdjustResult; }
+    }
+
+    private sealed class NoOpWindowMoveService : IWindowMoveService
+    {
+        public ExecutionResult MoveToMonitor(nint hwnd, MonitorInfo targetMonitor, DisplayTopology topology)
+            => ExecutionResult.Fail(ExecutionStatus.PlatformError, "NoOp");
+    }
+
+    private sealed class NoOpTopologyService : IDisplayTopologyService
+    {
+        public DisplayTopology CaptureTopology() => DisplayTopology.Empty;
+        public MonitorInfo? GetCurrentMonitor(nint hwnd, DisplayTopology topology) => null;
+        public MonitorInfo? GetForegroundMonitor(DisplayTopology topology) => null;
     }
 }

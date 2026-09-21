@@ -408,6 +408,7 @@ public class AppIdentityTests
 
     private sealed class StubWindowService : IWindowService
     {
+        public nint GetForegroundWindowHwnd() => 0;
         public ExecutionResult FocusResult { get; set; } = ExecutionResult.Fail(ExecutionStatus.WindowNotFound, "not found");
         public string? LastFocusedId { get; private set; }
 
@@ -435,7 +436,7 @@ public class AppIdentityTests
     private sealed class StubVolumeService : IVolumeService
     {
         public ExecutionResult SetVolume(int percent) => ExecutionResult.Ok("ok");
-        public ExecutionResult AdjustVolume(VolumeDirection dir) => ExecutionResult.Ok("ok");
+        public ExecutionResult AdjustVolume(VolumeDirection dir, int? amount = null) => ExecutionResult.Ok("ok");
     }
 
     private sealed class StubCatalog : IAppCatalog

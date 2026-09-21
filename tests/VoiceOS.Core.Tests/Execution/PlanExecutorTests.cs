@@ -100,14 +100,14 @@ public class PlanExecutorTests
     }
 
     [Fact]
-    public async Task OpenApp_FocusOrLaunch_MultipleMatchingWindows_ReturnsNoAction()
+    public async Task OpenApp_FocusOrLaunch_MultipleMatchingWindows_ReturnsWindowAmbiguous()
     {
         var snapshot = SnapshotWithTwo("chrome");
         var result = await Build().ExecuteAsync(
             new VoicePlan(VoiceAction.OpenApp, AppCandidateId: "chrome", AppProcessName: "chrome"),
             snapshot);
 
-        Assert.Equal(ExecutionStatus.NoAction, result.Status);
+        Assert.Equal(ExecutionStatus.WindowAmbiguous, result.Status);
     }
 
     [Fact]
@@ -456,6 +456,7 @@ public class PlanExecutorTests
 
     private sealed class StubWindowService : IWindowService
     {
+        public nint GetForegroundWindowHwnd() => 0;
         public ExecutionResult FocusResult { get; set; } = ExecutionResult.Fail(ExecutionStatus.WindowNotFound, "not found");
         public ExecutionResult CurrentResult { get; set; } = ExecutionResult.Ok("done");
         public ExecutionResult SnapResult { get; set; } = ExecutionResult.Ok("snapped");
@@ -515,8 +516,14 @@ public class PlanExecutorTests
         public ExecutionResult AdjustResult { get; set; } = ExecutionResult.Ok("ok");
         public int? LastSetPercent { get; private set; }
         public VolumeDirection? LastAdjustDirection { get; private set; }
+        public int? LastAdjustAmount { get; private set; }
 
         public ExecutionResult SetVolume(int percent) { LastSetPercent = percent; return SetResult; }
-        public ExecutionResult AdjustVolume(VolumeDirection dir) { LastAdjustDirection = dir; return AdjustResult; }
+        public ExecutionResult AdjustVolume(VolumeDirection dir, int? amount = null)
+        {
+            LastAdjustDirection = dir;
+            LastAdjustAmount = amount;
+            return AdjustResult;
+        }
     }
 }
