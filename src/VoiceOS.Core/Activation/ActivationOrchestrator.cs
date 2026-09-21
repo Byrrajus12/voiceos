@@ -260,15 +260,30 @@ public sealed class ActivationOrchestrator : IDisposable
 
             if (_decisionEngine != null)
             {
-                var windows = CandidateBuilder.GetOpenWindows();
+                // --- Decision prep: timed sub-stages ---
+                var windowsSw = Stopwatch.StartNew();
+                var windows = CandidateBuilder.GetOpenWindowsWithTimings(out var winTimings);
+                windowsSw.Stop();
+
+                var appsSw = Stopwatch.StartNew();
                 var apps = _catalog != null
                     ? CandidateBuilder.GetInstalledApps(_catalog)
                     : (IReadOnlyList<AppCandidate>)[];
+                appsSw.Stop();
+
+                var stateSw = Stopwatch.StartNew();
                 var foreground = CandidateBuilder.GetForegroundAppName();
                 decisionState = new DecisionState(
                     transcription.Transcript, foreground, apps, windows,
                     [MediaOperation.Play, MediaOperation.Pause, MediaOperation.Toggle, MediaOperation.Next, MediaOperation.Previous],
                     [SnapDirection.Left, SnapDirection.Right]);
+                stateSw.Stop();
+
+                _logger.LogInformation(
+                    "Decision prep: windows={WindowsMs:F0}ms (enum={EnumMs:F0}ms proc={ProcMs:F0}ms aumid={AumidMs:F0}ms hit={CacheHits} miss={CacheMisses}) apps={AppsMs:F0}ms state={StateMs:F0}ms",
+                    windowsSw.ElapsedMilliseconds, winTimings.EnumerateMs, winTimings.ProcessMs, winTimings.AumidMs,
+                    winTimings.CacheHits, winTimings.CacheMisses,
+                    appsSw.ElapsedMilliseconds, stateSw.ElapsedMilliseconds);
 
                 jevStart = DateTimeOffset.UtcNow;
                 try
