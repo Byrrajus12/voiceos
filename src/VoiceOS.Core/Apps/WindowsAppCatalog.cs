@@ -1,13 +1,15 @@
 using System.Runtime.InteropServices;
 using System.Text;
 using Microsoft.Extensions.Logging;
+using VoiceOS.Core.Windows;
 
 namespace VoiceOS.Core.Apps;
 
 /// <summary>
 /// Discovers installed applications from Start Menu shortcuts.
-/// Shortcuts are resolved via IShellLink COM. Apps are launched via shell execute on the .lnk path
-/// (or resolved exe path when available), so VoiceOS never constructs arbitrary process commands.
+/// Shortcuts are resolved via IShellLink COM. Launch target, arguments, and AUMID are
+/// preserved from each shortcut so VoiceOS can launch apps with their correct parameters
+/// and distinguish apps that share a process executable (e.g. Chrome vs Chrome PWAs).
 /// </summary>
 public sealed class WindowsAppCatalog : IAppCatalog
 {
@@ -27,7 +29,8 @@ public sealed class WindowsAppCatalog : IAppCatalog
 
     private IReadOnlyList<AppEntry> Discover()
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seenAumids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var entries = new List<AppEntry>();
 
         var startMenuDirs = new[]
@@ -44,7 +47,7 @@ public sealed class WindowsAppCatalog : IAppCatalog
 
             foreach (var lnkPath in Directory.EnumerateFiles(dir, "*.lnk", SearchOption.AllDirectories))
             {
-                var entry = TryBuildFromShortcut(lnkPath, seen);
+                var entry = TryBuildFromShortcut(lnkPath, seenIds, seenAumids);
                 if (entry != null) entries.Add(entry);
             }
         }
@@ -52,7 +55,7 @@ public sealed class WindowsAppCatalog : IAppCatalog
         // Seed well-known packaged (MSIX) apps that have no Start Menu .lnk shortcut.
         foreach (var seeded in SeededPackagedApps)
         {
-            if (seen.Add(seeded.Id))
+            if (seenIds.Add(seeded.Id))
                 entries.Add(seeded);
         }
 
@@ -67,16 +70,23 @@ public sealed class WindowsAppCatalog : IAppCatalog
             AppLaunchKind.PackagedApp, "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"),
     ];
 
-    private AppEntry? TryBuildFromShortcut(string lnkPath, HashSet<string> seen)
+    private AppEntry? TryBuildFromShortcut(string lnkPath, HashSet<string> seenIds, HashSet<string> seenAumids)
     {
         try
         {
             var displayName = Path.GetFileNameWithoutExtension(lnkPath);
             var id = MakeId(displayName);
             if (string.IsNullOrEmpty(id)) return null;
-            if (!seen.Add(id)) return null;
+            if (!seenIds.Add(id)) return null;
 
-            var targetPath = ResolveTarget(lnkPath);
+            var (targetPath, launchArguments) = ResolveShortcut(lnkPath);
+            var aumid = WindowPropertyStore.GetShortcutAumid(lnkPath);
+
+            // Skip if a different shortcut with the same AUMID was already added.
+            // This collapses shortcuts that represent the same logical app under a different display name.
+            if (aumid != null && !seenAumids.Add(aumid))
+                return null;
+
             string? processName = null;
             var launchTarget = lnkPath;
 
@@ -88,7 +98,9 @@ public sealed class WindowsAppCatalog : IAppCatalog
                 launchTarget = targetPath;
             }
 
-            return new AppEntry(id, displayName, processName, AppLaunchKind.Win32, launchTarget);
+            return new AppEntry(id, displayName, processName, AppLaunchKind.Win32, launchTarget,
+                LaunchArguments: string.IsNullOrWhiteSpace(launchArguments) ? null : launchArguments,
+                AppUserModelId: aumid);
         }
         catch
         {
@@ -117,21 +129,28 @@ public sealed class WindowsAppCatalog : IAppCatalog
         return sb.ToString();
     }
 
-    private static string? ResolveTarget(string lnkPath)
+    private static (string? target, string? arguments) ResolveShortcut(string lnkPath)
     {
         try
         {
             var link = (IShellLinkW)new ShellLinkCoClass();
             var file = (IPersistFile)link;
             file.Load(lnkPath, 0 /* STGM_READ */);
+
             var buf = new StringBuilder(260);
             link.GetPath(buf, buf.Capacity, IntPtr.Zero, 4 /* SLGP_RAWPATH */);
-            var path = buf.ToString();
-            return string.IsNullOrWhiteSpace(path) ? null : path;
+            var target = string.IsNullOrWhiteSpace(buf.ToString()) ? null : buf.ToString();
+
+            buf.Clear();
+            buf.EnsureCapacity(32768);
+            link.GetArguments(buf, buf.Capacity);
+            var args = string.IsNullOrWhiteSpace(buf.ToString()) ? null : buf.ToString();
+
+            return (target, args);
         }
         catch
         {
-            return null;
+            return (null, null);
         }
     }
 

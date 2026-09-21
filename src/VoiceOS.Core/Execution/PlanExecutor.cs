@@ -89,31 +89,63 @@ public sealed class PlanExecutor
     /// <summary>
     /// Implements FocusOrLaunch semantics: focus a matching open window when exactly one exists;
     /// launch when none exist; preserve honest ambiguity when multiple windows match.
+    ///
+    /// Identity matching precedence:
+    ///   1. App has AUMID + window has AUMID:
+    ///      Equal   → strong match.
+    ///      Unequal → HARD REJECT. ProcessName is never consulted after a known AUMID mismatch.
+    ///   2. App has AUMID + window has no AUMID:
+    ///      Missing runtime AUMID is not contradictory evidence. Use ProcessName fallback.
+    ///      Required for VS Code, which sets no per-window AUMID at runtime.
+    ///   3. App has no AUMID:
+    ///      Use ProcessName fallback as before.
     /// </summary>
     private ExecutionResult FocusOrLaunch(VoicePlan plan, IReadOnlyList<WindowCandidate> snapshot)
     {
         if (string.IsNullOrEmpty(plan.AppCandidateId))
             return ExecutionResult.Fail(ExecutionStatus.AppNotFound, "No app candidate ID");
 
-        if (plan.AppProcessName is { } procName)
+        List<WindowCandidate> matching;
+
+        if (plan.AppUserModelId is { } appAumid)
         {
-            var matching = snapshot
+            matching = snapshot
+                .Where(w =>
+                {
+                    if (w.AppUserModelId != null)
+                        // Both sides have identity — require exact equality; mismatch is a hard reject.
+                        return string.Equals(w.AppUserModelId, appAumid, StringComparison.OrdinalIgnoreCase);
+                    // Window has no runtime AUMID — missing evidence, not contradiction.
+                    // Fall back to ProcessName if available.
+                    return plan.AppProcessName != null &&
+                           string.Equals(w.ProcessName, plan.AppProcessName, StringComparison.OrdinalIgnoreCase);
+                })
+                .ToList();
+        }
+        else if (plan.AppProcessName is { } procName)
+        {
+            // App has no AUMID: match by ProcessName.
+            matching = snapshot
                 .Where(w => string.Equals(w.ProcessName, procName, StringComparison.OrdinalIgnoreCase))
                 .ToList();
+        }
+        else
+        {
+            matching = [];
+        }
 
-            if (matching.Count == 1)
-            {
-                _logger.LogInformation("FocusOrLaunch: focusing existing {App} window", plan.AppCandidate);
-                return _windows.Focus(matching[0].Id, snapshot);
-            }
+        if (matching.Count == 1)
+        {
+            _logger.LogInformation("FocusOrLaunch: focusing existing {App} window", plan.AppCandidate);
+            return _windows.Focus(matching[0].Id, snapshot);
+        }
 
-            if (matching.Count > 1)
-            {
-                // Multiple windows open — do not silently pick one.
-                _logger.LogInformation("FocusOrLaunch: multiple {App} windows — ambiguous", plan.AppCandidate);
-                return ExecutionResult.Fail(ExecutionStatus.NoAction,
-                    $"Multiple {plan.AppCandidate} windows are open. Use 'switch to [window]' to pick one.");
-            }
+        if (matching.Count > 1)
+        {
+            // Multiple windows open — do not silently pick one.
+            _logger.LogInformation("FocusOrLaunch: multiple {App} windows — ambiguous", plan.AppCandidate);
+            return ExecutionResult.Fail(ExecutionStatus.NoAction,
+                $"Multiple {plan.AppCandidate} windows are open. Use 'switch to [window]' to pick one.");
         }
 
         _logger.LogInformation("FocusOrLaunch: launching {App}", plan.AppCandidate);

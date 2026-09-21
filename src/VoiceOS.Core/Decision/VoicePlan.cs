@@ -42,5 +42,6 @@ public record VoicePlan(
     string? AppCandidateId = null,
     string? WindowCandidateId = null,
     string? AppProcessName = null,
+    string? AppUserModelId = null,
     AppActivationMode ActivationMode = AppActivationMode.FocusOrLaunch,
     WindowTargetMode WindowTargetMode = WindowTargetMode.Current);

@@ -33,18 +33,27 @@ public sealed class AppLauncher : IAppLauncher
 
         try
         {
-            var psi = entry.LaunchKind == AppLaunchKind.PackagedApp
-                ? new ProcessStartInfo
+            ProcessStartInfo psi;
+            if (entry.LaunchKind == AppLaunchKind.PackagedApp)
+            {
+                psi = new ProcessStartInfo
                 {
                     FileName = "explorer.exe",
                     Arguments = $"shell:AppsFolder\\{entry.LaunchTarget}",
                     UseShellExecute = false
-                }
-                : new ProcessStartInfo
+                };
+            }
+            else
+            {
+                psi = new ProcessStartInfo
                 {
                     FileName = entry.LaunchTarget,
                     UseShellExecute = true
                 };
+                if (!string.IsNullOrEmpty(entry.LaunchArguments))
+                    psi.Arguments = entry.LaunchArguments;
+            }
+
             Process.Start(psi);
             _logger.LogInformation("Launched: {DisplayName} ({Kind}:{Target})",
                 entry.DisplayName, entry.LaunchKind, entry.LaunchTarget);

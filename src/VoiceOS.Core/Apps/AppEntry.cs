@@ -7,4 +7,6 @@ public record AppEntry(
     string DisplayName,
     string? ProcessName,
     AppLaunchKind LaunchKind,
-    string LaunchTarget);
+    string LaunchTarget,
+    string? LaunchArguments = null,
+    string? AppUserModelId = null);

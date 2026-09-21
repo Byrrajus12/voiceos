@@ -2,18 +2,20 @@ using System.Diagnostics;
 using System.Runtime.InteropServices;
 using System.Text;
 using VoiceOS.Core.Apps;
+using VoiceOS.Core.Windows;
 
 namespace VoiceOS.Core.Candidates;
 
 /// <summary>
 /// Builds candidate snapshots for the planning layer.
-/// AppCandidate lists are derived from the IAppCatalog; window snapshots include HWNDs for execution.
+/// AppCandidate lists are derived from the IAppCatalog; window snapshots include HWNDs and
+/// per-window AUMIDs for accurate identity matching in the execution layer.
 /// </summary>
 public static class CandidateBuilder
 {
     public static IReadOnlyList<AppCandidate> GetInstalledApps(IAppCatalog catalog)
         => catalog.GetAll()
-                  .Select(e => new AppCandidate(e.Id, e.DisplayName, e.ProcessName))
+                  .Select(e => new AppCandidate(e.Id, e.DisplayName, e.ProcessName, e.AppUserModelId))
                   .ToList();
 
     public static IReadOnlyList<WindowCandidate> GetOpenWindows()
@@ -31,14 +33,17 @@ public static class CandidateBuilder
             if (len == 0) return true;
 
             string title = titleBuf.ToString();
-            string processName = GetProcessName(hWnd);
+            var (processName, executablePath) = GetProcessInfo(hWnd);
+            string? aumid = WindowPropertyStore.GetPerWindowAumid(hWnd);
 
             windows.Add(new WindowCandidate(
                 Id: $"w{windows.Count}",
                 ProcessName: processName,
                 Title: title,
                 IsForeground: hWnd == foreground,
-                Hwnd: hWnd));
+                Hwnd: hWnd,
+                AppUserModelId: aumid,
+                ExecutablePath: executablePath));
 
             return true;
         }, IntPtr.Zero);
@@ -56,18 +61,20 @@ public static class CandidateBuilder
         return buf.ToString();
     }
 
-    private static string GetProcessName(IntPtr hWnd)
+    private static (string processName, string? executablePath) GetProcessInfo(IntPtr hWnd)
     {
         try
         {
             GetWindowThreadProcessId(hWnd, out uint pid);
-            if (pid == 0) return string.Empty;
+            if (pid == 0) return (string.Empty, null);
             using var proc = Process.GetProcessById((int)pid);
-            return proc.ProcessName;
+            string? exePath = null;
+            try { exePath = proc.MainModule?.FileName; } catch { }
+            return (proc.ProcessName, exePath);
         }
         catch
         {
-            return string.Empty;
+            return (string.Empty, null);
         }
     }
 

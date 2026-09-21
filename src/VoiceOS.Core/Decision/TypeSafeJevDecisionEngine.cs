@@ -195,12 +195,14 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         string? appCandidate = null;
         string? appCandidateId = null;
         string? appProcessName = null;
+        string? appUserModelId = null;
         if (answers.TryGetValue("target_app", out var appAnswer) && appAnswer.SelectedChoice != null)
         {
             var match = state.InstalledApps.FirstOrDefault(a => a.Id == appAnswer.SelectedChoice);
             appCandidate = match?.DisplayName ?? appAnswer.SelectedChoice;
             appCandidateId = match?.Id;
             appProcessName = match?.ProcessName;
+            appUserModelId = match?.AppUserModelId;
             if (action == VoiceAction.OpenApp)
                 confidence = Math.Min(confidence, appAnswer.Confidence);
         }
@@ -374,6 +376,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             AppCandidateId: action is VoiceAction.OpenApp ? appCandidateId : null,
             WindowCandidateId: isWindowTargetedAction ? windowCandidateId : null,
             AppProcessName: action is VoiceAction.OpenApp ? appProcessName : null,
+            AppUserModelId: action is VoiceAction.OpenApp ? appUserModelId : null,
             ActivationMode: activationMode,
             WindowTargetMode: isWindowTargetedAction ? windowTargetMode : WindowTargetMode.Current);
     }
