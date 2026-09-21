@@ -96,7 +96,8 @@ internal static class Program
         var volume = new VolumeService(loggerFactory.CreateLogger<VolumeService>());
 
         var windowAwareLauncher = new WindowAwareLauncher(
-            catalog, windows, loggerFactory.CreateLogger<WindowAwareLauncher>());
+            catalog, windows, loggerFactory.CreateLogger<WindowAwareLauncher>(),
+            newInstanceArgsProvider: new ChromeNewInstanceArgsProvider());
 
         var programExecutor = new ProgramExecutor(
             windowAwareLauncher, catalog, windows, media, volume,

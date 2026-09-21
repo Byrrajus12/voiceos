@@ -9,4 +9,5 @@ public record AppEntry(
     AppLaunchKind LaunchKind,
     string LaunchTarget,
     string? LaunchArguments = null,
-    string? AppUserModelId = null);
+    string? AppUserModelId = null,
+    string? NewInstanceArguments = null);

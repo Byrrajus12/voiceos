@@ -63,6 +63,7 @@ public sealed class WindowsAppCatalog : IAppCatalog
         return entries;
     }
 
+
     // Packaged apps with no Start Menu .lnk; launched via shell execute on the AUMID.
     private static readonly AppEntry[] SeededPackagedApps =
     [
