@@ -86,53 +86,12 @@ public sealed class PlanExecutor
         };
     }
 
-    /// <summary>
-    /// Implements FocusOrLaunch semantics: focus a matching open window when exactly one exists;
-    /// launch when none exist; preserve honest ambiguity when multiple windows match.
-    ///
-    /// Identity matching precedence:
-    ///   1. App has AUMID + window has AUMID:
-    ///      Equal   → strong match.
-    ///      Unequal → HARD REJECT. ProcessName is never consulted after a known AUMID mismatch.
-    ///   2. App has AUMID + window has no AUMID:
-    ///      Missing runtime AUMID is not contradictory evidence. Use ProcessName fallback.
-    ///      Required for VS Code, which sets no per-window AUMID at runtime.
-    ///   3. App has no AUMID:
-    ///      Use ProcessName fallback as before.
-    /// </summary>
     private ExecutionResult FocusOrLaunch(VoicePlan plan, IReadOnlyList<WindowCandidate> snapshot)
     {
         if (string.IsNullOrEmpty(plan.AppCandidateId))
             return ExecutionResult.Fail(ExecutionStatus.AppNotFound, "No app candidate ID");
 
-        List<WindowCandidate> matching;
-
-        if (plan.AppUserModelId is { } appAumid)
-        {
-            matching = snapshot
-                .Where(w =>
-                {
-                    if (w.AppUserModelId != null)
-                        // Both sides have identity — require exact equality; mismatch is a hard reject.
-                        return string.Equals(w.AppUserModelId, appAumid, StringComparison.OrdinalIgnoreCase);
-                    // Window has no runtime AUMID — missing evidence, not contradiction.
-                    // Fall back to ProcessName if available.
-                    return plan.AppProcessName != null &&
-                           string.Equals(w.ProcessName, plan.AppProcessName, StringComparison.OrdinalIgnoreCase);
-                })
-                .ToList();
-        }
-        else if (plan.AppProcessName is { } procName)
-        {
-            // App has no AUMID: match by ProcessName.
-            matching = snapshot
-                .Where(w => string.Equals(w.ProcessName, procName, StringComparison.OrdinalIgnoreCase))
-                .ToList();
-        }
-        else
-        {
-            matching = [];
-        }
+        var matching = AppWindowMatcher.FindMatching(plan.AppProcessName, plan.AppUserModelId, snapshot).ToList();
 
         if (matching.Count == 1)
         {
