@@ -1,5 +1,6 @@
 using VoiceOS.Core.Audio;
 using VoiceOS.Core.Decision;
+using VoiceOS.Core.Dictation;
 using VoiceOS.Core.Execution;
 using VoiceOS.Core.Speech;
 
@@ -16,4 +17,6 @@ public record PipelineResult(
     DateTimeOffset? JevStart,
     DateTimeOffset? JevEnd,
     DateTimeOffset PipelineEnd,
-    ProgramResult? ProgramExecution = null);
+    ProgramResult? ProgramExecution = null,
+    InteractionKind Kind = InteractionKind.Command,
+    TextInsertionResult? TextInsertion = null);
