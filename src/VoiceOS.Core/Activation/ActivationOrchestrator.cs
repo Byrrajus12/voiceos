@@ -6,27 +6,24 @@ using VoiceOS.Core.Audio;
 using VoiceOS.Core.Candidates;
 using VoiceOS.Core.Config;
 using VoiceOS.Core.Decision;
+using VoiceOS.Core.Dictation;
 using VoiceOS.Core.Execution;
+using VoiceOS.Core.Interaction;
 using VoiceOS.Core.Monitors;
 using VoiceOS.Core.Speech;
 
 namespace VoiceOS.Core.Activation;
 
 /// <summary>
-/// Bridges GlobalKeyboardHook events → ActivationStateMachine → audio capture effects.
-///
-/// Threading model:
-///   - Hook events (OnKeyDown/OnKeyUp) arrive on the WH_KEYBOARD_LL hook thread.
-///     Windows removes the hook if the callback blocks for ~300ms. Both methods
-///     capture the timestamp and offload all work to Task.Run immediately.
-///   - Grace timer (OnGraceTimerExpired) already fires on a thread-pool thread.
-///   - State transitions and synchronous effects are serialized under _stateLock.
-///   - The async pipeline (STT + Jev + execution) runs OUTSIDE the lock on a background task.
-///   - StateChanged is always invoked outside _stateLock to prevent lock-order issues.
+/// Owns the mutually exclusive command and literal-dictation capture lanes.
+/// The Phase 1 command path remains STT -> typed VoiceProgram -> ProgramExecutor.
+/// Dictation stops after STT and inserts the literal transcript into the exact
+/// foreground target captured on the activation edge.
 /// </summary>
-public sealed class ActivationOrchestrator : IDisposable
+public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractionStateSource
 {
-    private readonly GlobalKeyboardHook _hook;
+    private readonly GlobalKeyboardHook _commandHook;
+    private readonly GlobalKeyboardHook _dictationHook;
     private readonly AudioCaptureService _audio;
     private readonly RecordingDebugWriter? _debugWriter;
     private readonly ISpeechRecognizer? _speechRecognizer;
@@ -34,24 +31,31 @@ public sealed class ActivationOrchestrator : IDisposable
     private readonly ProgramExecutor? _programExecutor;
     private readonly IAppCatalog? _catalog;
     private readonly IDisplayTopologyService? _topoService;
+    private readonly IForegroundWindowService? _foregroundWindow;
+    private readonly ITextInsertionService? _textInsertion;
     private readonly VoiceOSConfig _config;
     private readonly ILogger<ActivationOrchestrator> _logger;
 
     private readonly object _stateLock = new();
-    private MachineContext _ctx = MachineContext.Initial;
+    private MachineContext _commandContext = MachineContext.Initial;
+    private MachineContext _dictationContext = MachineContext.Initial;
+    private InteractionKind? _activeCapture;
+    private TextInsertionTarget _dictationTarget;
     private System.Threading.Timer? _graceTimer;
     private bool _disposed;
 
-    // Timing state for debug metadata (accessed only under _stateLock)
     private DateTimeOffset _activationPressTime;
     private DateTimeOffset _recordingStartTime;
     private DateTimeOffset _micCaptureStartedTime;
     private DateTimeOffset _stopActivationTime;
 
     public event EventHandler<ActivationState>? StateChanged;
+    public event EventHandler<InteractionStateChanged>? InteractionChanged;
+    public event EventHandler<ApplicationInteractionSnapshotEventArgs>? InteractionSnapshotChanged;
 
     public ActivationOrchestrator(
-        GlobalKeyboardHook hook,
+        GlobalKeyboardHook commandHook,
+        GlobalKeyboardHook dictationHook,
         AudioCaptureService audio,
         RecordingDebugWriter? debugWriter,
         VoiceOSConfig config,
@@ -60,9 +64,12 @@ public sealed class ActivationOrchestrator : IDisposable
         IDecisionEngine? decisionEngine = null,
         ProgramExecutor? programExecutor = null,
         IAppCatalog? catalog = null,
-        IDisplayTopologyService? topoService = null)
+        IDisplayTopologyService? topoService = null,
+        IForegroundWindowService? foregroundWindow = null,
+        ITextInsertionService? textInsertion = null)
     {
-        _hook = hook;
+        _commandHook = commandHook;
+        _dictationHook = dictationHook;
         _audio = audio;
         _debugWriter = debugWriter;
         _config = config;
@@ -72,78 +79,122 @@ public sealed class ActivationOrchestrator : IDisposable
         _programExecutor = programExecutor;
         _catalog = catalog;
         _topoService = topoService;
+        _foregroundWindow = foregroundWindow;
+        _textInsertion = textInsertion;
 
-        _hook.KeyDown += OnKeyDown;
-        _hook.KeyUp += OnKeyUp;
+        _commandHook.KeyDown += OnCommandKeyDown;
+        _commandHook.KeyUp += OnCommandKeyUp;
+        _dictationHook.KeyDown += OnDictationKeyDown;
+        _dictationHook.KeyUp += OnDictationKeyUp;
     }
 
-    public void Start() => _hook.Install();
+    public void Start()
+    {
+        _commandHook.Install();
+        _dictationHook.Install();
+    }
 
-    private void OnKeyDown(object? sender, EventArgs e)
+    private void OnCommandKeyDown(object? sender, EventArgs e)
+        => QueueEvent(InteractionKind.Command, ActivationEvent.KeyDown, DateTimeOffset.UtcNow);
+
+    private void OnCommandKeyUp(object? sender, EventArgs e)
+        => QueueEvent(InteractionKind.Command, ActivationEvent.KeyUp, DateTimeOffset.UtcNow);
+
+    private void OnDictationKeyDown(object? sender, EventArgs e)
     {
         var now = DateTimeOffset.UtcNow;
-        _ = Task.Run(() => ProcessEvent(ActivationEvent.KeyDown, now));
+        var targetAtActivation = _foregroundWindow?.Capture() ?? default;
+        QueueEvent(InteractionKind.Dictation, ActivationEvent.KeyDown, now, targetAtActivation);
     }
 
-    private void OnKeyUp(object? sender, EventArgs e)
-    {
-        var now = DateTimeOffset.UtcNow;
-        _ = Task.Run(() => ProcessEvent(ActivationEvent.KeyUp, now));
-    }
+    private void OnDictationKeyUp(object? sender, EventArgs e)
+        => QueueEvent(InteractionKind.Dictation, ActivationEvent.KeyUp, DateTimeOffset.UtcNow);
 
-    private void ProcessEvent(ActivationEvent evt, DateTimeOffset now)
+    private void QueueEvent(
+        InteractionKind kind,
+        ActivationEvent evt,
+        DateTimeOffset now,
+        TextInsertionTarget targetAtActivation = default)
+        => _ = Task.Run(() => ProcessEvent(kind, evt, now, targetAtActivation));
+
+    private void ProcessEvent(
+        InteractionKind kind,
+        ActivationEvent evt,
+        DateTimeOffset now,
+        TextInsertionTarget targetAtActivation = default)
     {
         ActivationState newState;
-        PipelineInput? pipeline = null;
+        PipelineInput? pipeline;
 
         lock (_stateLock)
         {
+            if (_activeCapture is { } active && active != kind)
+            {
+                _logger.LogDebug("Ignoring {Kind} activation while {Active} owns audio capture", kind, active);
+                return;
+            }
+
             var (next, actions) = ActivationStateMachine.Transition(
-                _ctx, evt, _config.ActivationMode,
+                GetContext(kind), evt, GetMode(kind),
                 _config.GracePeriod, _config.HoldThreshold, now);
-            _ctx = next;
-            pipeline = ExecuteActions(actions, now);
-            newState = _ctx.State;
+            SetContext(kind, next);
+            pipeline = ExecuteActions(kind, actions, now, targetAtActivation);
+            newState = GetContext(kind).State;
         }
 
-        StateChanged?.Invoke(this, newState);
-
-        if (pipeline != null)
+        PublishState(kind, newState);
+        if (pipeline is not null)
             _ = RunPipelineAsync(pipeline);
     }
 
     private void OnGraceTimerExpired(object? state)
     {
+        if (state is not InteractionKind kind)
+            return;
+
         var now = DateTimeOffset.UtcNow;
         ActivationState newState;
-        PipelineInput? pipeline = null;
-
+        PipelineInput? pipeline;
         lock (_stateLock)
         {
             var (next, actions) = ActivationStateMachine.Transition(
-                _ctx, ActivationEvent.GraceTimerExpired, _config.ActivationMode,
+                GetContext(kind), ActivationEvent.GraceTimerExpired, GetMode(kind),
                 _config.GracePeriod, _config.HoldThreshold, now);
-            _ctx = next;
-            pipeline = ExecuteActions(actions, now);
-            newState = _ctx.State;
+            SetContext(kind, next);
+            pipeline = ExecuteActions(kind, actions, now);
+            newState = GetContext(kind).State;
         }
 
-        StateChanged?.Invoke(this, newState);
-
-        if (pipeline != null)
+        PublishState(kind, newState);
+        if (pipeline is not null)
             _ = RunPipelineAsync(pipeline);
     }
 
-    // Called inside _stateLock. Returns PipelineInput when a recording was finalized.
-    private PipelineInput? ExecuteActions(IReadOnlyList<ActivationAction> actions, DateTimeOffset now)
+    private PipelineInput? ExecuteActions(
+        InteractionKind kind,
+        IReadOnlyList<ActivationAction> actions,
+        DateTimeOffset now,
+        TextInsertionTarget targetAtActivation = default)
     {
         PipelineInput? pipeline = null;
-
         foreach (var action in actions)
         {
             switch (action)
             {
                 case ActivationAction.StartRecording:
+                    _activeCapture = kind;
+                    if (kind == InteractionKind.Dictation)
+                    {
+                        _dictationTarget = targetAtActivation;
+                        if (!_dictationTarget.IsValid)
+                        {
+                            _logger.LogWarning("Dictation activation has no valid foreground target");
+                            SetContext(kind, MachineContext.Initial);
+                            _activeCapture = null;
+                            break;
+                        }
+                    }
+
                     _activationPressTime = now;
                     _recordingStartTime = now;
                     var started = _audio.StartCapture();
@@ -151,24 +202,26 @@ public sealed class ActivationOrchestrator : IDisposable
                     if (!started)
                     {
                         _logger.LogWarning("Mic capture failed — rolling back to Idle");
-                        _ctx = MachineContext.Initial;
+                        SetContext(kind, MachineContext.Initial);
+                        _activeCapture = null;
+                        _dictationTarget = default;
                     }
                     else
                     {
-                        _logger.LogInformation("Recording started");
+                        _logger.LogInformation("{Kind} recording started", kind);
                     }
                     break;
 
                 case ActivationAction.StopRecording:
                     _stopActivationTime = now;
-                    pipeline = FinalizeRecordingSync(now);
+                    pipeline = FinalizeRecordingSync(kind, now);
+                    _activeCapture = null;
                     break;
 
                 case ActivationAction.StartGraceTimer(var duration):
                     _graceTimer?.Dispose();
                     _graceTimer = new System.Threading.Timer(
-                        OnGraceTimerExpired, null,
-                        (int)duration.TotalMilliseconds, Timeout.Infinite);
+                        OnGraceTimerExpired, kind, (int)duration.TotalMilliseconds, Timeout.Infinite);
                     break;
 
                 case ActivationAction.CancelGraceTimer:
@@ -177,18 +230,13 @@ public sealed class ActivationOrchestrator : IDisposable
                     break;
             }
         }
-
         return pipeline;
     }
 
-    // Called inside _stateLock. Stops capture and saves debug WAV; returns pipeline input for async processing.
-    private PipelineInput? FinalizeRecordingSync(DateTimeOffset stopTime)
+    private PipelineInput? FinalizeRecordingSync(InteractionKind kind, DateTimeOffset stopTime)
     {
         _graceTimer?.Dispose();
         _graceTimer = null;
-
-        _logger.LogInformation("Recording stopped, finalizing...");
-
         var (pcm, format) = _audio.StopCaptureAndGetPcm();
 
         var metadata = new RecordingMetadata(
@@ -200,12 +248,11 @@ public sealed class ActivationOrchestrator : IDisposable
             WavFinalized: DateTimeOffset.UtcNow,
             TotalDurationSeconds: (stopTime - _recordingStartTime).TotalSeconds);
 
-        if (_debugWriter != null && _config.DebugOutputEnabled && pcm.Length > 0)
+        if (_debugWriter is not null && _config.DebugOutputEnabled && pcm.Length > 0)
         {
             try
             {
                 _debugWriter.Save(pcm, format, metadata);
-                _logger.LogInformation("Debug WAV saved ({Bytes} bytes PCM)", pcm.Length);
             }
             catch (Exception ex)
             {
@@ -213,9 +260,11 @@ public sealed class ActivationOrchestrator : IDisposable
             }
         }
 
-        if (pcm.Length == 0) return null;
-
-        return new PipelineInput(pcm, format, metadata, DateTimeOffset.UtcNow);
+        var target = kind == InteractionKind.Dictation ? _dictationTarget : default;
+        _dictationTarget = default;
+        return pcm.Length == 0
+            ? null
+            : new PipelineInput(kind, target, pcm, format, metadata, DateTimeOffset.UtcNow);
     }
 
     private async Task RunPipelineAsync(PipelineInput input)
@@ -224,22 +273,19 @@ public sealed class ActivationOrchestrator : IDisposable
         TranscriptionResult? transcription = null;
         DecisionResult? decision = null;
         ProgramResult? programResult = null;
-        DateTimeOffset? sttStart = null, sttEnd = null;
-        DateTimeOffset? jevStart = null, jevEnd = null;
+        TextInsertionResult? insertionResult = null;
+        DateTimeOffset? sttStart = null, sttEnd = null, jevStart = null, jevEnd = null;
 
         try
         {
-            // ── STT ──────────────────────────────────────────────────────────────────
-            StateChanged?.Invoke(this, ActivationState.Transcribing);
-
-            if (_speechRecognizer != null)
+            PublishState(input.Kind, ActivationState.Transcribing);
+            if (_speechRecognizer is not null)
             {
                 sttStart = DateTimeOffset.UtcNow;
                 try
                 {
                     var samples = PcmToFloatConverter.Convert16BitPcmToFloat(input.Pcm);
-                    transcription = await _speechRecognizer.TranscribeAsync(samples.AsMemory())
-                        .ConfigureAwait(false);
+                    transcription = await _speechRecognizer.TranscribeAsync(samples.AsMemory()).ConfigureAwait(false);
                 }
                 catch (Exception ex)
                 {
@@ -248,52 +294,69 @@ public sealed class ActivationOrchestrator : IDisposable
                 sttEnd = DateTimeOffset.UtcNow;
             }
 
-            if (transcription == null || !transcription.Success || string.IsNullOrWhiteSpace(transcription.Transcript))
+            if (transcription is null || !transcription.Success || string.IsNullOrWhiteSpace(transcription.Transcript))
             {
-                var reason = transcription?.Error ?? (_speechRecognizer == null ? "No STT service" : "Empty transcript");
-                _logger.LogInformation("Skipping Jev — {Reason}", reason);
+                var reason = transcription?.Error ?? (_speechRecognizer is null ? "No STT service" : "Empty transcript");
+                _logger.LogInformation("Skipping {Kind} pipeline — {Reason}", input.Kind, reason);
+                PublishSnapshot(new(ApplicationInteractionPhase.Failed, input.Kind, Status: reason));
                 return;
             }
 
-            _logger.LogInformation("Transcript: \"{Text}\" ({SttMs:F0}ms STT)",
-                transcription.Transcript, transcription.TranscriptionDurationMs);
+            PublishSnapshot(new(ApplicationInteractionPhase.Routing, input.Kind,
+                transcription.Transcript, "Routing input"));
 
-            // ── JEV ──────────────────────────────────────────────────────────────────
-            StateChanged?.Invoke(this, ActivationState.Understanding);
-            DecisionState? decisionState = null;
-
-            if (_decisionEngine != null)
+            if (input.Kind == InteractionKind.Dictation)
             {
-                // --- Decision prep: timed sub-stages ---
+                if (_textInsertion is null)
+                {
+                    PublishSnapshot(new(ApplicationInteractionPhase.Failed, input.Kind,
+                        transcription.Transcript, "Text insertion is unavailable"));
+                    return;
+                }
+
+                PublishSnapshot(new(ApplicationInteractionPhase.Executing, input.Kind,
+                    transcription.Transcript, "Inserting dictation"));
+                insertionResult = await _textInsertion.InsertAsync(
+                    new TextInsertionRequest(transcription.Transcript, input.DictationTarget)).ConfigureAwait(false);
+                PublishSnapshot(new(
+                    insertionResult.Succeeded ? ApplicationInteractionPhase.Succeeded : ApplicationInteractionPhase.Failed,
+                    input.Kind,
+                    transcription.Transcript,
+                    insertionResult.Detail ?? insertionResult.Status.ToString()));
+                return;
+            }
+
+            PublishSnapshot(new(ApplicationInteractionPhase.Observing, input.Kind,
+                transcription.Transcript, "Collecting direct capabilities"));
+            DecisionState? decisionState = null;
+            if (_decisionEngine is not null)
+            {
                 var windowsSw = Stopwatch.StartNew();
                 var windows = CandidateBuilder.GetOpenWindowsWithTimings(out var winTimings);
                 windowsSw.Stop();
-
                 var appsSw = Stopwatch.StartNew();
-                var apps = _catalog != null
+                var apps = _catalog is not null
                     ? CandidateBuilder.GetInstalledApps(_catalog)
                     : (IReadOnlyList<AppCandidate>)[];
                 appsSw.Stop();
-
                 var topoSw = Stopwatch.StartNew();
                 var topology = _topoService?.CaptureTopology() ?? DisplayTopology.Empty;
                 topoSw.Stop();
-
-                var stateSw = Stopwatch.StartNew();
                 var foreground = CandidateBuilder.GetForegroundAppName();
                 decisionState = new DecisionState(
                     transcription.Transcript, foreground, apps, windows,
                     [MediaOperation.Play, MediaOperation.Pause, MediaOperation.Toggle, MediaOperation.Next, MediaOperation.Previous],
-                    [SnapDirection.Left, SnapDirection.Right],
-                    topology);
-                stateSw.Stop();
+                    [SnapDirection.Left, SnapDirection.Right], topology);
 
                 _logger.LogInformation(
-                    "Decision prep: windows={WindowsMs:F0}ms (enum={EnumMs:F0}ms proc={ProcMs:F0}ms aumid={AumidMs:F0}ms hit={CacheHits} miss={CacheMisses}) apps={AppsMs:F0}ms topo={TopoMs:F0}ms state={StateMs:F0}ms",
-                    windowsSw.ElapsedMilliseconds, winTimings.EnumerateMs, winTimings.ProcessMs, winTimings.AumidMs,
-                    winTimings.CacheHits, winTimings.CacheMisses,
-                    appsSw.ElapsedMilliseconds, topoSw.ElapsedMilliseconds, stateSw.ElapsedMilliseconds);
+                    "Decision prep: windows={WindowsMs:F0}ms (enum={EnumMs:F0}ms proc={ProcMs:F0}ms aumid={AumidMs:F0}ms hit={CacheHits} miss={CacheMisses}) apps={AppsMs:F0}ms topo={TopoMs:F0}ms",
+                    windowsSw.ElapsedMilliseconds, winTimings.EnumerateMs, winTimings.ProcessMs,
+                    winTimings.AumidMs, winTimings.CacheHits, winTimings.CacheMisses,
+                    appsSw.ElapsedMilliseconds, topoSw.ElapsedMilliseconds);
 
+                PublishState(input.Kind, ActivationState.Understanding);
+                PublishSnapshot(new(ApplicationInteractionPhase.Deciding, input.Kind,
+                    transcription.Transcript, "Choosing a bounded direct action"));
                 jevStart = DateTimeOffset.UtcNow;
                 try
                 {
@@ -306,23 +369,18 @@ public sealed class ActivationOrchestrator : IDisposable
                 jevEnd = DateTimeOffset.UtcNow;
             }
 
-            // ── EXECUTION ─────────────────────────────────────────────────────────────
-            // Prefer the typed VoiceProgram from the decision engine.
-            // Single-plan fallback applies ONLY when compound was not detected (unit_N_* answers absent);
-            // if compound was attempted but TryBuildProgram returned null, fail silently rather than
-            // partially executing the first action of a failed compound command.
-            if (_programExecutor != null && decision != null && decisionState != null)
+            if (_programExecutor is not null && decision is not null && decisionState is not null)
             {
-                bool compoundAttempted = decision.RawAnswers.TryGetValue("is_compound", out var cmpAns)
-                    && cmpAns.QuestionType == "noul"
-                    && cmpAns.Probabilities.GetValueOrDefault("noul") >= SemanticProgramPlanner.NoulDecisionBoundary;
-
+                var compoundAttempted = decision.RawAnswers.TryGetValue("is_compound", out var compound)
+                    && compound.QuestionType == "noul"
+                    && compound.Probabilities.GetValueOrDefault("noul") >= SemanticProgramPlanner.NoulDecisionBoundary;
                 var program = decision.Program
                     ?? (compoundAttempted ? null : SemanticProgramPlanner.ToSingleStepProgram(decision.Plan));
 
-                if (program != null)
+                if (program is not null)
                 {
-                    var execSw = Stopwatch.StartNew();
+                    PublishSnapshot(new(ApplicationInteractionPhase.Executing, input.Kind,
+                        transcription.Transcript, "Executing direct capability"));
                     try
                     {
                         programResult = await _programExecutor
@@ -331,59 +389,106 @@ public sealed class ActivationOrchestrator : IDisposable
                     }
                     catch (Exception ex)
                     {
-                        _logger.LogError(ex, "Execution error for program ({Steps} steps)",
-                            program.Steps.Count);
+                        _logger.LogError(ex, "Execution error for program ({Steps} steps)", program.Steps.Count);
                     }
-                    execSw.Stop();
-                    _logger.LogInformation("Execution={ExecMs:F0}ms", execSw.ElapsedMilliseconds);
                 }
             }
+
+            PublishSnapshot(new(
+                programResult?.AllSucceeded == true
+                    ? ApplicationInteractionPhase.Succeeded
+                    : ApplicationInteractionPhase.Failed,
+                input.Kind,
+                transcription.Transcript,
+                programResult?.AllSucceeded == true ? "Completed" : "No direct action completed"));
         }
         finally
         {
-            var pipelineEnd = DateTimeOffset.UtcNow;
             var result = new PipelineResult(
                 input.Metadata, transcription, decision, decision?.Plan,
-                pipelineStart, sttStart, sttEnd, jevStart, jevEnd, pipelineEnd, programResult);
-
+                pipelineStart, sttStart, sttEnd, jevStart, jevEnd, DateTimeOffset.UtcNow,
+                programResult, input.Kind, insertionResult);
             LogPipelineSummary(result);
-            StateChanged?.Invoke(this, ActivationState.Idle);
+            PublishState(input.Kind, ActivationState.Idle);
         }
     }
 
-    private void LogPipelineSummary(PipelineResult r)
+    private void LogPipelineSummary(PipelineResult result)
     {
-        var totalMs = (r.PipelineEnd - r.PipelineStart).TotalMilliseconds;
-        var sttMs = r.SttStart.HasValue && r.SttEnd.HasValue
-            ? (r.SttEnd.Value - r.SttStart.Value).TotalMilliseconds : 0;
-        var jevMs = r.JevStart.HasValue && r.JevEnd.HasValue
-            ? (r.JevEnd.Value - r.JevStart.Value).TotalMilliseconds : 0;
-
-        var action = r.Plan?.Action.ToString() ?? "none";
-        var confidence = r.Plan?.Confidence ?? 0;
-        var transcript = r.Transcription?.Transcript ?? "(none)";
-        var execStatus = r.ProgramExecution == null ? "-"
-            : r.ProgramExecution.AllSucceeded
-                ? $"ok({r.ProgramExecution.ExecutedCount})"
-                : $"fail({r.ProgramExecution.FirstFailure?.Status})";
+        var sttMs = result.SttStart.HasValue && result.SttEnd.HasValue
+            ? (result.SttEnd.Value - result.SttStart.Value).TotalMilliseconds : 0;
+        var jevMs = result.JevStart.HasValue && result.JevEnd.HasValue
+            ? (result.JevEnd.Value - result.JevStart.Value).TotalMilliseconds : 0;
+        var execution = result.ProgramExecution is null ? "-"
+            : result.ProgramExecution.AllSucceeded
+                ? $"ok({result.ProgramExecution.ExecutedCount})"
+                : $"fail({result.ProgramExecution.FirstFailure?.Status})";
 
         _logger.LogInformation(
-            "Pipeline: speech={SpeechMs:F0}ms STT={SttMs:F0}ms Jev={JevMs:F0}ms total={TotalMs:F0}ms | \"{Transcript}\" → {Action} ({Confidence:P0}) exec={ExecStatus}",
-            r.Recording.TotalDurationSeconds * 1000, sttMs, jevMs, totalMs, transcript, action, confidence, execStatus);
+            "Pipeline: kind={Kind} speech={SpeechMs:F0}ms STT={SttMs:F0}ms Jev={JevMs:F0}ms total={TotalMs:F0}ms chars={Characters} action={Action} confidence={Confidence:P0} exec={ExecStatus} insertion={InsertionStatus}",
+            result.Kind, result.Recording.TotalDurationSeconds * 1000, sttMs, jevMs,
+            (result.PipelineEnd - result.PipelineStart).TotalMilliseconds,
+            result.Transcription?.Transcript.Length ?? 0,
+            result.Plan?.Action.ToString() ?? "none", result.Plan?.Confidence ?? 0,
+            execution, result.TextInsertion?.Status.ToString() ?? "-");
     }
+
+    private MachineContext GetContext(InteractionKind kind)
+        => kind == InteractionKind.Command ? _commandContext : _dictationContext;
+
+    private void SetContext(InteractionKind kind, MachineContext context)
+    {
+        if (kind == InteractionKind.Command)
+            _commandContext = context;
+        else
+            _dictationContext = context;
+    }
+
+    private ActivationMode GetMode(InteractionKind kind)
+        => kind == InteractionKind.Command ? _config.ActivationMode : _config.DictationActivationMode;
+
+    private void PublishState(InteractionKind kind, ActivationState state)
+    {
+        StateChanged?.Invoke(this, state);
+        InteractionChanged?.Invoke(this, new(kind, state));
+        var snapshot = state switch
+        {
+            ActivationState.Recording => new ApplicationInteractionSnapshot(
+                ApplicationInteractionPhase.Listening, kind, Status: "Listening"),
+            ActivationState.Stopping => new ApplicationInteractionSnapshot(
+                ApplicationInteractionPhase.Listening, kind, Status: "Finishing capture"),
+            ActivationState.Transcribing => new ApplicationInteractionSnapshot(
+                ApplicationInteractionPhase.Transcribing, kind, Status: "Transcribing"),
+            ActivationState.Understanding => new ApplicationInteractionSnapshot(
+                ApplicationInteractionPhase.Deciding, kind, Status: "Deciding"),
+            _ => ApplicationInteractionSnapshot.Idle
+        };
+        PublishSnapshot(snapshot);
+    }
+
+    private void PublishSnapshot(ApplicationInteractionSnapshot snapshot)
+        => InteractionSnapshotChanged?.Invoke(this, new(snapshot));
 
     public void Dispose()
     {
         if (_disposed) return;
         _disposed = true;
-
-        _hook.KeyDown -= OnKeyDown;
-        _hook.KeyUp -= OnKeyUp;
+        _commandHook.KeyDown -= OnCommandKeyDown;
+        _commandHook.KeyUp -= OnCommandKeyUp;
+        _dictationHook.KeyDown -= OnDictationKeyDown;
+        _dictationHook.KeyUp -= OnDictationKeyUp;
         _graceTimer?.Dispose();
-        _hook.Dispose();
+        _commandHook.Dispose();
+        _dictationHook.Dispose();
         _audio.Dispose();
         _speechRecognizer?.Dispose();
     }
 
-    private sealed record PipelineInput(byte[] Pcm, WaveFormat Format, RecordingMetadata Metadata, DateTimeOffset PipelineStart);
+    private sealed record PipelineInput(
+        InteractionKind Kind,
+        TextInsertionTarget DictationTarget,
+        byte[] Pcm,
+        WaveFormat Format,
+        RecordingMetadata Metadata,
+        DateTimeOffset PipelineStart);
 }
