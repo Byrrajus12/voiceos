@@ -4,6 +4,7 @@
     <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
     <IsPackable>false</IsPackable>
     <RootNamespace>VoiceOS.Core.Tests</RootNamespace>
   </PropertyGroup>
@@ -21,6 +22,11 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\VoiceOS.Core\VoiceOS.Core.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Compile Include="..\..\src\VoiceOS\ClipboardSnapshotMaterializer.cs" Link="TestedApp\ClipboardSnapshotMaterializer.cs" />
+    <Compile Include="..\..\src\VoiceOS\WindowsClipboardService.cs" Link="TestedApp\WindowsClipboardService.cs" />
   </ItemGroup>
 
 </Project>
