@@ -22,6 +22,8 @@ public class ConfigurationTests
 
         Assert.Equal("RControlKey", config.ActivationKey);
         Assert.Equal(ActivationMode.HoldOrToggle, config.ActivationMode);
+        Assert.Equal("F8", config.DictationActivationKey);
+        Assert.Equal(ActivationMode.PushToTalk, config.DictationActivationMode);
         Assert.Equal(300, config.HoldThresholdMs);
         Assert.Equal(50, config.GracePeriodMs);
         Assert.True(config.DebugOutputEnabled);
@@ -59,6 +61,8 @@ public class ConfigurationTests
               "VoiceOS": {
                 "ActivationKey": "LControlKey",
                 "ActivationMode": "Toggle",
+                "DictationActivationKey": "F9",
+                "DictationActivationMode": "HoldOrToggle",
                 "HoldThresholdMs": 500,
                 "GracePeriodMs": 100,
                 "DebugOutputEnabled": false
@@ -70,6 +74,8 @@ public class ConfigurationTests
 
         Assert.Equal("LControlKey", config.ActivationKey);
         Assert.Equal(ActivationMode.Toggle, config.ActivationMode);
+        Assert.Equal("F9", config.DictationActivationKey);
+        Assert.Equal(ActivationMode.HoldOrToggle, config.DictationActivationMode);
         Assert.Equal(500, config.HoldThresholdMs);
         Assert.Equal(100, config.GracePeriodMs);
         Assert.False(config.DebugOutputEnabled);

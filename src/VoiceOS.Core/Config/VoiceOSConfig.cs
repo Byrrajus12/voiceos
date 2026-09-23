@@ -6,6 +6,8 @@ public class VoiceOSConfig
 {
     public string ActivationKey { get; set; } = "RControlKey";
     public ActivationMode ActivationMode { get; set; } = ActivationMode.HoldOrToggle;
+    public string DictationActivationKey { get; set; } = "F8";
+    public ActivationMode DictationActivationMode { get; set; } = ActivationMode.PushToTalk;
     public int HoldThresholdMs { get; set; } = 300;
     public int GracePeriodMs { get; set; } = 50;
     public bool DebugOutputEnabled { get; set; } = true;
