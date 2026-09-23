@@ -5,6 +5,7 @@ using VoiceOS.Core.Apps;
 using VoiceOS.Core.Audio;
 using VoiceOS.Core.Config;
 using VoiceOS.Core.Decision;
+using VoiceOS.Core.Dictation;
 using VoiceOS.Core.Execution;
 using VoiceOS.Core.Monitors;
 using VoiceOS.Core.Speech;
@@ -50,8 +51,13 @@ internal static class Program
         // Runs concurrently with Parakeet initialization below.
         Task.Run(() => catalog.GetAll());
 
-        var vkCode = ResolveVirtualKey(config.ActivationKey);
-        var hook = new GlobalKeyboardHook(vkCode, hookLogger);
+        var commandVkCode = ResolveVirtualKey(config.ActivationKey);
+        var dictationVkCode = ResolveVirtualKey(config.DictationActivationKey);
+        if (commandVkCode == dictationVkCode)
+            throw new InvalidOperationException("Command and dictation activation keys must be different.");
+
+        var commandHook = new GlobalKeyboardHook(commandVkCode, hookLogger);
+        var dictationHook = new GlobalKeyboardHook(dictationVkCode, hookLogger);
         var audio = new AudioCaptureService(audioLogger);
         var debugWriter = config.DebugOutputEnabled
             ? new RecordingDebugWriter(writerLogger)
@@ -107,9 +113,21 @@ internal static class Program
             windowAwareLauncher, catalog, windows, media, volume, windowMover, topoService,
             loggerFactory.CreateLogger<ProgramExecutor>());
 
+        // Literal dictation bypasses semantic interpretation and uses one trusted
+        // foreground insertion service with exact target/focus verification.
+        var foreground = new WindowsForegroundWindowService();
+        var keyboard = new WindowsKeyboardInputService();
+        using var clipboard = new WindowsClipboardService(
+            loggerFactory.CreateLogger<WindowsClipboardService>());
+        var textInsertion = new TextInsertionService([
+            new ClipboardPasteTextInsertionBackend(clipboard, keyboard, foreground),
+            new UnicodeKeyboardTextInsertionBackend(keyboard, foreground)
+        ]);
+
         var orchestrator = new ActivationOrchestrator(
-            hook, audio, debugWriter, config, orchestratorLogger,
-            speechRecognizer, decisionEngine, programExecutor, catalog, topoService);
+            commandHook, dictationHook, audio, debugWriter, config, orchestratorLogger,
+            speechRecognizer, decisionEngine, programExecutor, catalog, topoService,
+            foreground, textInsertion);
 
         using var trayApp = new TrayApplication(orchestrator);
         Application.Run(trayApp);
@@ -150,6 +168,9 @@ internal static class Program
         "LShiftKey"   => 0xA0,   // VK_LSHIFT
         "RAltKey"     => 0xA5,   // VK_RMENU
         "LAltKey"     => 0xA4,   // VK_LMENU
+        "F8"          => 0x77,   // VK_F8
+        "F9"          => 0x78,   // VK_F9
+        "F10"         => 0x79,   // VK_F10
         _ => 0xA3                 // Default to Right Ctrl
     };
 }
