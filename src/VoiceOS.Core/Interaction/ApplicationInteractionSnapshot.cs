@@ -17,8 +17,6 @@ public enum ApplicationInteractionPhase
     Idle
 }
 
-public sealed record InteractionChoice(string Id, string Label, string? Detail = null);
-
 public sealed record ApplicationInteractionSnapshot(
     ApplicationInteractionPhase Phase,
     InteractionKind? Kind = null,

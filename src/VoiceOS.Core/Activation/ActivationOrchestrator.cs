@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using NAudio.Wave;
 using VoiceOS.Core.Apps;
 using VoiceOS.Core.Audio;
+using VoiceOS.Core.Browser;
 using VoiceOS.Core.Candidates;
 using VoiceOS.Core.Config;
 using VoiceOS.Core.Decision;
@@ -33,8 +34,11 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
     private readonly IDisplayTopologyService? _topoService;
     private readonly IForegroundWindowService? _foregroundWindow;
     private readonly ITextInsertionService? _textInsertion;
+    private readonly ICommandRouter? _commandRouter;
+    private readonly IBrowserInteractionService? _browserInteraction;
     private readonly VoiceOSConfig _config;
     private readonly ILogger<ActivationOrchestrator> _logger;
+    private readonly CancellationTokenSource _shutdown = new();
 
     private readonly object _stateLock = new();
     private MachineContext _commandContext = MachineContext.Initial;
@@ -66,7 +70,9 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         IAppCatalog? catalog = null,
         IDisplayTopologyService? topoService = null,
         IForegroundWindowService? foregroundWindow = null,
-        ITextInsertionService? textInsertion = null)
+        ITextInsertionService? textInsertion = null,
+        ICommandRouter? commandRouter = null,
+        IBrowserInteractionService? browserInteraction = null)
     {
         _commandHook = commandHook;
         _dictationHook = dictationHook;
@@ -81,6 +87,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         _topoService = topoService;
         _foregroundWindow = foregroundWindow;
         _textInsertion = textInsertion;
+        _commandRouter = commandRouter;
+        _browserInteraction = browserInteraction;
 
         _commandHook.KeyDown += OnCommandKeyDown;
         _commandHook.KeyUp += OnCommandKeyUp;
@@ -269,7 +277,13 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
 
     private async Task RunPipelineAsync(PipelineInput input)
     {
+        var activationId = Guid.NewGuid().ToString("N");
+        using var activationScope = _logger.BeginScope("activation_id={ActivationId}", activationId);
         var pipelineStart = input.PipelineStart;
+        DateTimeOffset? postSttStart = null;
+        var lane = input.Kind == InteractionKind.Dictation ? "Dictation" : "Unrouted";
+        var outcome = "Failed";
+        var actionCount = 0;
         TranscriptionResult? transcription = null;
         DecisionResult? decision = null;
         ProgramResult? programResult = null;
@@ -316,8 +330,14 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
 
                 PublishSnapshot(new(ApplicationInteractionPhase.Executing, input.Kind,
                     transcription.Transcript, "Inserting dictation"));
+                var insertionTimer = Stopwatch.StartNew();
                 insertionResult = await _textInsertion.InsertAsync(
                     new TextInsertionRequest(transcription.Transcript, input.DictationTarget)).ConfigureAwait(false);
+                insertionTimer.Stop();
+                actionCount = 1;
+                outcome = insertionResult.Succeeded ? "Succeeded" : "Failed";
+                _logger.LogInformation("Dictation insertion outcome={Outcome} latency_ms={LatencyMs:F0}",
+                    insertionResult.Status, insertionTimer.Elapsed.TotalMilliseconds);
                 PublishSnapshot(new(
                     insertionResult.Succeeded ? ApplicationInteractionPhase.Succeeded : ApplicationInteractionPhase.Failed,
                     input.Kind,
@@ -326,10 +346,89 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 return;
             }
 
+            postSttStart = sttEnd ?? DateTimeOffset.UtcNow;
+            _logger.LogInformation("Activation transcript activation_id={ActivationId} mode={Mode} exact_transcript={Transcript} speech_ms={SpeechMs:F0} stt_ms={SttMs:F0}",
+                activationId, input.Kind, transcription.Transcript,
+                input.Metadata.TotalDurationSeconds * 1000,
+                sttStart.HasValue && sttEnd.HasValue ? (sttEnd.Value - sttStart.Value).TotalMilliseconds : 0);
+
+            PublishState(input.Kind, ActivationState.Understanding);
+            CommandRouteDecision route;
+            var routeTimer = Stopwatch.StartNew();
+            try
+            {
+                route = _commandRouter is null
+                    ? new CommandRouteDecision(CommandRoute.DirectCapability, 1, "No command router is configured.")
+                    : await _commandRouter.RouteAsync(transcription.Transcript, _shutdown.Token).ConfigureAwait(false);
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _logger.LogError(ex, "Command routing failed");
+                route = new(CommandRoute.Clarify, 0, "Command routing failed safely.", RoutingReason.RouterFailure);
+            }
+            routeTimer.Stop();
+            lane = route.Route.ToString();
+            _logger.LogInformation("Command route={Route} confidence={Confidence:P0} reason={Reason} media_request_kind={MediaRequestKind} media_op={MediaOp} route_ms={RouteMs:F0}",
+                route.Route, route.Confidence, route.Reason, route.MediaRequestKind,
+                route.MediaOperation?.ToString() ?? "-", routeTimer.Elapsed.TotalMilliseconds);
+            if (route.Route == CommandRoute.Clarify)
+                _logger.LogInformation("Clarification level=routing category={Category} confidence={Confidence:P0} reason={Reason}",
+                    route.Reason, route.Confidence, route.Detail);
+
+            if (route.Route == CommandRoute.ComputerUse)
+            {
+                if (_browserInteraction is null)
+                {
+                    PublishSnapshot(new(ApplicationInteractionPhase.Failed, input.Kind,
+                        transcription.Transcript, "Managed browser interaction is unavailable"));
+                    return;
+                }
+
+                PublishSnapshot(new(ApplicationInteractionPhase.Observing, input.Kind,
+                    transcription.Transcript, "Framing browser goal and acquiring managed context"));
+                var browserResult = await _browserInteraction.RunAsync(transcription.Transcript, _shutdown.Token,
+                    activationId).ConfigureAwait(false);
+                actionCount = browserResult.Actions;
+                outcome = browserResult.Completion.ToString();
+                if (browserResult.Completion == InteractionCompletionState.Uncertain)
+                    _logger.LogInformation("Clarification level=task_local category=browser_uncertain reason={Reason} choices={ChoiceCount}",
+                        browserResult.Detail, browserResult.Choices?.Count ?? 0);
+                var browserPhase = browserResult.Completion switch
+                {
+                    InteractionCompletionState.Complete => ApplicationInteractionPhase.Succeeded,
+                    InteractionCompletionState.Uncertain => ApplicationInteractionPhase.NeedsChoice,
+                    _ => ApplicationInteractionPhase.Failed
+                };
+                PublishSnapshot(new(browserPhase, input.Kind, transcription.Transcript,
+                    browserResult.Detail, browserResult.Choices, browserResult.Completion));
+                return;
+            }
+
+            if (route.Route == CommandRoute.NativeInteraction)
+            {
+                outcome = "Unavailable";
+                PublishSnapshot(new(ApplicationInteractionPhase.Failed, input.Kind,
+                    transcription.Transcript, "Native UI interaction is not enabled yet."));
+                return;
+            }
+
+            if (route.Route is CommandRoute.TextTransform or CommandRoute.Clarify)
+            {
+                outcome = "Clarify";
+                var status = route.Route == CommandRoute.TextTransform
+                    ? "Text transformation is not part of the current literal dictation or browser stage."
+                    : route.Detail ?? "The command needs clarification.";
+                PublishSnapshot(new(ApplicationInteractionPhase.NeedsChoice, input.Kind,
+                    transcription.Transcript, status,
+                    [new InteractionChoice("retry", "Clarify request"), new InteractionChoice("cancel", "Cancel")],
+                    InteractionCompletionState.Uncertain));
+                return;
+            }
+
             PublishSnapshot(new(ApplicationInteractionPhase.Observing, input.Kind,
                 transcription.Transcript, "Collecting direct capabilities"));
             DecisionState? decisionState = null;
-            if (_decisionEngine is not null)
+            if (_decisionEngine is not null || route.MediaOperation is not null)
             {
                 var windowsSw = Stopwatch.StartNew();
                 var windows = CandidateBuilder.GetOpenWindowsWithTimings(out var winTimings);
@@ -354,19 +453,36 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                     winTimings.AumidMs, winTimings.CacheHits, winTimings.CacheMisses,
                     appsSw.ElapsedMilliseconds, topoSw.ElapsedMilliseconds);
 
-                PublishState(input.Kind, ActivationState.Understanding);
-                PublishSnapshot(new(ApplicationInteractionPhase.Deciding, input.Kind,
-                    transcription.Transcript, "Choosing a bounded direct action"));
-                jevStart = DateTimeOffset.UtcNow;
-                try
+                if (route.MediaOperation is { } mediaOperation)
                 {
-                    decision = await _decisionEngine.DecideAsync(decisionState).ConfigureAwait(false);
+                    var plan = new VoicePlan(VoiceAction.MediaControl, Media: mediaOperation, Confidence: 1);
+                    decision = new DecisionResult(plan, SemanticProgramPlanner.ToSingleStepProgram(plan),
+                        new Dictionary<string, JevAnswer>(), 0, 0, 0);
                 }
-                catch (Exception ex)
+                else if (_decisionEngine is not null)
                 {
-                    _logger.LogError(ex, "Decision engine error");
+                    PublishState(input.Kind, ActivationState.Understanding);
+                    PublishSnapshot(new(ApplicationInteractionPhase.Deciding, input.Kind,
+                        transcription.Transcript, "Choosing a bounded direct action"));
+                    jevStart = DateTimeOffset.UtcNow;
+                    try
+                    {
+                        decision = await _decisionEngine.DecideAsync(decisionState).ConfigureAwait(false);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogError(ex, "Decision engine error");
+                    }
+                    jevEnd = DateTimeOffset.UtcNow;
                 }
-                jevEnd = DateTimeOffset.UtcNow;
+                if (decision is not null)
+                    _logger.LogInformation("Direct decision action_kind={ActionKind} media_op={MediaOp} snap_dir={SnapDir} target_app={TargetApp} target_window={TargetWindow} jev_ms={JevMs:F0}",
+                        decision.Plan.Action,
+                        decision.Plan.Action == VoiceAction.MediaControl ? decision.Plan.Media?.ToString() : null,
+                        decision.Plan.Action == VoiceAction.SnapCurrentWindow ? decision.Plan.Snap?.ToString() : null,
+                        decision.Plan.AppCandidateId,
+                        decision.Plan.WindowCandidateId,
+                        jevStart.HasValue && jevEnd.HasValue ? (jevEnd.Value - jevStart.Value).TotalMilliseconds : 0);
             }
 
             if (_programExecutor is not null && decision is not null && decisionState is not null)
@@ -377,10 +493,27 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 var program = decision.Program
                     ?? (compoundAttempted ? null : SemanticProgramPlanner.ToSingleStepProgram(decision.Plan));
 
+                if (_commandRouter is not null
+                    && program?.Steps.Any(static step => step is MediaControlStep) == true
+                    && route.MediaRequestKind != MediaRequestKind.Transport)
+                {
+                    _logger.LogWarning("Direct media execution blocked: media_request_kind={MediaRequestKind}",
+                        route.MediaRequestKind);
+                    outcome = "Clarify";
+                    PublishSnapshot(new(ApplicationInteractionPhase.NeedsChoice, input.Kind,
+                        transcription.Transcript, "Media intent needs clarification before controlling current playback.",
+                        [new InteractionChoice("retry", "Clarify request"), new InteractionChoice("cancel", "Cancel")],
+                        InteractionCompletionState.Uncertain));
+                    return;
+                }
+
                 if (program is not null)
                 {
+                    _logger.LogInformation("Direct executor actions={Actions}",
+                        string.Join(",", program.Steps.Select(static step => step.GetType().Name)));
                     PublishSnapshot(new(ApplicationInteractionPhase.Executing, input.Kind,
                         transcription.Transcript, "Executing direct capability"));
+                    var executionTimer = Stopwatch.StartNew();
                     try
                     {
                         programResult = await _programExecutor
@@ -391,9 +524,15 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                     {
                         _logger.LogError(ex, "Execution error for program ({Steps} steps)", program.Steps.Count);
                     }
+                    executionTimer.Stop();
+                    actionCount = programResult?.ExecutedCount ?? 0;
+                    _logger.LogInformation("Direct executor outcome={Outcome} executed={Executed} latency_ms={LatencyMs:F0}",
+                        programResult?.AllSucceeded == true ? "Succeeded" : "Failed",
+                        actionCount, executionTimer.Elapsed.TotalMilliseconds);
                 }
             }
 
+            outcome = programResult?.AllSucceeded == true ? "Succeeded" : "Failed";
             PublishSnapshot(new(
                 programResult?.AllSucceeded == true
                     ? ApplicationInteractionPhase.Succeeded
@@ -408,12 +547,13 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 input.Metadata, transcription, decision, decision?.Plan,
                 pipelineStart, sttStart, sttEnd, jevStart, jevEnd, DateTimeOffset.UtcNow,
                 programResult, input.Kind, insertionResult);
-            LogPipelineSummary(result);
+            LogPipelineSummary(result, activationId, lane, outcome, postSttStart, actionCount);
             PublishState(input.Kind, ActivationState.Idle);
         }
     }
 
-    private void LogPipelineSummary(PipelineResult result)
+    private void LogPipelineSummary(PipelineResult result, string activationId, string lane,
+        string outcome, DateTimeOffset? postSttStart, int actionCount)
     {
         var sttMs = result.SttStart.HasValue && result.SttEnd.HasValue
             ? (result.SttEnd.Value - result.SttStart.Value).TotalMilliseconds : 0;
@@ -425,11 +565,12 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 : $"fail({result.ProgramExecution.FirstFailure?.Status})";
 
         _logger.LogInformation(
-            "Pipeline: kind={Kind} speech={SpeechMs:F0}ms STT={SttMs:F0}ms Jev={JevMs:F0}ms total={TotalMs:F0}ms chars={Characters} action={Action} confidence={Confidence:P0} exec={ExecStatus} insertion={InsertionStatus}",
-            result.Kind, result.Recording.TotalDurationSeconds * 1000, sttMs, jevMs,
+            "Activation final activation_id={ActivationId} mode={Kind} lane={Lane} outcome={Outcome} post_stt_ms={PostSttMs:F0} total_ms={TotalMs:F0} speech_ms={SpeechMs:F0} stt_ms={SttMs:F0} jev_ms={JevMs:F0} action={Action} actions={Actions} confidence={Confidence:P0} exec={ExecStatus} insertion={InsertionStatus}",
+            activationId, result.Kind, lane, outcome,
+            postSttStart.HasValue ? (result.PipelineEnd - postSttStart.Value).TotalMilliseconds : 0,
             (result.PipelineEnd - result.PipelineStart).TotalMilliseconds,
-            result.Transcription?.Transcript.Length ?? 0,
-            result.Plan?.Action.ToString() ?? "none", result.Plan?.Confidence ?? 0,
+            result.Recording.TotalDurationSeconds * 1000, sttMs, jevMs,
+            result.Plan?.Action.ToString() ?? "none", actionCount, result.Plan?.Confidence ?? 0,
             execution, result.TextInsertion?.Status.ToString() ?? "-");
     }
 
@@ -473,6 +614,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
     {
         if (_disposed) return;
         _disposed = true;
+        _shutdown.Cancel();
         _commandHook.KeyDown -= OnCommandKeyDown;
         _commandHook.KeyUp -= OnCommandKeyUp;
         _dictationHook.KeyDown -= OnDictationKeyDown;
@@ -482,6 +624,9 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         _dictationHook.Dispose();
         _audio.Dispose();
         _speechRecognizer?.Dispose();
+        if (_browserInteraction is IAsyncDisposable asyncDisposable)
+            asyncDisposable.DisposeAsync().AsTask().GetAwaiter().GetResult();
+        _shutdown.Dispose();
     }
 
     private sealed record PipelineInput(

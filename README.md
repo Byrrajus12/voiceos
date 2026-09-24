@@ -53,7 +53,9 @@ Multi-step programs execute sequentially and stop on failure. Each step's output
 | M4        | Native app, window, media, and volume execution | ✓      |
 | M5        | Compositional commands and richer targeting     | ✓      |
 | M6        | Monitor move, ambiguity detection, numeric volume, hardening | ✓ |
-| Phase 2   | Clarification UX, dictation, browser, agents, richer context | — |
+| Phase 2A  | Literal dictation and shared interaction foundation | ✓ |
+| Phase 2B  | Bounded managed-browser interaction | ✓ (Alpha) |
+| Phase 2C+ | UIA/product shell, agents, richer context | — |
 
 Phase 1 direct Windows capabilities are complete. VoiceOS is now expanding into browser interaction and context-aware computer use.
 
@@ -68,6 +70,8 @@ src/
     Speech/             Parakeet / sherpa-onnx
     Candidates/         Live app and window state
     Decision/           Jev planning and VoicePlan
+    Browser/            Managed Playwright session and semantic browser surface
+    Interaction/        Shared bounded observe/decide/execute engine
     Execution/          Native Windows actions
     Apps/               App discovery/catalog
     Monitors/           Display topology types and resolution
@@ -86,6 +90,7 @@ tests/
 * .NET 9 SDK
 * NVIDIA Parakeet-TDT-0.6B-v2 model
 * TypeSafe API key
+* Google Chrome (the Alpha browser channel; a separate VoiceOS profile is used)
 
 ### Speech model
 
@@ -121,7 +126,37 @@ dotnet run --project src/VoiceOS
 dotnet test
 ```
 
-517 tests pass as of Phase 1 completion. Tests cover state machines, parsing, candidate construction, routing/decision logic, risk logic, transformations, topology resolution, ambiguity detection, and numeric volume math. Global hooks, microphone behavior, and real Windows UI integration are validated physically.
+The suite covers Phase 1 and dictation regressions plus browser routing, bounded goal framing, candidate ranking, stale/occluded targets, modal recovery, safe-key policy, completion suppression, ambiguity, and real headless-Chrome surface behavior. Global hooks, microphone behavior, and live websites are validated physically.
+
+## Browser interaction Alpha
+
+Browser commands are routed before any native prefix executes. The browser path interprets a small semantic goal, reuses a matching VoiceOS-managed tab when available, otherwise bootstraps through trusted web search, and repeatedly chooses one bounded action from current semantic page evidence. The model cannot supply selectors, JavaScript, coordinates, URLs, shell commands, or arbitrary keys.
+
+The managed Chrome profile defaults to `%LOCALAPPDATA%\VoiceOS\BrowserProfile`; VoiceOS does not automate the user's ordinary browser profile. Closing VoiceOS closes its managed browser session. Change `BrowserChannel` or `BrowserProfileDirectory` in `src/VoiceOS/appsettings.json` only when developing against another dedicated browser setup.
+
+For physical validation:
+
+```powershell
+$env:TYPESAFE_API_KEY = "your_key_here"
+dotnet run --project src/VoiceOS/VoiceOS.csproj
+```
+
+Use the configured command activation key (`Right Ctrl` by default), then speak each scenario independently:
+
+```text
+search Wikipedia for TypeSafe Jev and open the article
+search YouTube for Never Gonna Give You Up and open a result
+play Andrew Huberman on YouTube
+search Google for TypeSafe Jev and open its GitHub repository
+find one-way flights from Detroit to San Francisco next Friday
+go to GitHub, search for torvalds, and open the user repositories
+search GitHub for the ripgrep repository
+find places with chicken sandwiches on Uber Eats
+find places with chicken sandwiches
+find alex on GitHub
+```
+
+Repeat the flight scenario with different origins, destinations, and dates. For the food scenarios, verify location/address controls are treated as prerequisites rather than generic search fields. For the final ambiguity scenario, use a query that visibly produces multiple similarly plausible results and verify VoiceOS publishes a bounded Choice instead of guessing.
 
 ## Known limitations
 
@@ -140,14 +175,17 @@ dotnet test
 **Compound execution**
 * An occasional compound follow-up execution inconsistency (e.g. a snap step not applying after a window move) has been observed but is not reliably reproducible.
 
+**Browser Alpha**
+* Live-site success depends on semantic accessibility exposed by the page. Canvas-only, closed-shadow, CAPTCHA, authentication, and anti-automation surfaces may safely stop for clarification or fail.
+* Choice data and resume behavior are implemented below the application boundary; the dedicated product Choice UI is intentionally deferred.
+* The Alpha uses installed Chrome with a dedicated VoiceOS profile and one managed session. Cross-browser support is not included.
+
 **Future phases**
-* Dictation and text manipulation — not implemented.
-* Browser navigation and tab control — not implemented.
+* Text transformation beyond literal dictation — not implemented.
 * Wake word / semantic VAD — not implemented.
 * General UI Automation — not implemented.
 * Conversational memory and cross-utterance references — not implemented.
 * Agent delegation for multi-step tasks — not implemented.
-* Explicit Chrome profile selection not supported (uses last-used profile automatically).
 * Developer-oriented setup; no installer yet.
 
 ## Direction

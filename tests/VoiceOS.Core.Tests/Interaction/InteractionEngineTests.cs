@@ -58,6 +58,29 @@ public sealed class InteractionEngineTests
     }
 
     [Fact]
+    public async Task CompletionAccepted_FinishesAfterFreshAssessment()
+    {
+        var surface = new FakeSurface(Observation("complete"), [],
+            new(InteractionCompletionState.Complete, "visible result"));
+        var result = await Run(surface, new FakeDecisions(InteractionDecision.Done()));
+
+        Assert.Equal(InteractionCompletionState.Complete, result.Completion);
+        Assert.Equal("visible result", result.Detail);
+        Assert.Equal(1, surface.CompletionAssessmentCount);
+    }
+
+    [Fact]
+    public async Task CompletionUncertainty_ReturnsApplicationChoices()
+    {
+        var surface = new FakeSurface(Observation("uncertain"), [],
+            new(InteractionCompletionState.Uncertain, "could be done"));
+        var result = await Run(surface, new FakeDecisions(InteractionDecision.Done()));
+
+        Assert.Equal(InteractionCompletionState.Uncertain, result.Completion);
+        Assert.Equal(["complete", "continue", "cancel"], result.Choices!.Select(static choice => choice.Id));
+    }
+
+    [Fact]
     public async Task UncertainDecision_StopsWithoutExecution()
     {
         var surface = new FakeSurface(Observation("same"), []);
@@ -124,6 +147,7 @@ public sealed class InteractionEngineTests
         public ValueTask<InteractionCompletionAssessment> AssessCompletionAsync(
             InteractionGoal goal,
             InteractionObservation current,
+            IReadOnlyList<InteractionHistoryEntry> recentHistory,
             CancellationToken cancellationToken = default)
         {
             CompletionAssessmentCount++;

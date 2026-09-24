@@ -148,7 +148,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             var answers = new Dictionary<string, JevAnswer>();
             if (root.TryGetProperty("answers", out var answersEl))
                 foreach (var prop in answersEl.EnumerateObject())
-                    answers[prop.Name] = ParseAnswer(prop.Value);
+                    answers[prop.Name] = JevAnswerParser.Parse(prop.Value);
 
             return new JevResponse(answers, inputTokens, outputTokens);
         }
@@ -185,38 +185,6 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             _logger.LogError(ex, "Failed to build decision from Jev answers");
             return ErrorResult(durationMs, $"Parse error: {ex.Message}");
         }
-    }
-
-    private static JevAnswer ParseAnswer(JsonElement el)
-    {
-        var type = el.TryGetProperty("type", out var typeEl) ? typeEl.GetString() ?? "choice" : "choice";
-
-        var probs = new Dictionary<string, double>();
-        string? selectedChoice = null;
-        double confidence;
-
-        if (type == "noul")
-        {
-            double noulProb = el.TryGetProperty("noul", out var np) ? np.GetDouble() : 0.0;
-            probs["noul"] = noulProb;
-            selectedChoice = noulProb >= 0.5 ? "true" : "false";
-            confidence = el.TryGetProperty("confidence", out var confEl) ? confEl.GetDouble() : noulProb;
-        }
-        else
-        {
-            confidence = el.TryGetProperty("confidence", out var confEl) ? confEl.GetDouble() : 0.0;
-            if (el.TryGetProperty("choice", out var choiceEl))
-                selectedChoice = choiceEl.GetString();
-
-            foreach (var prop in el.EnumerateObject())
-            {
-                if (prop.Name is "type" or "choice" or "confidence") continue;
-                if (prop.Value.ValueKind == JsonValueKind.Number)
-                    probs[prop.Name] = prop.Value.GetDouble();
-            }
-        }
-
-        return new JevAnswer(type, selectedChoice, probs, confidence);
     }
 
     private VoicePlan BuildPlan(

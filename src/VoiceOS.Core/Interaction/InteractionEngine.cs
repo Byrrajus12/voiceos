@@ -40,30 +40,42 @@ public sealed class InteractionEngine
             progress = progress with { Decisions = progress.Decisions + 1 };
 
             if (decision.Completion == InteractionCompletionState.Uncertain)
-                return Finish(InteractionCompletionState.Uncertain, decision.Detail ?? "Completion is uncertain.");
+                return Finish(InteractionCompletionState.Uncertain, decision.Detail ?? "Completion is uncertain.", decision.Choices);
 
             if (decision.Completion == InteractionCompletionState.Complete)
             {
+                var fresh = await surface.ObserveAsync(token).ConfigureAwait(false);
+                if (!StringComparer.Ordinal.Equals(observation.StateKey, fresh.StateKey))
+                {
+                    progress = progress with
+                    {
+                        StateChanges = progress.StateChanges + 1,
+                        ConsecutiveNoProgress = 0
+                    };
+                    observation = fresh;
+                }
+
                 if (!rejectedCompletionStates.Add(observation.StateKey))
                 {
                     AddHistory(InteractionAction.Done,
                         InteractionActionResult.Fail(InteractionResultStatus.NoEffect,
                             "Repeated completion was suppressed because the evidence is unchanged."),
-                        observation.StateKey, suppressed: true);
+                        observation.StateKey, suppressed: true, observation.Evidence);
                     return Finish(InteractionCompletionState.Uncertain,
-                        "Completion was proposed again after rejection with unchanged evidence.");
+                        "Completion was proposed again after rejection with unchanged evidence.", CompletionChoices());
                 }
 
-                var assessment = await surface.AssessCompletionAsync(goal, observation, token).ConfigureAwait(false);
+                var assessment = await surface.AssessCompletionAsync(goal, observation, history.ToArray(), token).ConfigureAwait(false);
                 if (assessment.State == InteractionCompletionState.Complete)
                     return Finish(InteractionCompletionState.Complete, assessment.Detail);
                 if (assessment.State == InteractionCompletionState.Uncertain)
-                    return Finish(InteractionCompletionState.Uncertain, assessment.Detail);
+                    return Finish(InteractionCompletionState.Uncertain, assessment.Detail,
+                        assessment.Choices ?? CompletionChoices());
 
                 AddHistory(InteractionAction.Done,
                     InteractionActionResult.Fail(InteractionResultStatus.NoEffect,
                         assessment.Detail ?? "Completion was rejected by current evidence."),
-                    observation.StateKey, suppressed: false);
+                    observation.StateKey, suppressed: false, observation.Evidence);
                 progress = progress with { ConsecutiveNoProgress = progress.ConsecutiveNoProgress + 1 };
                 if (progress.ConsecutiveNoProgress >= budget.MaxConsecutiveNoProgress)
                     return Finish(InteractionCompletionState.Incomplete, "Completion was rejected without new evidence.");
@@ -80,7 +92,7 @@ public sealed class InteractionEngine
                 AddHistory(action,
                     InteractionActionResult.Fail(InteractionResultStatus.NoEffect,
                         "Repeated action failure was suppressed because the evidence is unchanged."),
-                    observation.StateKey, suppressed: true);
+                    observation.StateKey, suppressed: true, observation.Evidence);
                 return Finish(InteractionCompletionState.Incomplete,
                     "A repeated failure was suppressed until the observed state changes.");
             }
@@ -110,7 +122,7 @@ public sealed class InteractionEngine
                 result = InteractionActionResult.Fail(InteractionResultStatus.NoEffect,
                     result.Detail ?? "The action reported success but observable state did not change.");
 
-            AddHistory(action, result, next.StateKey, suppressed: false);
+            AddHistory(action, result, next.StateKey, suppressed: false, next.Evidence);
             progress = progress with
             {
                 StateChanges = progress.StateChanges + (changed ? 1 : 0),
@@ -136,18 +148,37 @@ public sealed class InteractionEngine
             InteractionAction action,
             InteractionActionResult result,
             string resultingStateKey,
-            bool suppressed)
+            bool suppressed,
+            string resultingEvidence)
         {
-            history.Add(new(observation.StateKey, action, result, resultingStateKey, suppressed, DateTimeOffset.UtcNow));
+            history.Add(new(observation.StateKey, action, result, resultingStateKey, suppressed,
+                DateTimeOffset.UtcNow, observation.Evidence, resultingEvidence,
+                observation.Candidates.FirstOrDefault(candidate => candidate.Id == action.TargetId)?.Label));
             if (history.Count > budget.MaxHistory)
                 history.RemoveAt(0);
         }
 
-        InteractionRunResult Finish(InteractionCompletionState state, string? detail)
-            => new(state, observation, history.ToArray(), progress, detail);
+        InteractionRunResult Finish(
+            InteractionCompletionState state,
+            string? detail,
+            IReadOnlyList<InteractionChoice>? choices = null)
+            => new(state, observation, history.ToArray(), progress, detail, choices);
+
+        static IReadOnlyList<InteractionChoice> CompletionChoices() =>
+        [
+            new("complete", "Looks complete", "Accept the current page as the result."),
+            new("continue", "Keep going", "Continue interacting from the current page."),
+            new("cancel", "Cancel", "Stop without taking another browser action.")
+        ];
     }
 
     private static bool IsAdvertised(InteractionAction action, InteractionObservation observation)
         => action.Kind != InteractionActionKind.Complete
-            && observation.Candidates.SelectMany(static candidate => candidate.Actions).Contains(action);
+            && observation.Candidates.SelectMany(static candidate => candidate.Actions).Any(offered =>
+                offered.Id == action.Id
+                && offered.Kind == action.Kind
+                && offered.TargetId == action.TargetId
+                && offered.Direction == action.Direction
+                && (offered.Text == action.Text || offered.Text is null
+                    && action.Kind is InteractionActionKind.TypeText or InteractionActionKind.SetText));
 }

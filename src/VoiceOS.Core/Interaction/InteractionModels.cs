@@ -13,6 +13,9 @@ public enum InteractionActionKind
     TypeText,
     Select,
     Scroll,
+    PressKey,
+    GoBack,
+    Wait,
     Complete
 }
 
@@ -75,19 +78,23 @@ public enum InteractionCompletionState
 
 public sealed record InteractionCompletionAssessment(
     InteractionCompletionState State,
-    string? Detail = null);
+    string? Detail = null,
+    IReadOnlyList<InteractionChoice>? Choices = null);
+
+public sealed record InteractionChoice(string Id, string Label, string? Detail = null);
 
 public sealed record InteractionDecision(
     InteractionCompletionState Completion,
     InteractionAction? Action = null,
-    string? Detail = null)
+    string? Detail = null,
+    IReadOnlyList<InteractionChoice>? Choices = null)
 {
     public static InteractionDecision Act(InteractionAction action, string? detail = null)
         => new(InteractionCompletionState.Incomplete, action, detail);
     public static InteractionDecision Done(string? detail = null)
         => new(InteractionCompletionState.Complete, Detail: detail);
-    public static InteractionDecision Unsure(string? detail = null)
-        => new(InteractionCompletionState.Uncertain, Detail: detail);
+    public static InteractionDecision Unsure(string? detail = null, IReadOnlyList<InteractionChoice>? choices = null)
+        => new(InteractionCompletionState.Uncertain, Detail: detail, Choices: choices);
 }
 
 public sealed record InteractionHistoryEntry(
@@ -96,7 +103,10 @@ public sealed record InteractionHistoryEntry(
     InteractionActionResult Result,
     string ResultingStateKey,
     bool Suppressed,
-    DateTimeOffset Timestamp);
+    DateTimeOffset Timestamp,
+    string? ObservationEvidence = null,
+    string? ResultingEvidence = null,
+    string? TargetLabel = null);
 
 public sealed record InteractionBudget(
     int MaxDecisions = 12,
@@ -134,7 +144,8 @@ public sealed record InteractionRunResult(
     InteractionObservation Observation,
     IReadOnlyList<InteractionHistoryEntry> RecentHistory,
     InteractionProgress Progress,
-    string? Detail = null);
+    string? Detail = null,
+    IReadOnlyList<InteractionChoice>? Choices = null);
 
 public interface IInteractionSurface
 {
@@ -148,6 +159,7 @@ public interface IInteractionSurface
     ValueTask<InteractionCompletionAssessment> AssessCompletionAsync(
         InteractionGoal goal,
         InteractionObservation observation,
+        IReadOnlyList<InteractionHistoryEntry> recentHistory,
         CancellationToken cancellationToken = default);
 }
 

@@ -3,6 +3,7 @@ using Microsoft.Extensions.Logging;
 using VoiceOS.Core.Activation;
 using VoiceOS.Core.Apps;
 using VoiceOS.Core.Audio;
+using VoiceOS.Core.Browser;
 using VoiceOS.Core.Config;
 using VoiceOS.Core.Decision;
 using VoiceOS.Core.Dictation;
@@ -38,6 +39,10 @@ internal static class Program
 
         var config = LoadConfig();
         using var loggerFactory = BuildLoggerFactory();
+
+        using var chromeCompanion = new ChromeCompanionTransport(
+            loggerFactory.CreateLogger<ChromeCompanionTransport>());
+        chromeCompanion.Start();
 
         var hookLogger = loggerFactory.CreateLogger<GlobalKeyboardHook>();
         var audioLogger = loggerFactory.CreateLogger<AudioCaptureService>();
@@ -80,17 +85,31 @@ internal static class Program
         }
 
         IDecisionEngine? decisionEngine = null;
+        ICommandRouter? commandRouter = null;
+        IBrowserInteractionService? browserInteraction = null;
         var apiKey = Environment.GetEnvironmentVariable("TYPESAFE_API_KEY");
         if (!string.IsNullOrWhiteSpace(apiKey))
         {
+            var jevHttp = new HttpClient();
             var jevLogger = loggerFactory.CreateLogger<TypeSafeJevDecisionEngine>();
             decisionEngine = new TypeSafeJevDecisionEngine(
                 apiKey,
-                new HttpClient(),
+                jevHttp,
                 config.TypeSafeModel,
                 config.JevCommandThreshold,
                 config.JevActionThreshold,
                 jevLogger);
+            var gateway = new TypeSafeJevGateway(
+                apiKey, config.TypeSafeModel, jevHttp,
+                loggerFactory.CreateLogger<TypeSafeJevGateway>());
+            commandRouter = new TypeSafeCommandRouter(gateway);
+            browserInteraction = new BrowserInteractionService(chromeCompanion, gateway,
+                new OpenRouterBrowserGoalNormalizer(new HttpClient { Timeout = TimeSpan.FromSeconds(15) },
+                    Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")),
+                loggerFactory.CreateLogger<BrowserInteractionService>(),
+                new BrowserTextValueResolver(new GroundedBrowserTextValueResolver(),
+                    new OpenRouterBrowserTextValueResolver(new HttpClient { Timeout = TimeSpan.FromSeconds(15) },
+                        Environment.GetEnvironmentVariable("OPENROUTER_API_KEY"))));
         }
         else
         {
@@ -127,7 +146,7 @@ internal static class Program
         var orchestrator = new ActivationOrchestrator(
             commandHook, dictationHook, audio, debugWriter, config, orchestratorLogger,
             speechRecognizer, decisionEngine, programExecutor, catalog, topoService,
-            foreground, textInsertion);
+            foreground, textInsertion, commandRouter, browserInteraction);
 
         using var trayApp = new TrayApplication(orchestrator);
         Application.Run(trayApp);
@@ -155,6 +174,7 @@ internal static class Program
                 .AddSimpleConsole(opts =>
                 {
                     opts.SingleLine = true;
+                    opts.IncludeScopes = true;
                     opts.TimestampFormat = "HH:mm:ss.fff ";
                 });
         });
