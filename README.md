@@ -55,6 +55,8 @@ Multi-step programs execute sequentially and stop on failure. Each step's output
 | M6        | Monitor move, ambiguity detection, numeric volume, hardening | ✓ |
 | Phase 2   | Clarification UX, dictation, browser, agents, richer context | — |
 
+Phase 1 direct Windows capabilities are complete. VoiceOS is now expanding into browser interaction and context-aware computer use.
+
 ## Project structure
 
 ```text
