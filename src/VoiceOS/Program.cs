@@ -11,6 +11,7 @@ using VoiceOS.Core.Execution;
 using VoiceOS.Core.Monitors;
 using VoiceOS.Core.Speech;
 using VoiceOS.Core.Windows;
+using VoiceOS.UI;
 
 namespace VoiceOS;
 
@@ -19,7 +20,7 @@ internal static class Program
     private const string MutexName = "Global\\VoiceOS-SingleInstance";
 
     [STAThread]
-    private static void Main()
+    private static void Main(string[] args)
     {
         using var mutex = new Mutex(initiallyOwned: true, MutexName, out bool createdNew);
         if (!createdNew)
@@ -34,8 +35,18 @@ internal static class Program
 
         DotEnvLoader.Load();
 
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
+
+        // A standalone physical proof that can be exercised without a microphone or model.
+#if DEBUG
+        if (args.Length == 1 && args[0] == "--glow-preview")
+        {
+            Application.Run(new GlowPreviewApplication());
+            return;
+        }
+#endif
 
         var config = LoadConfig();
         using var loggerFactory = BuildLoggerFactory();

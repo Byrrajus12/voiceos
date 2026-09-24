@@ -1,6 +1,7 @@
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using VoiceOS.Core.Activation;
+using VoiceOS.UI;
 
 namespace VoiceOS;
 
@@ -15,6 +16,7 @@ public sealed class TrayApplication : ApplicationContext
 
     private readonly ActivationOrchestrator _orchestrator;
     private readonly NotifyIcon _trayIcon;
+    private readonly IProductUiSurface _glow = new EdgeGlowOverlay();
     private SynchronizationContext? _uiContext;
     private Icon? _currentIcon;
     private bool _disposed;
@@ -62,6 +64,7 @@ public sealed class TrayApplication : ApplicationContext
 
     private void UpdateTray(ActivationState state)
     {
+        _glow.SetState(ActivationUiStateAdapter.Map(state));
         SetIcon(state);
         _trayIcon.Text = state switch
         {
@@ -116,6 +119,7 @@ public sealed class TrayApplication : ApplicationContext
             _disposed = true;
             _orchestrator.StateChanged -= OnStateChanged;
             _orchestrator.Dispose();
+            _glow.Dispose();
             _trayIcon.Visible = false;
             _trayIcon.Dispose();
             _currentIcon?.Dispose();

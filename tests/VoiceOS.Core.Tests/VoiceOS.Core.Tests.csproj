@@ -27,6 +27,9 @@
   <ItemGroup>
     <Compile Include="..\..\src\VoiceOS\ClipboardSnapshotMaterializer.cs" Link="TestedApp\ClipboardSnapshotMaterializer.cs" />
     <Compile Include="..\..\src\VoiceOS\WindowsClipboardService.cs" Link="TestedApp\WindowsClipboardService.cs" />
+    <Compile Include="..\..\src\VoiceOS\UI\ProductUiState.cs" Link="TestedApp\ProductUiState.cs" />
+    <Compile Include="..\..\src\VoiceOS\UI\ActivationUiStateAdapter.cs" Link="TestedApp\ActivationUiStateAdapter.cs" />
+    <Compile Include="..\..\src\VoiceOS\UI\PerimeterGlowField.cs" Link="TestedApp\PerimeterGlowField.cs" />
   </ItemGroup>
 
 </Project>
