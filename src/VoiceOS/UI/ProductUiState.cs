@@ -5,9 +5,9 @@ public enum ProductUiState
 {
     Idle,
     Listening,
-    Processing,
-    Executing,
-    Clarifying,
+    Understanding,
+    Acting,
+    Clarify,
     Success,
     Error
 }

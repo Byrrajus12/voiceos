@@ -10,8 +10,8 @@ public sealed class ActivationUiStateAdapterTests
     [InlineData(ActivationState.Idle, ProductUiState.Idle)]
     [InlineData(ActivationState.Recording, ProductUiState.Listening)]
     [InlineData(ActivationState.Stopping, ProductUiState.Listening)]
-    [InlineData(ActivationState.Transcribing, ProductUiState.Processing)]
-    [InlineData(ActivationState.Understanding, ProductUiState.Processing)]
+    [InlineData(ActivationState.Transcribing, ProductUiState.Understanding)]
+    [InlineData(ActivationState.Understanding, ProductUiState.Understanding)]
     public void MapsActivationWithoutExposingPipelineDetails(ActivationState activation, ProductUiState expected)
         => Assert.Equal(expected, ActivationUiStateAdapter.Map(activation));
 }

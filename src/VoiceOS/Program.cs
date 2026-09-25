@@ -22,6 +22,18 @@ internal static class Program
     [STAThread]
     private static void Main(string[] args)
     {
+#if DEBUG
+        // The standalone UI proof can run beside the live tray app without touching its backend.
+        if (args.Length == 1 && args[0] == "--glow-preview")
+        {
+            Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            Application.Run(new GlowPreviewApplication());
+            return;
+        }
+#endif
+
         using var mutex = new Mutex(initiallyOwned: true, MutexName, out bool createdNew);
         if (!createdNew)
         {
@@ -38,15 +50,6 @@ internal static class Program
         Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-
-        // A standalone physical proof that can be exercised without a microphone or model.
-#if DEBUG
-        if (args.Length == 1 && args[0] == "--glow-preview")
-        {
-            Application.Run(new GlowPreviewApplication());
-            return;
-        }
-#endif
 
         var config = LoadConfig();
         using var loggerFactory = BuildLoggerFactory();

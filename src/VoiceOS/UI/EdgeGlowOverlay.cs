@@ -14,7 +14,7 @@ internal sealed class EdgeGlowOverlay : IProductUiSurface
     private ProductUiState _state;
     private long _lastFrameTime;
     private double _phase;
-    private double _processingBlend;
+    private double _activityBlend;
     private bool _disposed;
 
     public EdgeGlowOverlay()
@@ -38,7 +38,7 @@ internal sealed class EdgeGlowOverlay : IProductUiSurface
             return;
         }
 
-        if (state is not (ProductUiState.Listening or ProductUiState.Processing))
+        if (state == ProductUiState.Idle)
         {
             Hide();
             return;
@@ -48,7 +48,7 @@ internal sealed class EdgeGlowOverlay : IProductUiSurface
         {
             if (_strips.Count == 0 || _rebuildPending) BuildWindows();
             _lastFrameTime = Environment.TickCount64;
-            _processingBlend = state == ProductUiState.Processing ? 1 : 0;
+            _activityBlend = state == ProductUiState.Listening ? 0 : 1;
         }
 
         _state = state;
@@ -64,11 +64,12 @@ internal sealed class EdgeGlowOverlay : IProductUiSurface
         long now = Environment.TickCount64;
         double elapsed = Math.Clamp((now - _lastFrameTime) / 1000.0, 0, 0.1);
         _lastFrameTime = now;
-        double targetBlend = _state == ProductUiState.Processing ? 1 : 0;
-        _processingBlend += Math.Clamp(targetBlend - _processingBlend, -elapsed / 0.22, elapsed / 0.22);
-        _phase = (_phase + elapsed * (0.38 + 0.48 * _processingBlend)) % (2 * Math.PI);
+        double targetBlend = _state == ProductUiState.Listening ? 0 : 1;
+        _activityBlend += Math.Clamp(targetBlend - _activityBlend, -elapsed / 0.22, elapsed / 0.22);
+        // Understanding moves 30% faster; Listening retains the fuller field.
+        _phase = (_phase + elapsed * (0.50 + 0.15 * _activityBlend)) % (2 * Math.PI);
         foreach (var field in _fields)
-            field.Update(_phase, _processingBlend);
+            field.Update(_phase, _activityBlend);
         foreach (var strip in _strips)
             strip.Render();
     }

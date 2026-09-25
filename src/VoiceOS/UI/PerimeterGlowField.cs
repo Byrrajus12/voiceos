@@ -66,14 +66,14 @@ internal sealed class PerimeterGlowField
             int red = Spline(p0.R, p1.R, p2.R, p3.R, t);
             int green = Spline(p0.G, p1.G, p2.G, p3.G, t);
             int blue = Spline(p0.B, p1.B, p2.B, p3.B, t);
-            // Processing keeps the same moving field but cools it gradually.
+            // The Phase 1 spectral field remains independent of the pill material.
             red = (int)(red * (1 - 0.32 * processingBlend));
             green = (int)(green * (1 - 0.10 * processingBlend));
             _colors[s] = (red << 16) | (green << 8) | blue;
 
             double theta = 2 * Math.PI * position;
-            double listening = 0.77 + 0.09 * Math.Sin(3 * theta);
-            double processing = 0.58 + 0.23 * Math.Sin(3 * theta - phase);
+            double listening = 0.91 + 0.07 * Math.Sin(3 * theta);
+            double processing = 0.70 + 0.17 * Math.Sin(3 * theta - phase);
             _strength[s] = (int)(160 * (listening + (processing - listening) * processingBlend));
         }
     }
@@ -118,7 +118,11 @@ internal sealed class PerimeterGlowField
         int red = (((color >> 16) & 255) * alpha + 127) / 255;
         int green = (((color >> 8) & 255) * alpha + 127) / 255;
         int blue = ((color & 255) * alpha + 127) / 255;
-        return (alpha << 24) | (red << 16) | (green << 8) | blue;
+        // A tiny black layer beneath the spectral pixel adds contrast on white.
+        // It uses the same falloff and does not change the premultiplied color.
+        int foundation = (26 * _strength[position] * _falloff[distance] + 20400) / (160 * 255);
+        int combinedAlpha = alpha + (foundation * (255 - alpha) + 127) / 255;
+        return (combinedAlpha << 24) | (red << 16) | (green << 8) | blue;
     }
 
     private static int Spline(int a, int b, int c, int d, double t)
