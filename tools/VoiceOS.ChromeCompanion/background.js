@@ -2,6 +2,9 @@ const NATIVE_HOST = "com.voiceos.chrome_companion";
 const PROTOCOL_VERSION = 1;
 const RECONNECT_ALARM = "voiceos-native-reconnect";
 const ownedTaskTabs = new Map(); // tabId -> opaque VoiceOS session id
+const adoptedUserTabs = new Set();
+const taskLastUsed = new Map();
+let taskUseSequence = 0;
 
 let nativePort = null;
 let connecting = false;
@@ -17,6 +20,8 @@ chrome.tabs.onRemoved.addListener((tabId) => {
   if (ownedTaskTabs.has(tabId)) {
     traceTask(tabId, "tab-removed");
     ownedTaskTabs.delete(tabId);
+    adoptedUserTabs.delete(tabId);
+    taskLastUsed.delete(tabId);
     void persistOwnedTabs();
   }
 });
@@ -87,18 +92,32 @@ function scheduleReconnect() {
 }
 
 async function restoreOwnedTabs() {
-  const stored = await chrome.storage.session.get("ownedTaskTabs");
+  const stored = await chrome.storage.session.get(["ownedTaskTabs", "adoptedUserTabs", "taskLastUsed", "taskUseSequence"]);
+  taskUseSequence = Number.isSafeInteger(stored.taskUseSequence) ? stored.taskUseSequence : 0;
   for (const [tabId, sessionId] of stored.ownedTaskTabs ?? []) {
     try {
       await chrome.tabs.get(Number(tabId));
       ownedTaskTabs.set(Number(tabId), sessionId);
     } catch { /* Closed while the worker was asleep. */ }
   }
+  for (const tabId of stored.adoptedUserTabs ?? [])
+    if (ownedTaskTabs.has(Number(tabId))) adoptedUserTabs.add(Number(tabId));
+  for (const [tabId, sequence] of stored.taskLastUsed ?? [])
+    if (ownedTaskTabs.has(Number(tabId)) && Number.isSafeInteger(sequence))
+      taskLastUsed.set(Number(tabId), sequence);
   await persistOwnedTabs();
 }
 
 function persistOwnedTabs() {
-  return chrome.storage.session.set({ ownedTaskTabs: Array.from(ownedTaskTabs.entries()) });
+  return chrome.storage.session.set({ ownedTaskTabs: Array.from(ownedTaskTabs.entries()),
+    adoptedUserTabs: Array.from(adoptedUserTabs), taskLastUsed: Array.from(taskLastUsed.entries()),
+    taskUseSequence });
+}
+
+async function markTaskUsed(tabId) {
+  if (!ownedTaskTabs.has(tabId) || adoptedUserTabs.has(tabId)) return;
+  taskLastUsed.set(tabId, ++taskUseSequence);
+  await persistOwnedTabs();
 }
 
 async function handleNativeMessage(port, message) {
@@ -120,9 +139,12 @@ async function handleNativeMessage(port, message) {
     let result;
     switch (message.command) {
       case "OPEN_TASK_TAB": result = await openTaskTab(message.payload); break;
+      case "CREATE_NEW_TAB": result = await createNewTab(message.payload); break;
       case "OBSERVE": result = { snapshot: await observeOwnedTab(message.payload) }; break;
       case "ACT": result = await actInOwnedTab(message.payload); break;
       case "FOCUS_TASK_TAB": result = { snapshot: await focusTaskTab(message.payload) }; break;
+      case "LIST_TABS": result = { tabs: await listTabs() }; break;
+      case "SELECT_TAB": result = await selectTab(message.payload); break;
       default: throw protocolError("UNKNOWN_COMMAND", `Unsupported command: ${String(message.command)}`);
     }
     port.postMessage({ type: "response", id, ok: true, result });
@@ -136,6 +158,70 @@ async function handleNativeMessage(port, message) {
   }
 }
 
+async function createNewTab(payload) {
+  const sessionId = requireSession(payload?.sessionId);
+  const tab = await chrome.tabs.create({ active: true });
+  if (!Number.isInteger(tab.id)) throw protocolError("TAB_CREATE_FAILED", "Chrome did not return a tab id.");
+  ownedTaskTabs.set(tab.id, sessionId);
+  await markTaskUsed(tab.id);
+  await persistOwnedTabs();
+  await focusOwnedTab(tab.id, sessionId);
+  return { tab: { tabId: tab.id, windowId: tab.windowId, active: true,
+    url: tab.url ?? null, title: tab.title ?? null, provenance: 1,
+    sessionId, lastUsedSequence: taskLastUsed.get(tab.id) ?? null } };
+}
+
+async function listTabs() {
+  const focused = await chrome.windows.getLastFocused();
+  const tabs = await chrome.tabs.query({});
+  return tabs.filter(tab => Number.isInteger(tab.id) && Number.isInteger(tab.windowId)
+      && (!tab.url || tab.url.length <= 4096))
+    .sort((a, b) => Number(Boolean(b.active && b.windowId === focused.id))
+      - Number(Boolean(a.active && a.windowId === focused.id)))
+    .slice(0, 128)
+    .map(tab => ({
+      tabId: tab.id, windowId: tab.windowId,
+      active: Boolean(tab.active && tab.windowId === focused.id),
+      url: tab.url ?? null, title: tab.title?.slice(0, 256) ?? null,
+      provenance: ownedTaskTabs.has(tab.id) && !adoptedUserTabs.has(tab.id) ? 1 : 0,
+      sessionId: ownedTaskTabs.get(tab.id) ?? null,
+      lastUsedSequence: taskLastUsed.get(tab.id) ?? null
+    }));
+}
+
+async function selectTab(payload) {
+  const sessionId = requireSession(payload?.sessionId);
+  const tabId = payload?.tabId;
+  if (!Number.isInteger(tabId) || typeof payload?.expectedUrl !== "string")
+    throw protocolError("INVALID_TAB", "A tab and its observed URL are required.");
+  const tab = await chrome.tabs.get(tabId);
+  if (tab.url !== payload.expectedUrl || !["http:", "https:"].includes(new URL(tab.url).protocol))
+    throw protocolError("STALE_TAB", "The selected tab changed since inventory.");
+  if (typeof payload.expectedTitle === "string" && tab.title !== payload.expectedTitle)
+    throw protocolError("STALE_TAB", "The selected tab title changed since inventory.");
+  if (payload.requireActive) {
+    const focused = await chrome.windows.getLastFocused();
+    if (!tab.active || tab.windowId !== focused.id)
+      throw protocolError("TAB_NOT_ACTIVE", "The selected tab is no longer active.");
+  }
+  const owner = ownedTaskTabs.get(tabId);
+  if (owner && owner !== sessionId)
+    throw protocolError("SESSION_MISMATCH", "The tab belongs to another VoiceOS task.");
+  if (!owner) {
+    ownedTaskTabs.set(tabId, sessionId);
+    adoptedUserTabs.add(tabId);
+    await persistOwnedTabs();
+  }
+  await focusOwnedTab(tabId, sessionId);
+  await markTaskUsed(tabId);
+  const selected = await chrome.tabs.get(tabId);
+  if (selected.url !== payload.expectedUrl)
+    throw protocolError("STALE_TAB", "The selected tab changed while focusing.");
+  if (typeof payload.expectedTitle === "string" && selected.title !== payload.expectedTitle)
+    throw protocolError("STALE_TAB", "The selected tab title changed while focusing.");
+  return { tabId, sessionId, url: selected.url, title: selected.title ?? null };
+}
+
 async function openTaskTab(payload) {
   const sessionId = requireSession(payload?.sessionId);
   const existing = Array.from(ownedTaskTabs).find(([, owner]) => owner === sessionId);
@@ -145,6 +231,7 @@ async function openTaskTab(payload) {
   const tab = await chrome.tabs.create({ url: url.href, active: true });
   if (!Number.isInteger(tab.id)) throw protocolError("TAB_CREATE_FAILED", "Chrome did not return a task tab id.");
   ownedTaskTabs.set(tab.id, sessionId);
+  await markTaskUsed(tab.id);
   traceTask(tab.id, "task-tab-created", { origin: url.origin, windowId: tab.windowId });
   await persistOwnedTabs();
   const readyStart = Date.now();
@@ -158,26 +245,39 @@ async function focusTaskTab(payload) {
   const { tabId, sessionId } = assertOwnedTab(payload?.tabId, payload?.sessionId);
   traceTask(tabId, "task-tab-resume");
   await focusOwnedTab(tabId, sessionId);
+  await markTaskUsed(tabId);
   return observeOwnedTab({ tabId, sessionId });
 }
 
 async function focusOwnedTab(tabId, sessionId) {
   assertOwnedTab(tabId, sessionId);
-  traceTask(tabId, "tabs.update", { reason: "interactive-task-focus", active: true });
-  const tab = await chrome.tabs.update(tabId, { active: true });
-  if (!Number.isInteger(tab?.windowId)) throw protocolError("WINDOW_NOT_FOUND", "Task tab has no Chrome window.");
-  const window = await chrome.windows.get(tab.windowId);
-  if (window.state === "minimized") {
-    traceTask(tabId, "windows.update", { reason: "interactive-task-restore", windowId: tab.windowId, state: "normal" });
-    await chrome.windows.update(tab.windowId, { state: "normal" });
-  }
-  traceTask(tabId, "windows.update", { reason: "interactive-task-focus", windowId: tab.windowId, focused: true });
-  let focused = await chrome.windows.update(tab.windowId, { focused: true });
-  if (!focused.focused) {
-    await delay(150);
-    traceTask(tabId, "windows.update", { reason: "interactive-task-focus-retry", windowId: tab.windowId, focused: true });
-    focused = await chrome.windows.update(tab.windowId, { focused: true });
-    if (!focused.focused) console.warn("VoiceOS task window did not report focus.", tab.windowId);
+  let windowId = null;
+  let tabActivation = "failed";
+  let windowFocus = "unsupported";
+  try {
+    const tab = await chrome.tabs.update(tabId, { active: true });
+    if (!Number.isInteger(tab?.windowId)) throw protocolError("WINDOW_NOT_FOUND", "Task tab has no Chrome window.");
+    windowId = tab.windowId;
+    tabActivation = "passed";
+    windowFocus = "failed";
+    const window = await chrome.windows.get(windowId);
+    if (window.state === "minimized") await chrome.windows.update(windowId, { state: "normal" });
+    let focused = await chrome.windows.update(windowId, { focused: true });
+    if (!focused.focused) {
+      await delay(150);
+      focused = await chrome.windows.update(windowId, { focused: true });
+      if (!focused.focused) throw protocolError("FOCUS_FAILED", "Chrome did not focus the requested window.");
+    }
+    const confirmedWindow = await chrome.windows.get(windowId);
+    const confirmedTab = await chrome.tabs.get(tabId);
+    if (!confirmedTab.active) tabActivation = "failed";
+    if (!confirmedWindow.focused || !confirmedTab.active)
+      throw protocolError("FOCUS_FAILED", "The requested tab or window is not focused.");
+    windowFocus = "passed";
+  } finally {
+    console.info("VoiceOS browser surface preparation", {
+      tab: tabId, window: windowId, tab_activation: tabActivation, window_focus: windowFocus
+    });
   }
 }
 

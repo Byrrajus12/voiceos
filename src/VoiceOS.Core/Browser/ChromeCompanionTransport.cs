@@ -23,6 +23,8 @@ public sealed class ChromeCompanionTransport : IChromeCompanionTransport, IDispo
 
     public ChromeCompanionTransport(ILogger<ChromeCompanionTransport> logger) => _logger = logger;
 
+    public bool IsConnected { get { lock (_connectionLock) return _connection is not null; } }
+
     public void Start()
     {
         if (_listener is not null) return;
@@ -36,15 +38,23 @@ public sealed class ChromeCompanionTransport : IChromeCompanionTransport, IDispo
 
     public ValueTask<BrowserSnapshot> OpenTaskTabAsync(
         string sessionId, string url, CancellationToken cancellationToken = default)
-        => SendAsync("OPEN_TASK_TAB", new { sessionId, url }, cancellationToken);
+        => SendSnapshotAsync("OPEN_TASK_TAB", new { sessionId, url }, cancellationToken);
+
+    public async ValueTask<BrowserTabInfo> CreateNewTabAsync(string sessionId,
+        CancellationToken cancellationToken = default)
+    {
+        var result = await SendAsync("CREATE_NEW_TAB", new { sessionId }, cancellationToken).ConfigureAwait(false);
+        return result.GetProperty("tab").Deserialize<BrowserTabInfo>(JsonOptions)
+            ?? throw new InvalidDataException("Chrome companion returned an invalid new tab.");
+    }
 
     public ValueTask<BrowserSnapshot> ObserveAsync(
         string sessionId, int tabId, CancellationToken cancellationToken = default)
-        => SendAsync("OBSERVE", new { sessionId, tabId }, cancellationToken);
+        => SendSnapshotAsync("OBSERVE", new { sessionId, tabId }, cancellationToken);
 
     public ValueTask<BrowserSnapshot> ActAsync(
         BrowserActionRequest action, CancellationToken cancellationToken = default)
-        => SendAsync("ACT", new
+        => SendSnapshotAsync("ACT", new
         {
             sessionId = action.SessionId, tabId = action.TabId, revision = action.Revision,
             action = action.Action, elementRef = action.ElementRef,
@@ -52,9 +62,40 @@ public sealed class ChromeCompanionTransport : IChromeCompanionTransport, IDispo
         }, cancellationToken);
 
     public async ValueTask FocusTaskTabAsync(string sessionId, int tabId, CancellationToken cancellationToken = default)
-        => _ = await SendAsync("FOCUS_TASK_TAB", new { sessionId, tabId }, cancellationToken).ConfigureAwait(false);
+        => _ = await SendSnapshotAsync("FOCUS_TASK_TAB", new { sessionId, tabId }, cancellationToken).ConfigureAwait(false);
 
-    private async ValueTask<BrowserSnapshot> SendAsync<T>(
+    public async ValueTask<IReadOnlyList<BrowserTabInfo>> ListTabsAsync(CancellationToken cancellationToken = default)
+    {
+        if (!IsConnected) return [];
+        var result = await SendAsync("LIST_TABS", new { }, cancellationToken).ConfigureAwait(false);
+        if (!result.TryGetProperty("tabs", out var tabs))
+            throw new InvalidDataException("Chrome companion omitted tab inventory.");
+        return tabs.Deserialize<BrowserTabInfo[]>(JsonOptions) ?? [];
+    }
+
+    public async ValueTask SelectTabAsync(string sessionId, int tabId, string expectedUrl,
+        bool requireActive, CancellationToken cancellationToken = default)
+        => _ = await SendAsync("SELECT_TAB", new { sessionId, tabId, expectedUrl, requireActive },
+            cancellationToken).ConfigureAwait(false);
+
+    public async ValueTask SelectTabWithTitleAsync(string sessionId, int tabId,
+        string expectedUrl, string expectedTitle, bool requireActive,
+        CancellationToken cancellationToken = default)
+        => _ = await SendAsync("SELECT_TAB", new {
+            sessionId, tabId, expectedUrl, expectedTitle, requireActive },
+            cancellationToken).ConfigureAwait(false);
+
+    private async ValueTask<BrowserSnapshot> SendSnapshotAsync<T>(string command, T payload,
+        CancellationToken cancellationToken)
+    {
+        var result = await SendAsync(command, payload, cancellationToken).ConfigureAwait(false);
+        if (!result.TryGetProperty("snapshot", out var snapshot))
+            throw new InvalidDataException("Chrome companion response omitted result.snapshot.");
+        return snapshot.Deserialize<BrowserSnapshot>(JsonOptions)
+            ?? throw new InvalidDataException("Chrome companion returned an invalid snapshot.");
+    }
+
+    private async ValueTask<JsonElement> SendAsync<T>(
         string command, T payload, CancellationToken cancellationToken)
     {
         Start();
@@ -83,11 +124,9 @@ public sealed class ChromeCompanionTransport : IChromeCompanionTransport, IDispo
                             OptionalString(error, "code") ?? "EXTENSION_ERROR",
                             OptionalString(error, "message") ?? $"Chrome companion command {command} failed.");
                     }
-                    if (!root.TryGetProperty("result", out var result)
-                        || !result.TryGetProperty("snapshot", out var snapshot))
-                        throw new InvalidDataException("Chrome companion response omitted result.snapshot.");
-                    return snapshot.Deserialize<BrowserSnapshot>(JsonOptions)
-                        ?? throw new InvalidDataException("Chrome companion returned an invalid snapshot.");
+                    if (!root.TryGetProperty("result", out var result))
+                        throw new InvalidDataException("Chrome companion response omitted result.");
+                    return result.Clone();
                 }
             }
             catch (ChromeCompanionException) { throw; }
