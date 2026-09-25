@@ -70,7 +70,7 @@ src/
     Speech/             Parakeet / sherpa-onnx
     Candidates/         Live app and window state
     Decision/           Jev planning and VoicePlan
-    Browser/            Managed Playwright session and semantic browser surface
+    Browser/            Typed execution scope and Chrome Companion browser surface
     Interaction/        Shared bounded observe/decide/execute engine
     Execution/          Native Windows actions
     Apps/               App discovery/catalog
@@ -90,7 +90,7 @@ tests/
 * .NET 9 SDK
 * NVIDIA Parakeet-TDT-0.6B-v2 model
 * TypeSafe API key
-* Google Chrome (the Alpha browser channel; a separate VoiceOS profile is used)
+* Google Chrome with the VoiceOS Chrome Companion and Native Messaging host installed
 
 ### Speech model
 
@@ -126,13 +126,13 @@ dotnet run --project src/VoiceOS
 dotnet test
 ```
 
-The suite covers Phase 1 and dictation regressions plus browser routing, bounded goal framing, candidate ranking, stale/occluded targets, modal recovery, safe-key policy, completion suppression, ambiguity, and real headless-Chrome surface behavior. Global hooks, microphone behavior, and live websites are validated physically.
+The suite covers Phase 1, dictation, browser routing, scope precedence, bounded interaction, and Chrome Companion protocol behavior. Global hooks, microphone behavior, and live websites require physical validation.
 
 ## Browser interaction Alpha
 
-Browser commands are routed before any native prefix executes. The browser path interprets a small semantic goal, reuses a matching VoiceOS-managed tab when available, otherwise bootstraps through trusted web search, and repeatedly chooses one bounded action from current semantic page evidence. The model cannot supply selectors, JavaScript, coordinates, URLs, shell commands, or arbitrary keys.
+After semantic routing, a typed scope resolver chooses where the command belongs using foreground-window information and lightweight Chrome tab metadata. Explicit scope wins; a relevant active tab can be used, inactive user tabs need explicit selection, and unrelated active pages are preserved. VoiceOS-owned task tabs may be resumed. Direct window, app, media, and volume capabilities remain on their deterministic path.
 
-The managed Chrome profile defaults to `%LOCALAPPDATA%\VoiceOS\BrowserProfile`; VoiceOS does not automate the user's ordinary browser profile. Closing VoiceOS closes its managed browser session. Change `BrowserChannel` or `BrowserProfileDirectory` in `src/VoiceOS/appsettings.json` only when developing against another dedicated browser setup.
+The browser path uses the normal Chrome profile through VoiceOS → Native Messaging host → Chrome Companion. The companion supplies tab identity, origin, title, and ownership for scope resolution; it supplies DOM-semantic observations only to the selected browser interaction surface. The bounded observe → decide → act → reobserve loop chooses actions from fresh page evidence. The model cannot supply selectors, JavaScript, coordinates, URLs, shell commands, or arbitrary keys.
 
 For physical validation:
 
@@ -178,7 +178,8 @@ Repeat the flight scenario with different origins, destinations, and dates. For 
 **Browser Alpha**
 * Live-site success depends on semantic accessibility exposed by the page. Canvas-only, closed-shadow, CAPTCHA, authentication, and anti-automation surfaces may safely stop for clarification or fail.
 * Choice data and resume behavior are implemented below the application boundary; the dedicated product Choice UI is intentionally deferred.
-* The Alpha uses installed Chrome with a dedicated VoiceOS profile and one managed session. Cross-browser support is not included.
+* Chrome Companion is the only browser channel. Native UI interaction is represented in scope types but is not enabled yet.
+* Scope resolution uses lightweight tab metadata, so ambiguous tab names and unavailable Chrome connections stop for clarification. Live scope behavior on the user's desktop still needs physical validation.
 
 **Future phases**
 * Text transformation beyond literal dictation — not implemented.
