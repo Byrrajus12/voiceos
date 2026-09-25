@@ -137,6 +137,219 @@ public sealed class BrowserSemanticTests
     }
 
     [Fact]
+    public async Task Router_EmitsTypedSurfaceAndEndStateInOneCall()
+    {
+        var calls = 0;
+        var gateway = new FakeGateway((_, questions) =>
+        {
+            calls++;
+            Assert.Contains("surface_preference", questions.Keys);
+            Assert.Contains("end_state", questions.Keys);
+            Assert.Contains("task_relation", questions.Keys);
+            Assert.Contains("context_dependency", questions.Keys);
+            return Answers(("route", Choice("COMPUTER_USE")),
+                ("intent_completeness", Choice("Actionable")),
+                ("surface_preference", Choice("Browser")),
+                ("end_state", Choice("StateChanged")),
+                ("task_relation", Choice("ContinueRecent")),
+                ("context_dependency", Choice("Uncertain")));
+        });
+        var result = await new TypeSafeCommandRouter(gateway).RouteAsync("adjust the earlier choice");
+        Assert.Equal(1, calls);
+        Assert.Equal(SurfacePreference.Browser, result.SurfacePreference);
+        Assert.Equal(SemanticEndState.StateChanged, result.EndState);
+        Assert.Equal(TaskRelation.ContinueRecent, result.TaskRelation);
+        Assert.Equal(ContextDependency.Uncertain, result.ContextDependency);
+    }
+
+    [Theory]
+    [InlineData("Search for React", "SelfContained")]
+    [InlineData("Open Spotify on the web", "SelfContained")]
+    [InlineData("Pick the third result", "RequiresCurrentSurface")]
+    [InlineData("Open the second result", "RequiresCurrentSurface")]
+    [InlineData("Read the second result", "RequiresCurrentSurface")]
+    [InlineData("Click the second result", "RequiresCurrentSurface")]
+    [InlineData("Click Explore", "RequiresCurrentSurface")]
+    [InlineData("Choose the second option", "RequiresCurrentSurface")]
+    [InlineData("Open the first post", "RequiresCurrentSurface")]
+    [InlineData("Scroll down", "RequiresCurrentSurface")]
+    [InlineData("Select the blue button", "RequiresCurrentSurface")]
+    [InlineData("Open the third Google result for React", "SelfContained")]
+    public async Task Router_EmitsOrthogonalContextDependencyInExistingCall(
+        string utterance, string dependency)
+    {
+        var calls = 0;
+        var gateway = new FakeGateway((_, questions) =>
+        {
+            calls++;
+            Assert.Contains("context_dependency", questions.Keys);
+            Assert.Contains("do not choose a tab", questions["context_dependency"].Instructions,
+                StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("TaskRelation separately classifies continuity",
+                questions["context_dependency"].Instructions);
+            Assert.Equal(new[] { "SelfContained", "RequiresCurrentSurface", "Uncertain" },
+                questions["context_dependency"].Criteria!.Keys);
+            return Answers(("route", Choice("COMPUTER_USE")),
+                ("intent_completeness", Choice("Actionable")),
+                ("media_request_kind", Choice("None")),
+                ("tab_disposition", Choice("Unspecified")),
+                ("context_dependency", Choice(dependency)));
+        });
+        var route = await new TypeSafeCommandRouter(gateway).RouteAsync(utterance);
+        Assert.Equal(1, calls);
+        Assert.Equal(Enum.Parse<ContextDependency>(dependency), route.ContextDependency);
+        Assert.Equal(TabDisposition.Unspecified, route.TabDisposition);
+    }
+
+    [Theory]
+    [InlineData("Go back to those results")]
+    [InlineData("Open the one from before")]
+    [InlineData("Continue that search")]
+    public async Task Router_LeavesPriorTaskContinuityToTaskRelation(string utterance)
+    {
+        var gateway = new FakeGateway((_, _) =>
+            Answers(("route", Choice("COMPUTER_USE")),
+                ("intent_completeness", Choice("Actionable")),
+                ("task_relation", Choice("RequiresRecent")),
+                ("context_dependency", Choice("Uncertain"))));
+        var route = await new TypeSafeCommandRouter(gateway).RouteAsync(utterance);
+        Assert.Equal(TaskRelation.RequiresRecent, route.TaskRelation);
+        Assert.Equal(ContextDependency.Uncertain, route.ContextDependency);
+    }
+
+    [Fact]
+    public void ContextDependencyHasOnlyThreeValues()
+        => Assert.Equal(new[] { "Uncertain", "SelfContained", "RequiresCurrentSurface" },
+            Enum.GetNames<ContextDependency>());
+
+    [Theory]
+    [InlineData("Open the Backend UI Parallel Tracks tab", "ExistingNamedTab")]
+    [InlineData("Open the React tab", "ExistingNamedTab")]
+    [InlineData("Open the Agent Island tab", "ExistingNamedTab")]
+    [InlineData("Use the current page", "CurrentTab")]
+    [InlineData("Open a new tab and search React", "NewTab")]
+    [InlineData("Search for React", "Unspecified")]
+    [InlineData("Click Explore", "Unspecified")]
+    public async Task Router_PreservesExplicitSurfaceDispositionInExistingCall(
+        string utterance, string disposition)
+    {
+        var calls = 0;
+        var gateway = new FakeGateway((_, questions) =>
+        {
+            calls++;
+            Assert.Contains("particular existing browser tab", questions["tab_disposition"].Instructions);
+            Assert.Contains("descriptive identity", questions["tab_disposition"].Criteria!["ExistingNamedTab"]);
+            return Answers(("route", Choice("COMPUTER_USE")),
+                ("intent_completeness", Choice("Actionable")),
+                ("media_request_kind", Choice("None")),
+                ("destination", Choice("None")),
+                ("tab_disposition", Choice(disposition)),
+                ("context_dependency", Choice("SelfContained")));
+        });
+        var result = await new TypeSafeCommandRouter(gateway).RouteAsync(utterance);
+        Assert.Equal(1, calls);
+        Assert.Equal(Enum.Parse<TabDisposition>(disposition), result.TabDisposition);
+        if (disposition == "ExistingNamedTab")
+            Assert.Equal(SemanticDestinationKind.NamedTab, result.DestinationKind);
+    }
+
+    [Fact]
+    public async Task ArbitraryNamedTabUsesOfferedMetadataAndRejectsDuplicates()
+    {
+        var gateway = new FakeGateway((_, questions) =>
+        {
+            Assert.Contains("tab_8", questions["tab"].Criteria!.Keys);
+            Assert.Single(questions);
+            Assert.Contains("AMBIGUOUS", questions["tab"].Criteria!.Keys);
+            Assert.Contains("NONE", questions["tab"].Criteria!.Keys);
+            return Answers(("tab", Choice("tab_8")));
+        });
+        var router = new TypeSafeCommandRouter(gateway);
+        var one = new BrowserTabInfo(8, 1, false, "https://forum.example/",
+            "Community forum", BrowserTabProvenance.User);
+        Assert.Equal(8, await router.SelectNamedTabAsync("use the community tab", [one]));
+        var duplicate = one with { TabId = 9 };
+        Assert.Null(await router.SelectNamedTabAsync("use the community tab", [one, duplicate]));
+    }
+
+    [Theory]
+    [InlineData("Open the React tab", "tab_8", 8, "React - Google Search")]
+    [InlineData("Open the Agent Island tab", "tab_9", 9, "agent island - Google Search")]
+    public async Task NamedTabSelectionUsesPageTitleEvenWhenTabsShareService(
+        string utterance, string selectedId, int tabId, string title)
+    {
+        var calls = 0;
+        var log = new CaptureLogger();
+        var gateway = new FakeGateway((_, questions) =>
+        {
+            calls++;
+            var candidates = questions["tab"].Criteria!;
+            Assert.Single(questions);
+            Assert.Contains("React - Google Search", candidates["tab_8"]);
+            Assert.Contains("agent island - Google Search", candidates["tab_9"]);
+            Assert.Contains("Explore / X", candidates["tab_10"]);
+            Assert.Contains("host=www.google.com", candidates["tab_8"]);
+            Assert.Contains("service=Google", candidates["tab_8"]);
+            Assert.Contains("service=Google", candidates["tab_9"]);
+            return Answers(("tab", Choice(selectedId, .92)));
+        });
+        var tabs = new[]
+        {
+            new BrowserTabInfo(8, 1, false, "https://www.google.com/search?q=React",
+                "React - Google Search", BrowserTabProvenance.User),
+            new BrowserTabInfo(9, 1, true, "https://www.google.com/search?q=agent+island",
+                "agent island - Google Search", BrowserTabProvenance.User),
+            new BrowserTabInfo(10, 1, false, "https://x.com/explore",
+                "Explore / X", BrowserTabProvenance.User)
+        };
+        var route = new CommandRouteDecision(CommandRoute.ComputerUse, .95,
+            DestinationKind: SemanticDestinationKind.NamedTab,
+            DestinationName: "Google", TabDisposition: TabDisposition.ExistingNamedTab);
+        var chrome = new VoiceOS.Core.Candidates.WindowCandidate("chrome", "chrome", "Chrome", true, 42);
+        var context = new ExecutionContextSnapshot(chrome, [chrome], true, tabs);
+        var decision = await new ScopeResolver().ResolveAsync(utterance,
+            route, context, new TypeSafeCommandRouter(gateway, logger: log));
+        Assert.Equal(1, calls);
+        Assert.Equal(BrowserScopeKind.ExistingNamedTab, decision.Browser?.Kind);
+        Assert.Equal(tabId, decision.Browser?.TabId);
+        Assert.Equal(tabs.Single(t => t.TabId == tabId).Url, decision.Browser?.ExpectedUrl);
+        Assert.Equal(title, decision.Browser?.ExpectedTitle);
+        Assert.Contains(log.Messages, message => message.Contains($"candidate_id={selectedId}")
+            && message.Contains(title)
+            && message.Contains("www.google.com") && message.Contains("service=Google"));
+        Assert.Contains(log.Messages, message => message.Contains($"selected_semantic_value={selectedId}")
+            && message.Contains("confidence=0.92") && message.Contains("confidence_floor=0.70"));
+    }
+
+    [Theory]
+    [InlineData("Open the Vue tab", "NONE", .95, "no_plausible_match")]
+    [InlineData("Open the React tab", "AMBIGUOUS", .95, "multiple_plausible_matches")]
+    [InlineData("Open the React tab", "tab_8", .44, "choice_confidence_below_floor")]
+    public async Task NamedTabSelectionClarifiesForNoneOrAmbiguous(
+        string utterance, string choice, double confidence, string reason)
+    {
+        var log = new CaptureLogger();
+        var gateway = new FakeGateway((_, questions) =>
+        {
+            Assert.Single(questions);
+            Assert.Contains("tab_8", questions["tab"].Criteria!.Keys);
+            Assert.Contains("tab_9", questions["tab"].Criteria!.Keys);
+            return Answers(("tab", Choice(choice, confidence)));
+        });
+        var tabs = new[]
+        {
+            new BrowserTabInfo(8, 1, false, "https://www.google.com/search?q=React",
+                "React - Google Search", BrowserTabProvenance.User),
+            new BrowserTabInfo(9, 1, false, "https://example.org/react",
+                "React documentation", BrowserTabProvenance.User)
+        };
+        Assert.Null(await new TypeSafeCommandRouter(gateway, logger: log).SelectNamedTabAsync(
+            utterance, tabs));
+        Assert.Contains(log.Messages, message => message.Contains($"selected_semantic_value={choice}"));
+        Assert.Contains(log.Messages, message => message.Contains($"reason={reason}"));
+    }
+
+    [Fact]
     public async Task Router_SeparatesNativeInteractionFromBrowser()
     {
         var gateway = new FakeGateway((_, _) => Answers(("route", Choice("NATIVE_INTERACTION", .96)),
@@ -495,7 +708,8 @@ public sealed class BrowserSemanticTests
             => source.AssessAsync(BrowserGoal.FromUtterance(goal.Text), observation, recentHistory, cancellationToken);
     }
 
-    private sealed class CaptureLogger : ILogger
+    private sealed class CaptureLogger : ILogger,
+        ILogger<TypeSafeCommandRouter>, ILogger<BrowserInteractionService>
     {
         public List<string> Messages { get; } = [];
         public IDisposable BeginScope<TState>(TState state) where TState : notnull => NullScope.Instance;
