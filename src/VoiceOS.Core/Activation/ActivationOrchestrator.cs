@@ -36,6 +36,10 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
     private readonly ITextInsertionService? _textInsertion;
     private readonly ICommandRouter? _commandRouter;
     private readonly IBrowserInteractionService? _browserInteraction;
+    private readonly IChromeCompanionTransport? _browserTransport;
+    private readonly IWindowAwareLauncher? _windowAwareLauncher;
+    private readonly ScopeResolver _scopeResolver = new();
+    private RecentTaskFrame? _recentTask;
     private readonly VoiceOSConfig _config;
     private readonly ILogger<ActivationOrchestrator> _logger;
     private readonly CancellationTokenSource _shutdown = new();
@@ -72,7 +76,9 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         IForegroundWindowService? foregroundWindow = null,
         ITextInsertionService? textInsertion = null,
         ICommandRouter? commandRouter = null,
-        IBrowserInteractionService? browserInteraction = null)
+        IBrowserInteractionService? browserInteraction = null,
+        IChromeCompanionTransport? browserTransport = null,
+        IWindowAwareLauncher? windowAwareLauncher = null)
     {
         _commandHook = commandHook;
         _dictationHook = dictationHook;
@@ -89,6 +95,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         _textInsertion = textInsertion;
         _commandRouter = commandRouter;
         _browserInteraction = browserInteraction;
+        _browserTransport = browserTransport;
+        _windowAwareLauncher = windowAwareLauncher;
 
         _commandHook.KeyDown += OnCommandKeyDown;
         _commandHook.KeyUp += OnCommandKeyUp;
@@ -357,9 +365,13 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             var routeTimer = Stopwatch.StartNew();
             try
             {
-                route = _commandRouter is null
-                    ? new CommandRouteDecision(CommandRoute.DirectCapability, 1, "No command router is configured.")
-                    : await _commandRouter.RouteAsync(transcription.Transcript, _shutdown.Token).ConfigureAwait(false);
+                route = _commandRouter switch
+                {
+                    null => new CommandRouteDecision(CommandRoute.DirectCapability, 1, "No command router is configured."),
+                    TypeSafeCommandRouter semantic => await semantic.RouteAsync(
+                        transcription.Transcript, _recentTask, _shutdown.Token).ConfigureAwait(false),
+                    _ => await _commandRouter.RouteAsync(transcription.Transcript, _shutdown.Token).ConfigureAwait(false)
+                };
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -367,6 +379,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 route = new(CommandRoute.Clarify, 0, "Command routing failed safely.", RoutingReason.RouterFailure);
             }
             routeTimer.Stop();
+            if (route.TaskRelation == TaskRelation.NewTask)
+                _recentTask = null;
             lane = route.Route.ToString();
             _logger.LogInformation("Command route={Route} confidence={Confidence:P0} reason={Reason} media_request_kind={MediaRequestKind} media_op={MediaOp} route_ms={RouteMs:F0}",
                 route.Route, route.Confidence, route.Reason, route.MediaRequestKind,
@@ -375,7 +389,43 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 _logger.LogInformation("Clarification level=routing category={Category} confidence={Confidence:P0} reason={Reason}",
                     route.Reason, route.Confidence, route.Detail);
 
-            if (route.Route == CommandRoute.ComputerUse)
+            ExecutionContextSnapshot executionContext;
+            if (route.Route is CommandRoute.ComputerUse or CommandRoute.NativeInteraction
+                || route.Route == CommandRoute.Clarify && route.Reason != RoutingReason.IncompleteIntent
+                    && route.Reason != RoutingReason.RouterFailure
+                || route.MediaRequestKind == MediaRequestKind.ContentSelection)
+            {
+                var windows = CandidateBuilder.GetOpenWindows();
+                IReadOnlyList<BrowserTabInfo> tabs = [];
+                var connected = _browserTransport?.IsConnected == true;
+                if (connected)
+                {
+                    try { tabs = await _browserTransport!.ListTabsAsync(_shutdown.Token).ConfigureAwait(false); }
+                    catch (Exception ex) when (ex is not OperationCanceledException)
+                    {
+                        _logger.LogWarning(ex, "Browser scope inventory failed");
+                        connected = false;
+                    }
+                }
+                if (connected && _recentTask is { } prior
+                    && !tabs.Any(tab => tab.TabId == prior.TabId
+                        && tab.SessionId == prior.SessionId
+                        && StringComparer.Ordinal.Equals(tab.Url, prior.Url)))
+                    _recentTask = null;
+                executionContext = new(windows.FirstOrDefault(static w => w.IsForeground),
+                    windows, connected, tabs, _recentTask,
+                    _catalog is null ? [] : CandidateBuilder.GetInstalledApps(_catalog));
+            }
+            else
+                executionContext = new(null, [], false, []);
+            var executionScope = await _scopeResolver.ResolveAsync(transcription.Transcript, route,
+                executionContext, _commandRouter as IContextualScopeDecisionSource,
+                _shutdown.Token).ConfigureAwait(false);
+            _logger.LogInformation("Execution scope={Scope} browser_scope={BrowserScope} tab={TabId} detail={Detail}",
+                executionScope.Kind, executionScope.Browser?.Kind, executionScope.Browser?.TabId,
+                executionScope.Detail);
+
+            if (executionScope.Kind == ExecutionScopeKind.Browser)
             {
                 if (_browserInteraction is null)
                 {
@@ -384,10 +434,24 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                     return;
                 }
 
+                if (_browserTransport?.IsConnected != true
+                    && !await StartChromeCompanionAsync(_shutdown.Token).ConfigureAwait(false))
+                {
+                    outcome = "Unavailable";
+                    PublishSnapshot(new(ApplicationInteractionPhase.Failed, input.Kind,
+                        transcription.Transcript, "Chrome did not connect to the Companion within the startup period."));
+                    return;
+                }
+
                 PublishSnapshot(new(ApplicationInteractionPhase.Observing, input.Kind,
                     transcription.Transcript, "Framing browser goal and acquiring managed context"));
                 var browserResult = await _browserInteraction.RunAsync(transcription.Transcript, _shutdown.Token,
-                    activationId).ConfigureAwait(false);
+                    activationId, executionScope.Browser).ConfigureAwait(false);
+                if (browserResult is { TabId: int tabId, SessionId: { } sessionId, Url: { } url }
+                    && browserResult.Completion is InteractionCompletionState.Complete or InteractionCompletionState.Uncertain)
+                    _recentTask = new(tabId, sessionId, url,
+                        browserResult.SemanticGoal ?? transcription.Transcript,
+                        browserResult.Completion, DateTimeOffset.UtcNow);
                 actionCount = browserResult.Actions;
                 outcome = browserResult.Completion.ToString();
                 if (browserResult.Completion == InteractionCompletionState.Uncertain)
@@ -404,20 +468,34 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 return;
             }
 
-            if (route.Route == CommandRoute.NativeInteraction)
+            if (executionScope.Kind == ExecutionScopeKind.NativeInteraction)
             {
+                if (executionScope.Native is { AppCandidateId: { } appId,
+                        EndState: SemanticEndState.SurfaceReady }
+                    && route.GoalShape == GoalShape.SurfaceOnly
+                    && _windowAwareLauncher is not null)
+                {
+                    var prepared = await _windowAwareLauncher.FocusOrLaunchAsync(
+                        new AppTarget(appId), executionContext.OpenWindows, _shutdown.Token)
+                        .ConfigureAwait(false);
+                    outcome = prepared.Succeeded ? "Succeeded" : "Failed";
+                    PublishSnapshot(new(prepared.Succeeded ? ApplicationInteractionPhase.Succeeded
+                        : ApplicationInteractionPhase.Failed, input.Kind, transcription.Transcript,
+                        prepared.Detail));
+                    return;
+                }
                 outcome = "Unavailable";
                 PublishSnapshot(new(ApplicationInteractionPhase.Failed, input.Kind,
                     transcription.Transcript, "Native UI interaction is not enabled yet."));
                 return;
             }
 
-            if (route.Route is CommandRoute.TextTransform or CommandRoute.Clarify)
+            if (executionScope.Kind is ExecutionScopeKind.TextTransform or ExecutionScopeKind.Clarify)
             {
                 outcome = "Clarify";
-                var status = route.Route == CommandRoute.TextTransform
+                var status = executionScope.Kind == ExecutionScopeKind.TextTransform
                     ? "Text transformation is not part of the current literal dictation or browser stage."
-                    : route.Detail ?? "The command needs clarification.";
+                    : executionScope.Detail ?? route.Detail ?? "The command needs clarification.";
                 PublishSnapshot(new(ApplicationInteractionPhase.NeedsChoice, input.Kind,
                     transcription.Transcript, status,
                     [new InteractionChoice("retry", "Clarify request"), new InteractionChoice("cancel", "Cancel")],
@@ -550,6 +628,42 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             LogPipelineSummary(result, activationId, lane, outcome, postSttStart, actionCount);
             PublishState(input.Kind, ActivationState.Idle);
         }
+    }
+
+    private async Task<bool> StartChromeCompanionAsync(CancellationToken cancellationToken)
+    {
+        if (_browserTransport?.IsConnected == true) return true;
+        var chrome = _catalog?.GetAll().Where(entry =>
+            string.Equals(entry.ProcessName, "chrome", StringComparison.OrdinalIgnoreCase))
+            .Take(2).ToArray();
+        if (chrome is not { Length: 1 }) return false;
+        try
+        {
+            var running = Process.GetProcessesByName("chrome");
+            try
+            {
+                if (running.Length == 0)
+                {
+                    var entry = chrome[0];
+                    var start = entry.LaunchKind == AppLaunchKind.PackagedApp
+                        ? new ProcessStartInfo("explorer.exe", $"shell:AppsFolder\\{entry.LaunchTarget}") { UseShellExecute = true }
+                        : new ProcessStartInfo(entry.LaunchTarget) { UseShellExecute = true,
+                            Arguments = entry.LaunchArguments ?? "" };
+                    Process.Start(start);
+                }
+            }
+            finally { foreach (var process in running) process.Dispose(); }
+            using var bounded = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            bounded.CancelAfter(TimeSpan.FromSeconds(12));
+            while (!bounded.IsCancellationRequested)
+            {
+                if (_browserTransport?.IsConnected == true) return true;
+                await Task.Delay(200, bounded.Token).ConfigureAwait(false);
+            }
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested) { }
+        catch (Exception ex) { _logger.LogWarning(ex, "Chrome startup failed"); }
+        return _browserTransport?.IsConnected == true;
     }
 
     private void LogPipelineSummary(PipelineResult result, string activationId, string lane,

@@ -102,7 +102,8 @@ internal static class Program
             var gateway = new TypeSafeJevGateway(
                 apiKey, config.TypeSafeModel, jevHttp,
                 loggerFactory.CreateLogger<TypeSafeJevGateway>());
-            commandRouter = new TypeSafeCommandRouter(gateway);
+            commandRouter = new TypeSafeCommandRouter(gateway,
+                logger: loggerFactory.CreateLogger<TypeSafeCommandRouter>());
             browserInteraction = new BrowserInteractionService(chromeCompanion, gateway,
                 new OpenRouterBrowserGoalNormalizer(new HttpClient { Timeout = TimeSpan.FromSeconds(15) },
                     Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")),
@@ -146,7 +147,8 @@ internal static class Program
         var orchestrator = new ActivationOrchestrator(
             commandHook, dictationHook, audio, debugWriter, config, orchestratorLogger,
             speechRecognizer, decisionEngine, programExecutor, catalog, topoService,
-            foreground, textInsertion, commandRouter, browserInteraction);
+            foreground, textInsertion, commandRouter, browserInteraction, chromeCompanion,
+            windowAwareLauncher);
 
         using var trayApp = new TrayApplication(orchestrator);
         Application.Run(trayApp);
