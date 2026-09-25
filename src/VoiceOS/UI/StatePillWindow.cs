@@ -171,7 +171,8 @@ internal sealed class StatePillWindow : NativeWindow, IDisposable
     {
         float listen = (float)frame.Listening;
         float result = (float)frame.Result;
-        float blobOpacity = (1 - listen) * (1 - result) * (1 - (float)frame.Clarify);
+        float blobOpacity = (1 - listen) * (1 - result) *
+            (frame.State == ProductUiState.Acting ? 1 : 1 - (float)frame.Clarify);
         float fragmentWidth = (3.2f + 2.7f * (1 - listen)) * scale;
         if (listen > 0.005f)
         {

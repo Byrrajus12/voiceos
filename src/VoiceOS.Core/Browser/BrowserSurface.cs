@@ -23,6 +23,7 @@ public sealed class BrowserSurface : IInteractionSurface
     private readonly BrowserGoal _goal;
     private readonly IBrowserCompletionEvaluator _completion;
     private readonly string _sessionId;
+    private readonly Action<InteractionActionKind?>? _onActionStarting;
     private readonly Dictionary<long, BrowserSnapshot> _snapshots = [];
     private int? _tabId;
     private string? _expectedFirstUrl;
@@ -30,7 +31,8 @@ public sealed class BrowserSurface : IInteractionSurface
 
     public BrowserSurface(IChromeCompanionTransport transport, BrowserGoal goal,
         IBrowserCompletionEvaluator completion, string? sessionId = null, ILogger? logger = null,
-        int? tabId = null, string? expectedFirstUrl = null)
+        int? tabId = null, string? expectedFirstUrl = null,
+        Action<InteractionActionKind?>? onActionStarting = null)
     {
         _transport = transport;
         _logger = logger;
@@ -39,6 +41,7 @@ public sealed class BrowserSurface : IInteractionSurface
         _sessionId = sessionId ?? Guid.NewGuid().ToString("N");
         _tabId = tabId;
         _expectedFirstUrl = expectedFirstUrl;
+        _onActionStarting = onActionStarting;
     }
 
     public string SessionId => _sessionId;
@@ -49,6 +52,7 @@ public sealed class BrowserSurface : IInteractionSurface
     {
         var startup = _tabId is null;
         var transportTimer = Stopwatch.StartNew();
+        if (startup) _onActionStarting?.Invoke(null);
         var snapshot = _tabId is int tabId
             ? await _transport.ObserveAsync(_sessionId, tabId, cancellationToken).ConfigureAwait(false)
             : await _transport.OpenTaskTabAsync(_sessionId, BrowserGoal.BootstrapUrl(_goal), cancellationToken).ConfigureAwait(false);
@@ -120,6 +124,7 @@ public sealed class BrowserSurface : IInteractionSurface
 
         try
         {
+            _onActionStarting?.Invoke(action.Kind);
             var actionTimer = Stopwatch.StartNew();
             var next = await _transport.ActAsync(new(
                 snapshot.TabId, _sessionId, snapshot.Revision, protocolAction,

@@ -19,6 +19,7 @@ internal sealed class StatePillOverlay : IDisposable
     private ProductUiState _resultState = ProductUiState.Success;
     private string _clarification = "Which Chrome window?";
     private string _errorMessage = "Couldn't find that window";
+    private string? _actingMessage;
     private double _width;
     private double _widthVelocity;
     private double _appearance;
@@ -58,9 +59,10 @@ internal sealed class StatePillOverlay : IDisposable
             _listeningShape = state == ProductUiState.Listening ? 1 : 0;
             _resultShape = state is ProductUiState.Success or ProductUiState.Error ? 1 : 0;
             _actingMotion = state == ProductUiState.Acting ? 1 : 0;
-            _clarifyShape = state is ProductUiState.Clarify or ProductUiState.Error ? 1 : 0;
-            string initialMessage = state == ProductUiState.Error ? _errorMessage : _clarification;
-            _width = state is ProductUiState.Clarify or ProductUiState.Error
+            _clarifyShape = state is ProductUiState.Clarify or ProductUiState.Error
+                || state == ProductUiState.Acting && _actingMessage is not null ? 1 : 0;
+            string initialMessage = CurrentMessage(state);
+            _width = _clarifyShape > 0
                 ? _window!.ClarifyWidth(initialMessage) : _window!.CompactWidth;
             _widthVelocity = 0;
         }
@@ -85,6 +87,20 @@ internal sealed class StatePillOverlay : IDisposable
         if (_state == ProductUiState.Error) _frameTimer.Start();
     }
 
+    public void SetActingMessage(string? message)
+    {
+        _actingMessage = string.IsNullOrWhiteSpace(message) ? null : message.Trim();
+        if (_state == ProductUiState.Acting) _frameTimer.Start();
+    }
+
+    private string CurrentMessage(ProductUiState state) => state switch
+    {
+        ProductUiState.Error => _errorMessage,
+        ProductUiState.Clarify => _clarification,
+        ProductUiState.Acting => _actingMessage ?? "",
+        _ => ""
+    };
+
     private void Tick()
     {
         if (_disposed || _window is null) return;
@@ -97,8 +113,10 @@ internal sealed class StatePillOverlay : IDisposable
             SetState(ProductUiState.Idle);
 
         bool shown = _state != ProductUiState.Idle;
-        string message = _state == ProductUiState.Error ? _errorMessage : _clarification;
-        double targetWidth = _state is ProductUiState.Clarify or ProductUiState.Error
+        string message = CurrentMessage(_state);
+        bool expanded = _state is ProductUiState.Clarify or ProductUiState.Error
+            || _state == ProductUiState.Acting && _actingMessage is not null;
+        double targetWidth = expanded
             ? window.ClarifyWidth(message) : window.CompactWidth;
         Spring(ref _width, ref _widthVelocity, targetWidth, dt, 16);
         _width = Math.Clamp(_width, window.CompactWidth, window.MaxWidth);
@@ -108,7 +126,7 @@ internal sealed class StatePillOverlay : IDisposable
             _state is ProductUiState.Success or ProductUiState.Error ? 1 : 0, dt, 0.30);
         _actingMotion = Approach(_actingMotion, _state == ProductUiState.Acting ? 1 : 0, dt, 0.37);
         _clarifyShape = Approach(_clarifyShape,
-            _state is ProductUiState.Clarify or ProductUiState.Error ? 1 : 0, dt, 0.28);
+            expanded ? 1 : 0, dt, 0.28);
         // One integrated phase: Understanding 3.2 rad/s, Acting 5.6 rad/s.
         _phase += dt * (3.2 + 2.4 * _actingMotion);
         if (_state == ProductUiState.Listening) UpdateBars(dt);

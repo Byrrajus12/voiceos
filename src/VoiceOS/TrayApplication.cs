@@ -16,10 +16,11 @@ public sealed class TrayApplication : ApplicationContext
 
     private readonly ActivationOrchestrator _orchestrator;
     private readonly NotifyIcon _trayIcon;
-    private readonly IProductUiSurface _glow = new EdgeGlowOverlay();
+    private readonly ProductUiOverlay _ui = new();
     private SynchronizationContext? _uiContext;
     private Icon? _currentIcon;
     private bool _disposed;
+    private long _lastUiGeneration;
 
     public TrayApplication(ActivationOrchestrator orchestrator)
     {
@@ -37,6 +38,7 @@ public sealed class TrayApplication : ApplicationContext
         SetIcon(ActivationState.Idle);
 
         _orchestrator.StateChanged += OnStateChanged;
+        _orchestrator.ProductUiChanged += OnProductUiChanged;
 
         // Install hook after the message pump is running.
         Application.Idle += OnFirstIdle;
@@ -64,7 +66,6 @@ public sealed class TrayApplication : ApplicationContext
 
     private void UpdateTray(ActivationState state)
     {
-        _glow.SetState(ActivationUiStateAdapter.Map(state));
         SetIcon(state);
         _trayIcon.Text = state switch
         {
@@ -74,6 +75,35 @@ public sealed class TrayApplication : ApplicationContext
             ActivationState.Understanding => "VoiceOS — Understanding",
             _ => "VoiceOS — Idle"
         };
+    }
+
+    private void OnProductUiChanged(object? sender, ProductUiLifecycle update)
+    {
+        if (_disposed) return;
+        var ctx = _uiContext;
+        if (ctx != null) ctx.Post(_ => ApplyProductUi(update), null);
+    }
+
+    private void ApplyProductUi(ProductUiLifecycle update)
+    {
+        if (_disposed || update.Generation < _lastUiGeneration) return;
+        _lastUiGeneration = update.Generation;
+        if (update.Phase == ProductUiPhase.Acting)
+            _ui.SetActingMessage(update.Message);
+        else if (update.Phase == ProductUiPhase.Clarify)
+            _ui.SetClarificationMessage(update.Message ?? "Could you clarify that request?");
+        else if (update.Phase == ProductUiPhase.Error)
+            _ui.SetErrorMessage(update.Message ?? "Couldn't complete that action.");
+        _ui.SetState(update.Phase switch
+        {
+            ProductUiPhase.Listening => ProductUiState.Listening,
+            ProductUiPhase.Understanding => ProductUiState.Understanding,
+            ProductUiPhase.Acting => ProductUiState.Acting,
+            ProductUiPhase.Success => ProductUiState.Success,
+            ProductUiPhase.Clarify => ProductUiState.Clarify,
+            ProductUiPhase.Error => ProductUiState.Error,
+            _ => ProductUiState.Idle
+        });
     }
 
     private void SetIcon(ActivationState state)
@@ -118,8 +148,9 @@ public sealed class TrayApplication : ApplicationContext
         {
             _disposed = true;
             _orchestrator.StateChanged -= OnStateChanged;
+            _orchestrator.ProductUiChanged -= OnProductUiChanged;
             _orchestrator.Dispose();
-            _glow.Dispose();
+            _ui.Dispose();
             _trayIcon.Visible = false;
             _trayIcon.Dispose();
             _currentIcon?.Dispose();

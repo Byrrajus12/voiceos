@@ -16,7 +16,7 @@ internal sealed class GlowPreviewApplication : ApplicationContext
         Application.Idle -= OnFirstIdle;
         SynchronizationContext context = SynchronizationContext.Current
             ?? throw new InvalidOperationException("WinForms UI context unavailable.");
-        Console.WriteLine("Alpha preview: D=full demo, H=Clarify path, X=Error path, L=Listening, U=Understanding, A=Acting, S=Success, C=Clarify, E=Error, I=Idle, F=save frame, Q=quit. Press Enter.");
+        Console.WriteLine("Alpha preview: D=full demo, H=Clarify path, X=Error path, L=Listening, U=Understanding, A=Acting with text, N=Acting without text, S=Success, C=Clarify, E=Error, I=Idle, F=save frame, Q=quit. Press Enter.");
         _ = Task.Run(() =>
         {
             while (true)
@@ -56,7 +56,14 @@ internal sealed class GlowPreviewApplication : ApplicationContext
                 break;
             case "l": _ui.SetState(ProductUiState.Listening); break;
             case "u": _ui.SetState(ProductUiState.Understanding); break;
-            case "a": _ui.SetState(ProductUiState.Acting); break;
+            case "a":
+                _ui.SetActingMessage("Moving window…");
+                _ui.SetState(ProductUiState.Acting);
+                break;
+            case "n":
+                _ui.SetActingMessage(null);
+                _ui.SetState(ProductUiState.Acting);
+                break;
             case "s": _ui.SetState(ProductUiState.Success); break;
             case "c":
                 _ui.SetClarificationMessage("Which Chrome window?");
@@ -88,6 +95,7 @@ internal sealed class GlowPreviewApplication : ApplicationContext
             await Task.Delay(3000, cancellation);
             _ui.SetState(ProductUiState.Understanding);
             await Task.Delay(4000, cancellation);
+            _ui.SetActingMessage("Moving window…");
             _ui.SetState(ProductUiState.Acting);
             await Task.Delay(4000, cancellation);
             _ui.SetState(ProductUiState.Success);

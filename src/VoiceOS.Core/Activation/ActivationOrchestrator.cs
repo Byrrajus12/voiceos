@@ -51,6 +51,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
     private TextInsertionTarget _dictationTarget;
     private System.Threading.Timer? _graceTimer;
     private bool _disposed;
+    private long _uiGeneration;
+    private readonly AsyncLocal<long?> _uiRun = new();
 
     private DateTimeOffset _activationPressTime;
     private DateTimeOffset _recordingStartTime;
@@ -60,6 +62,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
     public event EventHandler<ActivationState>? StateChanged;
     public event EventHandler<InteractionStateChanged>? InteractionChanged;
     public event EventHandler<ApplicationInteractionSnapshotEventArgs>? InteractionSnapshotChanged;
+    public event EventHandler<ProductUiLifecycle>? ProductUiChanged;
 
     public ActivationOrchestrator(
         GlobalKeyboardHook commandHook,
@@ -95,6 +98,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         _textInsertion = textInsertion;
         _commandRouter = commandRouter;
         _browserInteraction = browserInteraction;
+        if (_browserInteraction is IBrowserActivitySource activity)
+            activity.ActionStarting += OnBrowserActionStarting;
         _browserTransport = browserTransport;
         _windowAwareLauncher = windowAwareLauncher;
 
@@ -158,7 +163,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             newState = GetContext(kind).State;
         }
 
-        PublishState(kind, newState);
+        if (pipeline is not null) PublishUi(ProductUiPhase.Understanding);
+        PublishState(kind, newState, updateUi: pipeline is null);
         if (pipeline is not null)
             _ = RunPipelineAsync(pipeline);
     }
@@ -181,7 +187,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             newState = GetContext(kind).State;
         }
 
-        PublishState(kind, newState);
+        if (pipeline is not null) PublishUi(ProductUiPhase.Understanding);
+        PublishState(kind, newState, updateUi: pipeline is null);
         if (pipeline is not null)
             _ = RunPipelineAsync(pipeline);
     }
@@ -224,6 +231,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                     }
                     else
                     {
+                        Interlocked.Increment(ref _uiGeneration);
                         _logger.LogInformation("{Kind} recording started", kind);
                     }
                     break;
@@ -280,11 +288,13 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         _dictationTarget = default;
         return pcm.Length == 0
             ? null
-            : new PipelineInput(kind, target, pcm, format, metadata, DateTimeOffset.UtcNow);
+            : new PipelineInput(kind, target, pcm, format, metadata, DateTimeOffset.UtcNow,
+                Volatile.Read(ref _uiGeneration));
     }
 
     private async Task RunPipelineAsync(PipelineInput input)
     {
+        _uiRun.Value = input.UiGeneration;
         var activationId = Guid.NewGuid().ToString("N");
         using var activationScope = _logger.BeginScope("activation_id={ActivationId}", activationId);
         var pipelineStart = input.PipelineStart;
@@ -475,6 +485,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                     && route.GoalShape == GoalShape.SurfaceOnly
                     && _windowAwareLauncher is not null)
                 {
+                    PublishUi(ProductUiPhase.Acting, "Opening app…");
                     var prepared = await _windowAwareLauncher.FocusOrLaunchAsync(
                         new AppTarget(appId), executionContext.OpenWindows, _shutdown.Token)
                         .ConfigureAwait(false);
@@ -595,7 +606,9 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                     try
                     {
                         programResult = await _programExecutor
-                            .ExecuteAsync(program, decisionState.OpenWindows, decisionState.Topology)
+                            .ExecuteAsync(program, decisionState.OpenWindows, decisionState.Topology,
+                                onStepStarting: step => PublishUi(ProductUiPhase.Acting,
+                                    ActivityMessage.ForStep(step, _catalog)))
                             .ConfigureAwait(false);
                     }
                     catch (Exception ex)
@@ -619,6 +632,15 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 transcription.Transcript,
                 programResult?.AllSucceeded == true ? "Completed" : "No direct action completed"));
         }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        {
+            PublishUi(ProductUiPhase.Idle);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Activation pipeline failed");
+            PublishUi(ProductUiPhase.Error, "Couldn't complete that action.");
+        }
         finally
         {
             var result = new PipelineResult(
@@ -626,7 +648,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 pipelineStart, sttStart, sttEnd, jevStart, jevEnd, DateTimeOffset.UtcNow,
                 programResult, input.Kind, insertionResult);
             LogPipelineSummary(result, activationId, lane, outcome, postSttStart, actionCount);
-            PublishState(input.Kind, ActivationState.Idle);
+            PublishState(input.Kind, ActivationState.Idle, updateUi: false);
         }
     }
 
@@ -702,8 +724,16 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
     private ActivationMode GetMode(InteractionKind kind)
         => kind == InteractionKind.Command ? _config.ActivationMode : _config.DictationActivationMode;
 
-    private void PublishState(InteractionKind kind, ActivationState state)
+    private void PublishState(InteractionKind kind, ActivationState state, bool updateUi = true)
     {
+        if (updateUi)
+            PublishUi(state switch
+            {
+                ActivationState.Recording => ProductUiPhase.Listening,
+                ActivationState.Stopping or ActivationState.Transcribing or ActivationState.Understanding
+                    => ProductUiPhase.Understanding,
+                _ => ProductUiPhase.Idle
+            });
         StateChanged?.Invoke(this, state);
         InteractionChanged?.Invoke(this, new(kind, state));
         var snapshot = state switch
@@ -722,7 +752,30 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
     }
 
     private void PublishSnapshot(ApplicationInteractionSnapshot snapshot)
-        => InteractionSnapshotChanged?.Invoke(this, new(snapshot));
+    {
+        switch (snapshot.Phase)
+        {
+            case ApplicationInteractionPhase.Succeeded:
+                PublishUi(ProductUiPhase.Success);
+                break;
+            case ApplicationInteractionPhase.NeedsChoice:
+                PublishUi(ProductUiPhase.Clarify, ActivityMessage.ForClarification(snapshot.Status));
+                break;
+            case ApplicationInteractionPhase.Failed:
+                PublishUi(ProductUiPhase.Error, ActivityMessage.ForFailure(snapshot.Status));
+                break;
+        }
+        InteractionSnapshotChanged?.Invoke(this, new(snapshot));
+    }
+
+    private void PublishUi(ProductUiPhase phase, string? message = null)
+    {
+        if (_uiRun.Value is { } run && run != Volatile.Read(ref _uiGeneration)) return;
+        ProductUiChanged?.Invoke(this, new(phase, message, _uiRun.Value ?? Volatile.Read(ref _uiGeneration)));
+    }
+
+    private void OnBrowserActionStarting(InteractionActionKind? action)
+        => PublishUi(ProductUiPhase.Acting, ActivityMessage.ForBrowserAction(action));
 
     public void Dispose()
     {
@@ -733,6 +786,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         _commandHook.KeyUp -= OnCommandKeyUp;
         _dictationHook.KeyDown -= OnDictationKeyDown;
         _dictationHook.KeyUp -= OnDictationKeyUp;
+        if (_browserInteraction is IBrowserActivitySource activity)
+            activity.ActionStarting -= OnBrowserActionStarting;
         _graceTimer?.Dispose();
         _commandHook.Dispose();
         _dictationHook.Dispose();
@@ -749,5 +804,6 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         byte[] Pcm,
         WaveFormat Format,
         RecordingMetadata Metadata,
-        DateTimeOffset PipelineStart);
+        DateTimeOffset PipelineStart,
+        long UiGeneration);
 }

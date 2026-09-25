@@ -12,14 +12,20 @@ public interface IBrowserInteractionService
     ValueTask<BrowserInteractionOutcome> ResumeAsync(string choiceId, CancellationToken cancellationToken = default);
 }
 
+public interface IBrowserActivitySource
+{
+    event Action<InteractionActionKind?>? ActionStarting;
+}
+
 public sealed class BrowserInteractionService(
     IChromeCompanionTransport transport,
     Decision.IJevGateway gateway,
     IBrowserGoalNormalizer? normalizer = null,
     ILogger<BrowserInteractionService>? logger = null,
     IBrowserTextValueResolver? textValues = null,
-    Func<nint, bool>? foregroundVerifier = null) : IBrowserInteractionService
+    Func<nint, bool>? foregroundVerifier = null) : IBrowserInteractionService, IBrowserActivitySource
 {
+    public event Action<InteractionActionKind?>? ActionStarting;
     private readonly InteractionEngine _engine = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
     private PendingRun? _pending;
@@ -44,6 +50,7 @@ public sealed class BrowserInteractionService(
             if (scope?.IsSurfaceOnly == true && scope.Kind == BrowserScopeKind.NewTaskTab
                 && scope.Destination is null)
             {
+                ActionStarting?.Invoke(null);
                 var owner = activationId ?? Guid.NewGuid().ToString("N");
                 var created = await transport.CreateNewTabAsync(owner, cancellationToken).ConfigureAwait(false);
                 return new(InteractionCompletionState.Complete, "Opened a new Chrome tab.", null,
@@ -51,6 +58,7 @@ public sealed class BrowserInteractionService(
             }
             if (scope?.IsSurfaceOnly == true && scope.FocusOnly && scope.TabId is int focusTab)
             {
+                ActionStarting?.Invoke(null);
                 var owner = scope.OwnerSessionId ?? activationId ?? Guid.NewGuid().ToString("N");
                 await SelectPreparedTabAsync(scope, owner, focusTab, false, cancellationToken)
                     .ConfigureAwait(false);
@@ -110,6 +118,7 @@ public sealed class BrowserInteractionService(
                     && !(foregroundVerifier ?? ForegroundMatches)(scope.ExpectedForegroundHandle))
                     return new(InteractionCompletionState.Incomplete,
                         "Chrome is no longer the foreground application.", null, null, null);
+                ActionStarting?.Invoke(null);
                 await SelectPreparedTabAsync(scope, sessionId, selectedTab,
                     scope.Kind == BrowserScopeKind.ActiveTab && !scope.ExplicitSelection,
                     cancellationToken).ConfigureAwait(false);
@@ -119,7 +128,8 @@ public sealed class BrowserInteractionService(
                         "Chrome lost foreground focus before browser observation.", null, null, null);
             }
             var surface = new BrowserSurface(transport, goal, decisions, sessionId: sessionId,
-                logger: logger, tabId: scope?.TabId, expectedFirstUrl: scope?.ExpectedUrl);
+                logger: logger, tabId: scope?.TabId, expectedFirstUrl: scope?.ExpectedUrl,
+                onActionStarting: action => ActionStarting?.Invoke(action));
             if (scope?.IsSurfaceOnly == true)
             {
                 var prepared = await surface.ObserveAsync(cancellationToken).ConfigureAwait(false);
