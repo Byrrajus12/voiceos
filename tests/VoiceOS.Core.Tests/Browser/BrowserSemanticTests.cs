@@ -98,14 +98,12 @@ public sealed class BrowserSemanticTests
         Assert.Equal(CommandRoute.ComputerUse, route.Route);
     }
 
-    [Theory]
-    [InlineData("search for chicken shawarma on Uber Eats", "https://www.ubereats.com/")]
-    [InlineData("play Runaway on YouTube", "https://www.youtube.com/")]
-    [InlineData("find ripgrep on GitHub", "https://github.com/")]
-    [InlineData("play Kendrick Lamar on Spotify", "https://open.spotify.com/")]
-    [InlineData("find a book on Unknown Service", "https://www.google.com/")]
-    public void BrowserGoal_UsesOnlyTrustedNamedServiceOrigin(string utterance, string expected)
-        => Assert.Equal(expected, BrowserGoal.BootstrapUrl(BrowserGoal.FromUtterance(utterance)));
+    [Fact]
+    public void BrowserGoal_UsesOnlyTypedDestination()
+    {
+        var goal = new BrowserGoal("show the product") { ScopedDestination = new("https://example.org/") };
+        Assert.Equal("https://example.org/", BrowserGoal.BootstrapUrl(goal));
+    }
 
     [Fact]
     public void BrowserGoal_NormalizedServiceResolvesWithoutTrustingModelUrl()
@@ -350,6 +348,23 @@ public sealed class BrowserSemanticTests
     }
 
     [Fact]
+    public async Task NamedTabFocusLogsAtomicMetadataVerification()
+    {
+        var log = new CaptureLogger();
+        var service = new BrowserInteractionService(new StaticTransport(),
+            new FakeGateway((_, _) => throw new Exception("No semantic call expected")),
+            logger: log);
+        var outcome = await service.RunAsync("Focus the Andre Karpathy tab", scope: new(
+            BrowserScopeKind.ExistingNamedTab, 8,
+            "https://www.google.com/search?q=Andre+Karpathy", FocusOnly: true,
+            EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly,
+            ExpectedTitle: "Andre Karpathy - Google Search"));
+        Assert.Equal(InteractionCompletionState.Complete, outcome.Completion);
+        Assert.Contains(log.Messages, message => message.Contains("candidate_id=tab_8")
+            && message.Contains("atomic_url_title_verification=passed"));
+    }
+
+    [Fact]
     public async Task Router_SeparatesNativeInteractionFromBrowser()
     {
         var gateway = new FakeGateway((_, _) => Answers(("route", Choice("NATIVE_INTERACTION", .96)),
@@ -421,19 +436,11 @@ public sealed class BrowserSemanticTests
     }
 
     [Fact]
-    public void BrowserGoal_ParsesNamedServiceHint()
+    public void BrowserGoal_DoesNotInferScopeFromWords()
     {
-        var goal = BrowserGoal.FromUtterance("find chicken sandwiches on Uber Eats");
-        Assert.Equal("Uber Eats", goal.NamedServiceHint);
+        var goal = BrowserGoal.FromUtterance("visit https://example.org on a service");
         Assert.Null(goal.ExplicitUrl);
-        Assert.False(goal.ExplicitCurrentTabIntent);
-    }
-
-    [Fact]
-    public void BrowserGoal_ParsesExplicitUrl()
-    {
-        var goal = BrowserGoal.FromUtterance("open https://github.com/ripgrep");
-        Assert.Equal("https://github.com/ripgrep", goal.ExplicitUrl!.AbsoluteUri);
+        Assert.Null(goal.NamedServiceHint);
     }
 
     [Fact]
@@ -448,58 +455,27 @@ public sealed class BrowserSemanticTests
             BrowserTextCandidates.From(goal).Select(candidate => candidate.Text));
     }
 
-    [Theory]
-    [InlineData("search Kendrick Lamar")]
-    [InlineData("search Andrew Huberman")]
-    [InlineData("open https://example.com/")]
-    [InlineData("https://example.com/")]
-    public void Grounding_SkipsSingleLiteralInteraction(string utterance)
-    {
-        Assert.True(BrowserGrounding.IsSufficient(BrowserGoal.FromUtterance(utterance), out _));
-    }
-
-    [Theory]
-    [InlineData("search for Kendrick Lamar and play something")]
-    [InlineData("search for the React repository and open it")]
-    [InlineData("find the official React documentation for useEffect")]
-    [InlineData("find a flight to Miami next Friday")]
-    [InlineData("Find the Ripcrap repository on github")]
-    [InlineData("open https://example.com/ and read the latest post")]
-    public void Grounding_NormalizesGoalsBeyondSingleLiteralInteraction(string utterance)
-    {
-        Assert.False(BrowserGrounding.IsSufficient(BrowserGoal.FromUtterance(utterance), out _));
-    }
+    [Fact]
+    public void TextCandidatesRequireSemanticNormalization()
+        => Assert.Empty(BrowserTextCandidates.From(BrowserGoal.FromUtterance("look something up")));
 
     [Fact]
-    public void Grounding_OrdinalReferenceNeedsVisibleOrderedLinks()
-    {
-        var goal = BrowserGoal.FromUtterance("open the second one");
-        Assert.False(BrowserGrounding.IsSufficient(goal, out _));
-        var click = new InteractionAction("click", InteractionActionKind.Activate, "e1");
-        var observation = new InteractionObservation(1, "results", "visible search results",
-        [
-            new("e1", "link 'First result'", [click]),
-            new("e2", "link 'Second result'", [click with { TargetId = "e2" }])
-        ]);
-        Assert.True(BrowserGrounding.IsSufficient(goal, out _, observation));
-    }
-
-    [Fact]
-    public async Task Service_SkipsOrCallsNormalizerOnceAndPreservesRawGoal()
+    public async Task Service_NormalizesEveryActionGoalAndPreservesRawGoal()
     {
         var normalizer = new FakeNormalizer();
+        var seen = new List<string>();
         var gateway = new FakeGateway((state, _) =>
         {
             var json = JsonSerializer.Serialize(state);
-            Assert.Contains("Find the Ripcrap repository on github", json);
-            Assert.Contains("ripgrep", json);
+            seen.Add(json);
             return Answers(("operation", Choice("BLOCKED", .99)), ("stuck", Noul(.99)));
         });
         var service = new BrowserInteractionService(new StaticTransport(), gateway, normalizer);
         await service.RunAsync("search for Andrew Huberman");
-        Assert.Equal(0, normalizer.Calls);
-        await service.RunAsync("Find the Ripcrap repository on github");
         Assert.Equal(1, normalizer.Calls);
+        await service.RunAsync("Find the Ripcrap repository on github");
+        Assert.Equal(2, normalizer.Calls);
+        Assert.Contains(seen, x => x.Contains("Find the Ripcrap repository on github") && x.Contains("ripgrep"));
     }
 
     [Fact]
@@ -509,11 +485,67 @@ public sealed class BrowserSemanticTests
         var transport = new StaticTransport();
         var gateway = new FakeGateway((_, _) => Answers(
             ("operation", Choice("BLOCKED", .99)), ("stuck", Noul(.99))));
-        var service = new BrowserInteractionService(transport, gateway);
+        var service = new BrowserInteractionService(transport, gateway, new FakeNormalizer());
 
         await service.RunAsync("search hello world", activationId: activationId);
 
         Assert.Equal(activationId, transport.LastSession);
+    }
+
+    [Fact]
+    public async Task NewTabOnlyUsesNormalChromeTabWithoutGoalModel()
+    {
+        var transport = new StaticTransport();
+        var gateway = new FakeGateway((_, _) => throw new Exception("No action decision expected"));
+        var service = new BrowserInteractionService(transport, gateway);
+        var outcome = await service.RunAsync("make a fresh tab", scope: new(
+            BrowserScopeKind.NewTaskTab, EndState: SemanticEndState.SurfaceReady,
+            GoalShape: GoalShape.SurfaceOnly));
+        Assert.Equal(InteractionCompletionState.Complete, outcome.Completion);
+        Assert.Equal(1, transport.NormalTabs);
+        Assert.Equal(0, transport.Opens);
+    }
+
+    [Fact]
+    public async Task SurfaceOnlySelectionCompletesWithoutNormalization()
+    {
+        var transport = new StaticTransport();
+        var normalizer = new FakeNormalizer();
+        var service = new BrowserInteractionService(transport,
+            new FakeGateway((_, _) => throw new Exception("No action decision expected")),
+            normalizer);
+        var result = await service.RunAsync("bring that tab forward", scope: new(
+            BrowserScopeKind.ExistingNamedTab, 42, "https://www.google.com/",
+            FocusOnly: true, EndState: SemanticEndState.SurfaceReady,
+            GoalShape: GoalShape.SurfaceOnly));
+        Assert.Equal(InteractionCompletionState.Complete, result.Completion);
+        Assert.Equal(0, normalizer.Calls);
+        Assert.Equal(1, transport.Selections);
+    }
+
+    [Theory]
+    [InlineData(BrowserScopeKind.ActiveTab, "on this page, change the selected option")]
+    [InlineData(BrowserScopeKind.ExistingNamedTab, "use the open project tab and update the view")]
+    [InlineData(BrowserScopeKind.ActiveTab, "in this tab, find an item and open its details")]
+    public async Task SurfaceReferenceWithRemainingGoalRunsSemanticExecution(
+        BrowserScopeKind kind, string utterance)
+    {
+        var transport = new StaticTransport();
+        var normalizer = new FakeNormalizer();
+        var calls = 0;
+        var gateway = new FakeGateway((_, _) =>
+        {
+            calls++;
+            return Answers(("operation", Choice("BLOCKED", .99)), ("stuck", Noul(.99)));
+        });
+        var service = new BrowserInteractionService(transport, gateway, normalizer);
+        var result = await service.RunAsync(utterance, scope: new(kind, 42,
+            "https://www.google.com/", EndState: SemanticEndState.SurfaceReady,
+            GoalShape: GoalShape.ActionOnSurface));
+        Assert.NotEqual(InteractionCompletionState.Complete, result.Completion);
+        Assert.Equal(1, normalizer.Calls);
+        Assert.Equal(1, transport.Selections);
+        Assert.True(calls > 0);
     }
 
     [Fact]
@@ -538,6 +570,22 @@ public sealed class BrowserSemanticTests
         var service = new BrowserInteractionService(new StaticTransport(), gateway, normalizer);
         await service.RunAsync("search for Kendrick Lamar and play something");
         Assert.Equal(1, normalizer.Calls);
+    }
+
+
+    [Fact]
+    public async Task ActiveChromeDisappearsBeforeExecution_StopsBeforeSelection()
+    {
+        var transport = new StaticTransport();
+        var service = new BrowserInteractionService(transport,
+            new FakeGateway((_, _) => throw new Exception("No semantic call expected")),
+            foregroundVerifier: _ => false);
+        var scope = new BrowserExecutionScope(BrowserScopeKind.ActiveTab, 7,
+            "https://www.google.com/", ExplicitSelection: true,
+            RequireForegroundChrome: true, ExpectedForegroundHandle: 42);
+        var result = await service.RunAsync("search React", scope: scope);
+        Assert.Equal(InteractionCompletionState.Incomplete, result.Completion);
+        Assert.Equal(0, transport.Opens);
     }
 
     [Fact]
@@ -739,6 +787,21 @@ public sealed class BrowserSemanticTests
     {
         public string? LastSession { get; private set; }
         public int Opens { get; private set; }
+        public int NormalTabs { get; private set; }
+        public int Selections { get; private set; }
+        public ValueTask SelectTabAsync(string sessionId, int tabId, string expectedUrl,
+            bool requireActive, CancellationToken cancellationToken = default)
+        {
+            Selections++;
+            return ValueTask.CompletedTask;
+        }
+        public ValueTask<BrowserTabInfo> CreateNewTabAsync(string sessionId,
+            CancellationToken cancellationToken = default)
+        {
+            NormalTabs++;
+            return ValueTask.FromResult(new BrowserTabInfo(52, 1, true, "chrome://newtab/",
+                "New Tab", BrowserTabProvenance.VoiceOs, sessionId, 1));
+        }
         public ValueTask<BrowserSnapshot> OpenTaskTabAsync(string sessionId, string url, CancellationToken cancellationToken = default)
         {
             Opens++;

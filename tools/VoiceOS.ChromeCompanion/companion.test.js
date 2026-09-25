@@ -37,6 +37,54 @@ test("surface-only new tab delegates to Chrome default behavior", async () => {
   assert.equal(focusCalls[1][2].focused, true);
 });
 
+test("one attributable active child tab is adopted; ambiguous topology stops", async () => {
+  async function run(createdTabs) {
+    const event = () => ({ addListener() {}, removeListener() {} });
+    const sourceTab = { id: 7, windowId: 2, active: true, status: "complete",
+      url: "https://source.example/" };
+    const tabs = new Map([[7, sourceTab]]);
+    const chrome = {
+      runtime: { id: "extension", connectNative: () => ({ onMessage: event(), onDisconnect: event(), postMessage() {} }),
+        onStartup: event(), onInstalled: event() },
+      alarms: { onAlarm: event(), clear: async () => {}, create() {} },
+      action: { onClicked: event() },
+      storage: { session: { get: async () => ({}), set: async () => {} } },
+      tabs: { onRemoved: event(), onUpdated: event(), onActivated: event(),
+        get: async id => tabs.get(id), query: async () => [...tabs.values()],
+        sendMessage: async (id, message) => {
+          if (message.type === "VOICEOS_ACT") {
+            sourceTab.active = false;
+            for (const child of createdTabs) tabs.set(child.id, child);
+            return { navigation: { method: "element.click", href: "https://child.example/" } };
+          }
+          if (message.type === "VOICEOS_PING") return { ok: true };
+          return { revision: "r1", url: tabs.get(id).url, title: "Child",
+            visibleText: "destination", truncated: false, viewport: {}, elements: [] };
+        } },
+      windows: { onFocusChanged: event(), getLastFocused: async () => ({ id: 2 }) },
+      webNavigation: { onBeforeNavigate: event(), onCommitted: event(), onCompleted: event(),
+        onErrorOccurred: event(), onHistoryStateUpdated: event() },
+      scripting: { executeScript: async () => {} }
+    };
+    const context = vm.createContext({ chrome, console: { info() {}, warn() {} }, setTimeout, clearTimeout, URL });
+    vm.runInContext(source("background.js"), context);
+    vm.runInContext('ownedTaskTabs.set(7, "session-0007"); waitForClickEffects = async () => {}', context);
+    const action = 'actInOwnedTab({ tabId: 7, sessionId: "session-0007", revision: "r1", action: "CLICK", elementRef: "e1" })';
+    return { context, action };
+  }
+  const one = await run([{ id: 9, windowId: 2, openerTabId: 7, active: true,
+    status: "complete", url: "https://child.example/" }]);
+  const adopted = await vm.runInContext(one.action, one.context);
+  assert.equal(adopted.snapshot.tabId, 9);
+  assert.equal(adopted.snapshot.adoptedFromTabId, 7);
+  const many = await run([
+    { id: 9, windowId: 2, openerTabId: 7, active: true, url: "https://child.example/" },
+    { id: 10, windowId: 2, openerTabId: 7, active: false, url: "https://other.example/" }
+  ]);
+  await assert.rejects(vm.runInContext(many.action, many.context),
+    error => error.code === "TAB_TOPOLOGY_AMBIGUOUS");
+});
+
 test("tab inventory is metadata only and selection checks the observed URL and activity", async () => {
   const listeners = new Map();
   let domMessages = 0;

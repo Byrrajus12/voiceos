@@ -1,13 +1,14 @@
 using VoiceOS.Core.Interaction;
 using Microsoft.Extensions.Logging;
 using System.Diagnostics;
+using VoiceOS.Core.Candidates;
 
 namespace VoiceOS.Core.Browser;
 
 public interface IBrowserInteractionService
 {
     ValueTask<BrowserInteractionOutcome> RunAsync(string utterance, CancellationToken cancellationToken = default,
-        string? activationId = null);
+        string? activationId = null, BrowserExecutionScope? scope = null);
     ValueTask<BrowserInteractionOutcome> ResumeAsync(string choiceId, CancellationToken cancellationToken = default);
 }
 
@@ -16,31 +17,49 @@ public sealed class BrowserInteractionService(
     Decision.IJevGateway gateway,
     IBrowserGoalNormalizer? normalizer = null,
     ILogger<BrowserInteractionService>? logger = null,
-    IBrowserTextValueResolver? textValues = null) : IBrowserInteractionService
+    IBrowserTextValueResolver? textValues = null,
+    Func<nint, bool>? foregroundVerifier = null) : IBrowserInteractionService
 {
     private readonly InteractionEngine _engine = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
     private PendingRun? _pending;
 
     public async ValueTask<BrowserInteractionOutcome> RunAsync(
-        string utterance, CancellationToken cancellationToken = default, string? activationId = null)
+        string utterance, CancellationToken cancellationToken = default, string? activationId = null,
+        BrowserExecutionScope? scope = null)
     {
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
             var framingTimer = Stopwatch.StartNew();
-            var goal = BrowserGoal.FromUtterance(utterance);
-            if (goal.ExplicitCurrentTabIntent)
+            var goal = new BrowserGoal(utterance) with
             {
-                logger?.LogInformation("Browser scope=current_tab outcome=unsupported");
-                return new(InteractionCompletionState.Uncertain,
-                    "Current-tab control is not enabled in this milestone; VoiceOS only acts in a task-owned tab.",
-                    [new("cancel", "Cancel")], null, null);
+                ScopedDestination = scope?.Destination,
+                NamedServiceHint = scope?.NamedServiceHint
+            };
+            if (scope?.RequireForegroundChrome == true
+                && !(foregroundVerifier ?? ForegroundMatches)(scope.ExpectedForegroundHandle))
+                return new(InteractionCompletionState.Incomplete,
+                    "Chrome is no longer the foreground application.", null, null, null);
+            if (scope?.IsSurfaceOnly == true && scope.Kind == BrowserScopeKind.NewTaskTab
+                && scope.Destination is null)
+            {
+                var owner = activationId ?? Guid.NewGuid().ToString("N");
+                var created = await transport.CreateNewTabAsync(owner, cancellationToken).ConfigureAwait(false);
+                return new(InteractionCompletionState.Complete, "Opened a new Chrome tab.", null,
+                    created.Url, created.Title);
             }
-            var grounded = BrowserGrounding.IsSufficient(goal, out var reason);
+            if (scope?.IsSurfaceOnly == true && scope.FocusOnly && scope.TabId is int focusTab)
+            {
+                var owner = scope.OwnerSessionId ?? activationId ?? Guid.NewGuid().ToString("N");
+                await SelectPreparedTabAsync(scope, owner, focusTab, false, cancellationToken)
+                    .ConfigureAwait(false);
+                return new(InteractionCompletionState.Complete, "Focused the requested browser tab.",
+                    null, scope.ExpectedUrl, null);
+            }
             framingTimer.Stop();
             var normalizationTimer = Stopwatch.StartNew();
-            if (!grounded)
+            if (scope?.IsSurfaceOnly != true)
             {
                 BrowserGoalNormalization? normalized = null;
                 try
@@ -52,26 +71,31 @@ public sealed class BrowserInteractionService(
                 catch { /* A provider failure cannot turn an ungrounded request into a literal query. */ }
                 if (normalized is null)
                 {
-                    logger?.LogWarning("Browser normalization=failed reason={Reason}", reason);
+                    logger?.LogWarning("Browser normalization=failed");
                     return new(InteractionCompletionState.Uncertain,
                         "I could not safely clarify the browser goal. Please rephrase the destination and what to find.",
                         [new("cancel", "Cancel")], null, null);
                 }
+                if (scope?.GoalShape == GoalShape.ActionOnSurface
+                    && normalized.EndState == SemanticEndState.SurfaceReady)
+                    return new(InteractionCompletionState.Uncertain,
+                        "The semantic goal still requires an action, but normalization identified only a surface.",
+                        [new("cancel", "Cancel")], null, null);
                 goal = goal with { Normalization = normalized };
                 logger?.LogInformation("Browser normalization=used reason={Reason} objective={Objective} service={Service} entity={Entity} queries={Queries} corrections={Corrections}",
-                    reason, normalized.Objective, normalized.PreferredService,
+                    "semantic_goal", normalized.Objective, normalized.PreferredService,
                     normalized.Entity, string.Join(" | ", normalized.SearchQueries),
                     string.Join(" | ", normalized.CorrectedTerms.Select(x => $"{x.Heard}->{x.Interpreted} ({x.Confidence:F2})")));
             }
-            else logger?.LogInformation("Browser normalization=skipped reason={Reason} candidate_count={CandidateCount}",
-                reason, BrowserTextCandidates.From(goal).Count);
+            else logger?.LogInformation("Browser normalization=skipped reason=surface_only");
             normalizationTimer.Stop();
             var destinationTimer = Stopwatch.StartNew();
             var destination = BrowserGoal.BootstrapUrl(goal);
             destinationTimer.Stop();
-            logger?.LogInformation("Browser stage framing_ms={FramingMs:F0} normalization_ms={NormalizationMs:F0} destination_ms={DestinationMs:F0} scope=task_owned_tab destination_origin={Destination} destination_reason={DestinationReason}",
+            logger?.LogInformation("Browser stage framing_ms={FramingMs:F0} normalization_ms={NormalizationMs:F0} destination_ms={DestinationMs:F0} scope={Scope} destination_origin={Destination} destination_reason={DestinationReason}",
                 framingTimer.Elapsed.TotalMilliseconds,
                 normalizationTimer.Elapsed.TotalMilliseconds, destinationTimer.Elapsed.TotalMilliseconds,
+                scope?.Kind.ToString() ?? "NewTaskTab",
                 new Uri(destination).GetLeftPart(UriPartial.Authority),
                 goal.ExplicitUrl is not null ? "explicit_url"
                 : ServiceResolver.Resolve(goal.NamedServiceHint) is not null ? "named_service"
@@ -79,7 +103,30 @@ public sealed class BrowserInteractionService(
                 : "web_discovery");
             var decisions = new TypeSafeBrowserDecisionSource(gateway, goal, logger: logger,
                 textValues: textValues);
-            var surface = new BrowserSurface(transport, goal, decisions, sessionId: activationId, logger: logger);
+            var sessionId = scope?.OwnerSessionId ?? activationId ?? Guid.NewGuid().ToString("N");
+            if (scope?.TabId is int selectedTab)
+            {
+                if (scope.RequireForegroundChrome
+                    && !(foregroundVerifier ?? ForegroundMatches)(scope.ExpectedForegroundHandle))
+                    return new(InteractionCompletionState.Incomplete,
+                        "Chrome is no longer the foreground application.", null, null, null);
+                await SelectPreparedTabAsync(scope, sessionId, selectedTab,
+                    scope.Kind == BrowserScopeKind.ActiveTab && !scope.ExplicitSelection,
+                    cancellationToken).ConfigureAwait(false);
+                if (scope.RequireForegroundChrome
+                    && !(foregroundVerifier ?? ForegroundMatches)(scope.ExpectedForegroundHandle))
+                    return new(InteractionCompletionState.Incomplete,
+                        "Chrome lost foreground focus before browser observation.", null, null, null);
+            }
+            var surface = new BrowserSurface(transport, goal, decisions, sessionId: sessionId,
+                logger: logger, tabId: scope?.TabId, expectedFirstUrl: scope?.ExpectedUrl);
+            if (scope?.IsSurfaceOnly == true)
+            {
+                var prepared = await surface.ObserveAsync(cancellationToken).ConfigureAwait(false);
+                _ = prepared;
+                return new(InteractionCompletionState.Complete, "The requested browser surface is ready.",
+                    null, surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title);
+            }
             return await RunSurfaceAsync(goal, surface, decisions, cancellationToken).ConfigureAwait(false);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -154,9 +201,38 @@ public sealed class BrowserInteractionService(
             result.Progress.Decisions, result.Progress.Actions, BrowserSurface.LogOrigin(surface.LatestSnapshot?.Url));
         return new(result.Completion, result.Detail, result.Choices,
             surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title,
-            result.Progress.Decisions, result.Progress.Actions);
+            result.Progress.Decisions, result.Progress.Actions, surface.TabId, surface.SessionId,
+            goal.Normalization?.Objective);
     }
 
     private sealed record PendingRun(BrowserGoal Goal, BrowserSurface Surface,
         TypeSafeBrowserDecisionSource Decisions, InteractionRunResult Result);
+
+    private async ValueTask SelectPreparedTabAsync(BrowserExecutionScope scope, string sessionId,
+        int tabId, bool requireActive, CancellationToken cancellationToken)
+    {
+        if (scope.ExpectedTitle is { } title)
+        {
+            try
+            {
+                await transport.SelectTabWithTitleAsync(sessionId, tabId, scope.ExpectedUrl!, title,
+                    requireActive, cancellationToken).ConfigureAwait(false);
+                logger?.LogInformation("Named tab candidate_id=tab_{TabId} atomic_url_title_verification=passed", tabId);
+            }
+            catch (Exception ex)
+            {
+                logger?.LogWarning("Named tab candidate_id=tab_{TabId} atomic_url_title_verification=failed reason={Reason}",
+                    tabId, ex is ChromeCompanionException companion ? companion.Code : ex.GetType().Name);
+                throw;
+            }
+            return;
+        }
+        await transport.SelectTabAsync(sessionId, tabId, scope.ExpectedUrl!, requireActive,
+            cancellationToken).ConfigureAwait(false);
+    }
+
+    private static bool ForegroundMatches(nint expectedHandle)
+        => expectedHandle != 0 && CandidateBuilder.GetOpenWindows().Any(window =>
+            window.Hwnd == expectedHandle && window.IsForeground
+            && window.ProcessName.Equals("chrome", StringComparison.OrdinalIgnoreCase));
 }

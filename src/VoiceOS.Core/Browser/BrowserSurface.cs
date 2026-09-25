@@ -25,16 +25,20 @@ public sealed class BrowserSurface : IInteractionSurface
     private readonly string _sessionId;
     private readonly Dictionary<long, BrowserSnapshot> _snapshots = [];
     private int? _tabId;
+    private string? _expectedFirstUrl;
     private long _revision;
 
     public BrowserSurface(IChromeCompanionTransport transport, BrowserGoal goal,
-        IBrowserCompletionEvaluator completion, string? sessionId = null, ILogger? logger = null)
+        IBrowserCompletionEvaluator completion, string? sessionId = null, ILogger? logger = null,
+        int? tabId = null, string? expectedFirstUrl = null)
     {
         _transport = transport;
         _logger = logger;
         _goal = goal;
         _completion = completion;
         _sessionId = sessionId ?? Guid.NewGuid().ToString("N");
+        _tabId = tabId;
+        _expectedFirstUrl = expectedFirstUrl;
     }
 
     public string SessionId => _sessionId;
@@ -52,6 +56,13 @@ public sealed class BrowserSurface : IInteractionSurface
         _logger?.LogInformation("Browser stage={Stage} transport_ms={ElapsedMs:F0}",
             startup ? "tab_startup_and_first_observation" : "observation", transportTimer.Elapsed.TotalMilliseconds);
         ValidateOwnership(snapshot);
+        if (_expectedFirstUrl is { } expected)
+        {
+            _expectedFirstUrl = null;
+            if (!StringComparer.Ordinal.Equals(snapshot.Url, expected))
+                throw new ChromeCompanionException("STALE_TAB",
+                    "The selected tab navigated before its first observation.");
+        }
         _tabId = snapshot.TabId;
         LatestSnapshot = snapshot;
         _logger?.LogInformation("Browser observation origin={Origin} revision={Revision}",
@@ -64,7 +75,7 @@ public sealed class BrowserSurface : IInteractionSurface
         var evidence = JsonSerializer.Serialize(new
         {
             original_goal = _goal.OriginalUtterance,
-            hints = new { _goal.NamedServiceHint, _goal.NearMe },
+            hints = new { _goal.NamedServiceHint },
             current_url = snapshot.Url,
             current_title = snapshot.Title,
             visible_text = snapshot.VisibleText,
@@ -116,7 +127,18 @@ public sealed class BrowserSurface : IInteractionSurface
             actionTimer.Stop();
             _logger?.LogInformation("Browser stage=action_transport operation={Operation} elapsed_ms={ElapsedMs:F0}",
                 protocolAction, actionTimer.Elapsed.TotalMilliseconds);
-            ValidateOwnership(next);
+            if (next.TabId != snapshot.TabId)
+            {
+                if (action.Kind != InteractionActionKind.Activate
+                    || next.AdoptedFromTabId != snapshot.TabId
+                    || !StringComparer.Ordinal.Equals(next.SessionId, _sessionId))
+                    throw new ChromeCompanionException("TAB_TOPOLOGY_AMBIGUOUS",
+                        "The action changed tabs without a verified task-surface transition.");
+                _tabId = next.TabId;
+                _logger?.LogInformation("Browser adopted task tab old={OldTab} new={NewTab}",
+                    snapshot.TabId, next.TabId);
+            }
+            else ValidateOwnership(next);
             LatestSnapshot = next;
             _logger?.LogInformation("Browser action operation={Operation} ref={Ref} outcome=success origin={Origin}",
                 protocolAction, action.TargetId, LogOrigin(next.Url));
@@ -129,6 +151,8 @@ public sealed class BrowserSurface : IInteractionSurface
             {
                 "STALE_REVISION" or "STALE_ELEMENT" => InteractionResultStatus.StaleTarget,
                 "TAB_NOT_OWNED" or "SESSION_MISMATCH" => InteractionResultStatus.ScopeViolation,
+                "TAB_TOPOLOGY_AMBIGUOUS" or "TRANSPORT_DISCONNECTED"
+                    => InteractionResultStatus.TopologyAmbiguous,
                 "ELEMENT_NOT_VISIBLE" or "ELEMENT_DISABLED" => InteractionResultStatus.TargetUnavailable,
                 _ => InteractionResultStatus.PlatformFailure
             };

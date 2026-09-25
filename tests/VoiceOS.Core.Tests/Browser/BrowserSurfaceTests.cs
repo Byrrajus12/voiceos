@@ -29,6 +29,20 @@ public sealed class BrowserSurfaceTests
     }
 
     [Fact]
+    public async Task SelectedTab_ObservesExistingSurfaceWithoutOpeningAnother()
+    {
+        var session = "selected-session";
+        var transport = new FakeTransport([ButtonSnapshot(session, 42, "e1")]);
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("search Kendrick Lamar"),
+            new NeverComplete(), session, tabId: 42);
+
+        await surface.ObserveAsync();
+
+        Assert.Equal(0, transport.OpenCount);
+        Assert.Equal(1, transport.ObserveCount);
+    }
+
+    [Fact]
     public async Task OutOfBoundsText_IsRejectedWithScopeViolation()
     {
         var sessionId = "test-session-b002";
@@ -54,7 +68,9 @@ public sealed class BrowserSurfaceTests
         var snapshot = EditableSnapshot(sessionId, 7, "q");
         var transport = new FakeTransport([snapshot, snapshot]);
 
-        var goal = BrowserGoal.FromUtterance("find ripgrep on GitHub");
+        var goal = BrowserGoal.FromUtterance("find ripgrep on GitHub") with {
+            Normalization = new("locate ripgrep", "ripgrep", "repository", "GitHub",
+                "https://github.com/", ["ripgrep"], "repository visible", []) };
         var surface = new BrowserSurface(transport, goal, new NeverComplete(), sessionId);
         var observation = await surface.ObserveAsync();
 
@@ -142,6 +158,56 @@ public sealed class BrowserSurfaceTests
         Assert.Equal("down", transport.LastAction?.Direction);
     }
 
+    [Fact]
+    public async Task SelectedTab_NavigationBeforeFirstObservation_FailsClosed()
+    {
+        var session = "test-session-selected";
+        var snapshot = ButtonSnapshot(session, 7, "e1") with { Url = "https://other.example/" };
+        var transport = new FakeTransport([snapshot]);
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("search React"),
+            new NeverComplete(), session, tabId: 7, expectedFirstUrl: "https://example.com/");
+
+        var failure = await Assert.ThrowsAsync<ChromeCompanionException>(
+            async () => await surface.ObserveAsync());
+        Assert.Equal("STALE_TAB", failure.Code);
+        Assert.Equal(1, transport.ObserveCount);
+    }
+
+    [Fact]
+    public async Task VerifiedChildTabBecomesTheTaskSurface()
+    {
+        const string session = "child-session-001";
+        var source = ButtonSnapshot(session, 7, "e1");
+        var child = ButtonSnapshot(session, 9, "e2") with {
+            Url = "https://destination.example/", AdoptedFromTabId = 7 };
+        var transport = new FakeTransport([source, child, child]);
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("open the resource"),
+            new NeverComplete(), session);
+        var observation = await surface.ObserveAsync();
+        var click = observation.Candidates.SelectMany(x => x.Actions)
+            .Single(x => x.Kind == InteractionActionKind.Activate);
+        Assert.True((await surface.ExecuteAsync(click, observation)).Succeeded);
+        await surface.ObserveAsync();
+        Assert.Equal(9, surface.TabId);
+        Assert.Equal(9, transport.LastObservedTabId);
+    }
+
+    [Fact]
+    public async Task UnverifiedTabTransitionStopsAsAmbiguous()
+    {
+        const string session = "child-session-002";
+        var transport = new FakeTransport([ButtonSnapshot(session, 7, "e1"),
+            ButtonSnapshot(session, 9, "e2")]);
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("open the resource"),
+            new NeverComplete(), session);
+        var observation = await surface.ObserveAsync();
+        var click = observation.Candidates.SelectMany(x => x.Actions)
+            .Single(x => x.Kind == InteractionActionKind.Activate);
+        var result = await surface.ExecuteAsync(click, observation);
+        Assert.Equal(InteractionResultStatus.TopologyAmbiguous, result.Status);
+        Assert.Equal(7, surface.TabId);
+    }
+
     private static BrowserSnapshot ButtonSnapshot(string sessionId, int tabId, string elemRef)
         => new(tabId, sessionId, "rev1", "https://example.com/", "Test Page", "Some visible text",
             false, Viewport, [new(elemRef, "button", "Click Me", true, false, null, null, Geo, "test context")]);
@@ -163,12 +229,22 @@ public sealed class BrowserSurfaceTests
     {
         private int _index;
         public BrowserActionRequest? LastAction { get; private set; }
+        public int OpenCount { get; private set; }
+        public int ObserveCount { get; private set; }
+        public int? LastObservedTabId { get; private set; }
 
         public ValueTask<BrowserSnapshot> OpenTaskTabAsync(string sessionId, string url, CancellationToken ct = default)
-            => ValueTask.FromResult(Next());
+        {
+            OpenCount++;
+            return ValueTask.FromResult(Next());
+        }
 
         public ValueTask<BrowserSnapshot> ObserveAsync(string sessionId, int tabId, CancellationToken ct = default)
-            => ValueTask.FromResult(Next());
+        {
+            ObserveCount++;
+            LastObservedTabId = tabId;
+            return ValueTask.FromResult(Next());
+        }
 
         public ValueTask<BrowserSnapshot> ActAsync(BrowserActionRequest action, CancellationToken ct = default)
         {

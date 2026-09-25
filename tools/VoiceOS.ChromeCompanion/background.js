@@ -304,6 +304,10 @@ async function actInOwnedTab(payload) {
   if (action === "CLICK" || action === "BACK")
     traceTask(tabId, "navigation-act", { action, elementRef: payload.elementRef });
 
+  const beforeTabs = action === "CLICK" || action === "BACK"
+    ? await chrome.tabs.query({}) : null;
+  const sourceTab = beforeTabs?.find(tab => tab.id === tabId);
+
   await ensureContentScript(tabId);
   const actionStart = Date.now();
   const actionResult = await sendContentMessage(tabId, {
@@ -317,9 +321,46 @@ async function actInOwnedTab(payload) {
       origin: safeOrigin(actionResult.navigation.href)
     });
   const readinessStart = Date.now();
-  if (action === "CLICK" || action === "BACK") await waitForClickEffects(tabId);
+  if (action === "CLICK" || action === "BACK")
+    await waitForClickEffects(tabId, new Set(beforeTabs.map(tab => tab.id)));
   else await delay(100);
   traceTask(tabId, "action-readiness", { action, elapsedMs: Date.now() - readinessStart });
+  if (beforeTabs) {
+    const afterTabs = await chrome.tabs.query({});
+    const priorIds = new Set(beforeTabs.map(tab => tab.id));
+    const created = afterTabs.filter(tab => !priorIds.has(tab.id));
+    const sourceAfter = afterTabs.find(tab => tab.id === tabId);
+    if (created.length > 0 || sourceAfter?.active === false) {
+      const child = created.length === 1 ? created[0] : null;
+      const attributable = child && child.active && Number.isInteger(child.id)
+        && (child.openerTabId === tabId
+          || (sourceTab?.windowId === child.windowId
+            && actionResult?.navigation?.href === child.url));
+      if (!attributable)
+        throw protocolError("TAB_TOPOLOGY_AMBIGUOUS",
+          "The browser action changed tabs without one verifiable task continuation.");
+      if (ownedTaskTabs.has(child.id) && ownedTaskTabs.get(child.id) !== sessionId)
+        throw protocolError("TAB_TOPOLOGY_AMBIGUOUS", "The new tab belongs to another task.");
+      try {
+        await waitForTabComplete(child.id, 15_000);
+        const finalChild = await chrome.tabs.get(child.id);
+        const focusedWindow = await chrome.windows.getLastFocused();
+        if (!finalChild.active || finalChild.windowId !== focusedWindow.id
+            || typeof finalChild.url !== "string")
+          throw protocolError("TAB_TOPOLOGY_AMBIGUOUS", "The new tab is not active or observable.");
+        parseAllowedUrl(finalChild.url);
+        ownedTaskTabs.set(child.id, sessionId);
+        await markTaskUsed(child.id);
+        traceTask(child.id, "task-tab-adopted", { fromTabId: tabId });
+        return { snapshot: { ...await observeOwnedTab({ tabId: child.id, sessionId }),
+          adoptedFromTabId: tabId } };
+      } catch {
+        throw protocolError("TAB_TOPOLOGY_AMBIGUOUS",
+          "The new tab could not be observed as the task continuation.");
+      }
+    }
+  }
+  await markTaskUsed(tabId);
   return { snapshot: await observeOwnedTab({ tabId, sessionId }) };
 }
 
@@ -358,8 +399,12 @@ async function ensureContentScript(tabId) {
   await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"] });
 }
 
-async function waitForClickEffects(tabId) {
+async function waitForClickEffects(tabId, priorIds = null) {
   await delay(350);
+  if (priorIds && (await chrome.tabs.query({})).some(tab => !priorIds.has(tab.id))) {
+    await delay(450);
+    return;
+  }
   const tab = await chrome.tabs.get(tabId);
   if (tab.status === "loading") await waitForTabComplete(tabId, 15_000);
   else await delay(450);

@@ -186,7 +186,7 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             _goal.Normalization.PreferredService, _goal.Normalization.PreferredServiceUrl,
             _goal.Normalization.CorrectedTerms
         },
-        hints = new { _goal.ExplicitUrl, _goal.NamedServiceHint, _goal.NearMe },
+        hints = new { _goal.ExplicitUrl, _goal.NamedServiceHint },
         fresh_dom_observation = observation.Evidence,
         recent_actions_and_effects = History(history),
         recent_visited_urls = history.TakeLast(10).SelectMany(entry => new[]
