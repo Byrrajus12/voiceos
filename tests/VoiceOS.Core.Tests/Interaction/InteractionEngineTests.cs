@@ -102,6 +102,34 @@ public sealed class InteractionEngineTests
         Assert.Equal(0, surface.ExecutionCount);
     }
 
+    [Fact]
+    public async Task RepeatedChangingPageWithoutGoalProgressStops()
+    {
+        var surface = new ChurningSurface();
+        var decisions = new FakeDecisions(
+            InteractionDecision.Act(Action) with { GoalConfidence = .1 },
+            InteractionDecision.Act(Action) with { GoalConfidence = .1 },
+            InteractionDecision.Act(Action) with { GoalConfidence = .1 },
+            InteractionDecision.Act(Action) with { GoalConfidence = .1 });
+        var result = await new InteractionEngine().RunAsync(new("change a setting"), surface,
+            decisions, new InteractionBudget(10, 10, 2));
+        Assert.Equal(InteractionCompletionState.Incomplete, result.Completion);
+        Assert.Equal(3, surface.ExecutionCount);
+        Assert.True(result.Progress.StateChanges >= 3);
+    }
+
+    [Fact]
+    public async Task AmbiguousTabTopologyStopsBeforeRepeatingSourceAction()
+    {
+        var surface = new FakeSurface(Observation("source"), [
+            InteractionActionResult.Fail(InteractionResultStatus.TopologyAmbiguous,
+                "Several tabs appeared")]);
+        var result = await Run(surface, new FakeDecisions(InteractionDecision.Act(Action)));
+        Assert.Equal(InteractionCompletionState.Uncertain, result.Completion);
+        Assert.Equal(1, surface.ExecutionCount);
+        Assert.Equal(1, result.Progress.Actions);
+    }
+
     private static ValueTask<InteractionRunResult> Run(
         FakeSurface surface,
         FakeDecisions decisions,
@@ -153,5 +181,28 @@ public sealed class InteractionEngineTests
             CompletionAssessmentCount++;
             return ValueTask.FromResult(completion ?? new(InteractionCompletionState.Complete));
         }
+    }
+
+    private sealed class ChurningSurface : IInteractionSurface
+    {
+        private int _observation;
+        public int ExecutionCount { get; private set; }
+        public ValueTask<InteractionObservation> ObserveAsync(CancellationToken cancellationToken = default)
+        {
+            var revision = ++_observation;
+            var evidence = $"{{\"current_url\":\"https://example.org/\",\"elements\":[{{\"version\":{revision}}}]}}";
+            return ValueTask.FromResult(new InteractionObservation(revision, $"s{revision}", evidence,
+                [new("save", "Save", [Action])]));
+        }
+        public ValueTask<InteractionActionResult> ExecuteAsync(InteractionAction action,
+            InteractionObservation observation, CancellationToken cancellationToken = default)
+        {
+            ExecutionCount++;
+            return ValueTask.FromResult(InteractionActionResult.Ok());
+        }
+        public ValueTask<InteractionCompletionAssessment> AssessCompletionAsync(InteractionGoal goal,
+            InteractionObservation observation, IReadOnlyList<InteractionHistoryEntry> recentHistory,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(new InteractionCompletionAssessment(InteractionCompletionState.Incomplete));
     }
 }

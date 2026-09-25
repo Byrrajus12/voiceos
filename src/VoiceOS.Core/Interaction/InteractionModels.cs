@@ -57,6 +57,7 @@ public enum InteractionResultStatus
     FocusMismatch,
     UnsupportedAction,
     ScopeViolation,
+    TopologyAmbiguous,
     PlatformFailure
 }
 
@@ -87,7 +88,8 @@ public sealed record InteractionDecision(
     InteractionCompletionState Completion,
     InteractionAction? Action = null,
     string? Detail = null,
-    IReadOnlyList<InteractionChoice>? Choices = null)
+    IReadOnlyList<InteractionChoice>? Choices = null,
+    double GoalConfidence = 0)
 {
     public static InteractionDecision Act(InteractionAction action, string? detail = null)
         => new(InteractionCompletionState.Incomplete, action, detail);

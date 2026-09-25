@@ -73,7 +73,8 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                     return Exit("unconfirmed_completion", "Completion lacks independent evidence.", ClarificationChoices(context.Observation));
                 }
                 _proposedCompletion = true;
-                return InteractionDecision.Done("Completion proposed from observed browser evidence.");
+                return InteractionDecision.Done("Completion proposed from observed browser evidence.")
+                    with { GoalConfidence = achieved };
             }
             if (operation.SelectedChoice == "BLOCKED")
             {
@@ -127,7 +128,7 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             }
             _logger?.LogInformation("Browser selected operation={Operation} target={Target} has_text={HasText}",
                 operation.SelectedChoice, action.TargetId, action.Text is not null);
-            return InteractionDecision.Act(action);
+            return InteractionDecision.Act(action) with { GoalConfidence = achieved };
 
             InteractionDecision Exit(string reason, string detail, IReadOnlyList<InteractionChoice>? choices = null)
             {
@@ -180,6 +181,7 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
         desired_state = _goal.Normalization is null ? null : new
         {
             _goal.Normalization.Objective, _goal.Normalization.CompletionHint,
+            _goal.Normalization.EndState,
             _goal.Normalization.Entity, _goal.Normalization.ResourceType,
             _goal.Normalization.PreferredService, _goal.Normalization.PreferredServiceUrl,
             _goal.Normalization.CorrectedTerms
@@ -195,7 +197,7 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
     };
 
     private static JevQuestionDto GoalQuestion() => new("noul",
-        "Independently judge whether the user's whole desired browser end state is visibly achieved in the CURRENT page. " +
+        "Independently judge whether the typed desired browser end state and semantic objective are visibly achieved in the CURRENT page. " +
         "Use URL, title, visible text, controls, and action outcomes. A search result link is not an opened destination. " +
         "Judge the observable destination semantically; do not depend on the operation answer.", null);
 

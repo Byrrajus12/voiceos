@@ -30,6 +30,8 @@ public sealed class InteractionEngine
         var history = new List<InteractionHistoryEntry>();
         var rejectedCompletionStates = new HashSet<string>(StringComparer.Ordinal);
         var progress = new InteractionProgress(0, 0, 0, 0);
+        double previousGoalConfidence = 0;
+        bool awaitingProgressJudgment = false;
         var observation = await surface.ObserveAsync(token).ConfigureAwait(false);
 
         while (progress.Decisions < budget.MaxDecisions && progress.Actions < budget.MaxActions)
@@ -38,6 +40,20 @@ public sealed class InteractionEngine
             var context = new InteractionDecisionContext(goal, observation, history.ToArray(), budget, progress);
             var decision = await decisions.DecideAsync(context, token).ConfigureAwait(false);
             progress = progress with { Decisions = progress.Decisions + 1 };
+            if (awaitingProgressJudgment)
+            {
+                var last = history.Last();
+                var sameActionRepeated = history.TakeLast(3).Count(x =>
+                    x.Action.Signature == last.Action.Signature) > 1;
+                var advanced = decision.GoalConfidence > previousGoalConfidence + .08
+                    || (!sameActionRepeated && HasRelevantStateChange(last));
+                progress = progress with { ConsecutiveNoProgress = advanced
+                    ? 0 : progress.ConsecutiveNoProgress + 1 };
+                awaitingProgressJudgment = false;
+                if (progress.ConsecutiveNoProgress >= budget.MaxConsecutiveNoProgress)
+                    return Finish(InteractionCompletionState.Incomplete,
+                        "The browser task stopped after consecutive actions without semantic progress.");
+            }
 
             if (decision.Completion == InteractionCompletionState.Uncertain)
                 return Finish(InteractionCompletionState.Uncertain, decision.Detail ?? "Completion is uncertain.", decision.Choices);
@@ -87,6 +103,7 @@ public sealed class InteractionEngine
                     decision.Detail ?? "No bounded action was selected.");
 
             var action = decision.Action;
+            previousGoalConfidence = decision.GoalConfidence;
             if (WasFailedWithoutStateChange(action, observation.StateKey))
             {
                 AddHistory(action,
@@ -116,6 +133,13 @@ public sealed class InteractionEngine
             }
 
             progress = progress with { Actions = progress.Actions + 1 };
+            if (result.Status == InteractionResultStatus.TopologyAmbiguous)
+            {
+                AddHistory(action, result, observation.StateKey, suppressed: false,
+                    observation.Evidence);
+                return Finish(InteractionCompletionState.Uncertain,
+                    result.Detail ?? "The browser action changed tabs ambiguously.");
+            }
             var next = await surface.ObserveAsync(token).ConfigureAwait(false);
             var changed = !StringComparer.Ordinal.Equals(observation.StateKey, next.StateKey);
             if (result.Succeeded && !changed)
@@ -126,13 +150,14 @@ public sealed class InteractionEngine
             progress = progress with
             {
                 StateChanges = progress.StateChanges + (changed ? 1 : 0),
-                ConsecutiveNoProgress = changed ? 0 : progress.ConsecutiveNoProgress + 1
+                ConsecutiveNoProgress = changed ? progress.ConsecutiveNoProgress
+                    : progress.ConsecutiveNoProgress + 1
             };
             observation = next;
-
             if (progress.ConsecutiveNoProgress >= budget.MaxConsecutiveNoProgress)
                 return Finish(InteractionCompletionState.Incomplete,
                     "The interaction stopped after reaching the no-progress budget.");
+            awaitingProgressJudgment = changed;
         }
 
         return Finish(InteractionCompletionState.Incomplete, "The interaction budget was exhausted.");
@@ -170,6 +195,23 @@ public sealed class InteractionEngine
             new("continue", "Keep going", "Continue interacting from the current page."),
             new("cancel", "Cancel", "Stop without taking another browser action.")
         ];
+
+        static bool HasRelevantStateChange(InteractionHistoryEntry entry)
+        {
+            if (!entry.Result.Succeeded || entry.ObservationStateKey == entry.ResultingStateKey)
+                return false;
+            try
+            {
+                using var before = System.Text.Json.JsonDocument.Parse(entry.ObservationEvidence!);
+                using var after = System.Text.Json.JsonDocument.Parse(entry.ResultingEvidence!);
+                var a = before.RootElement;
+                var b = after.RootElement;
+                return Changed("current_url") || Changed("current_title") || Changed("elements");
+                bool Changed(string property) => a.TryGetProperty(property, out var left)
+                    && b.TryGetProperty(property, out var right) && left.GetRawText() != right.GetRawText();
+            }
+            catch { return false; }
+        }
     }
 
     private static bool IsAdvertised(InteractionAction action, InteractionObservation observation)
