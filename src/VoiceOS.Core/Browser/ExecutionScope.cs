@@ -15,7 +15,8 @@ public sealed record BrowserTabInfo(int TabId, int WindowId, bool Active, string
 public sealed record ExecutionContextSnapshot(WindowCandidate? ForegroundWindow,
     IReadOnlyList<WindowCandidate> OpenWindows, bool BrowserConnected,
     IReadOnlyList<BrowserTabInfo> BrowserTabs, RecentTaskFrame? RecentTask = null,
-    IReadOnlyList<AppCandidate>? InstalledApps = null);
+    IReadOnlyList<AppCandidate>? InstalledApps = null,
+    Activation.FrontDoorContext? FrontDoor = null);
 
 public sealed record RecentTaskFrame(int TabId, string SessionId, string Url,
     string SemanticGoal, Interaction.InteractionCompletionState Completion,

@@ -461,30 +461,12 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         var trace = run.Trace = LatencyTrace.Begin(activationId);
 
         PublishState(kind, ActivationState.Understanding);
-        // Validate only the existing memory before showing it to interpretation. Full execution
-        // context collection stays after routing; the inventory is reused there when needed.
-        RecentTaskFrame? exposedRecentTask = null;
-        IReadOnlyList<BrowserTabInfo> recentInventory = [];
-        bool? recentInventoryKnown = null;
-        if (_recentTask is not null)
-        {
-            recentInventoryKnown = _browserTransport?.IsConnected == true;
-            if (recentInventoryKnown == true)
-            {
-                try { recentInventory = await _browserTransport!.ListTabsAsync(_shutdown.Token).ConfigureAwait(false); }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    _logger.LogWarning(ex, "Recent task inventory failed");
-                    recentInventoryKnown = false;
-                }
-            }
-            var validation = RecentTaskPolicy.Validate(_recentTask, recentInventoryKnown == true,
-                recentInventory, DateTimeOffset.UtcNow);
-            _recentTask = validation.Stored;
-            exposedRecentTask = validation.Exposed;
-            _logger.LogInformation("Recent task stored={Stored} exposed={Exposed} reason={Reason}",
-                _recentTask is not null, exposedRecentTask is not null, validation.Reason);
-        }
+        var collected = await ExecutionContextCollector.CollectAsync(transcript, _catalog, _topoService,
+            _browserTransport, _recentTask, trace, _logger, _shutdown.Token).ConfigureAwait(false);
+        _recentTask = collected.StoredRecentTask;
+        var executionContext = collected.Snapshot;
+        var decisionState = collected.DecisionState;
+        var exposedRecentTask = executionContext.RecentTask;
         CommandRouteDecision route;
         var routeTimer = Stopwatch.StartNew();
         try
@@ -526,44 +508,10 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 || route.RequestsNamedEntity && route.DestinationKind == SemanticDestinationKind.None))
             _browserInteraction?.PrefetchNormalization(transcript, activationId, _shutdown.Token);
 
-        ExecutionContextSnapshot executionContext;
-        var contextTimer = Stopwatch.StartNew();
-        if (route.Route is CommandRoute.ComputerUse or CommandRoute.NativeInteraction
-            || route.Route == CommandRoute.Clarify && route.Reason != RoutingReason.IncompleteIntent
-                && route.Reason != RoutingReason.RouterFailure
-            || route.MediaRequestKind == MediaRequestKind.ContentSelection)
+        executionContext = collected.Snapshot with
         {
-            var windows = CandidateBuilder.GetOpenWindows();
-            IReadOnlyList<BrowserTabInfo> tabs = [];
-            var connected = _browserTransport?.IsConnected == true;
-            if (recentInventoryKnown is { } known)
-            {
-                connected = known;
-                tabs = recentInventory;
-            }
-            else if (connected)
-            {
-                try { tabs = await _browserTransport!.ListTabsAsync(_shutdown.Token).ConfigureAwait(false); }
-                catch (Exception ex) when (ex is not OperationCanceledException)
-                {
-                    _logger.LogWarning(ex, "Browser scope inventory failed");
-                    connected = false;
-                }
-            }
-            var validation = RecentTaskPolicy.Validate(_recentTask, connected, tabs, DateTimeOffset.UtcNow);
-            _recentTask = validation.Stored;
-            var scopeRecentTask = RecentTaskPolicy.ExposedForScope(validation.Exposed, route);
-            _logger.LogInformation("Recent task stored={Stored} exposed={Exposed} reason={Reason}",
-                _recentTask is not null, scopeRecentTask is not null,
-                validation.Exposed is not null && scopeRecentTask is null ? "new_task_hidden" : validation.Reason);
-            executionContext = new(windows.FirstOrDefault(static w => w.IsForeground),
-                windows, connected, tabs, scopeRecentTask,
-                _catalog is null ? [] : CandidateBuilder.GetInstalledApps(_catalog));
-        }
-        else
-            executionContext = new(null, [], false, []);
-        contextTimer.Stop();
-        trace.Record("context", contextTimer.Elapsed.TotalMilliseconds);
+            RecentTask = RecentTaskPolicy.ExposedForScope(exposedRecentTask, route)
+        };
         run.ExecutionContext = executionContext;
         var scopeTimer = Stopwatch.StartNew();
         ExecutionScopeDecision executionScope;
@@ -670,34 +618,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
 
         PublishSnapshot(new(ApplicationInteractionPhase.Observing, kind,
             transcript, "Collecting direct capabilities"));
-        DecisionState? decisionState = null;
         if (_decisionEngine is not null || route.MediaOperation is not null)
         {
-            var windowsSw = Stopwatch.StartNew();
-            var windows = CandidateBuilder.GetOpenWindowsWithTimings(out var winTimings);
-            windowsSw.Stop();
-            var appsSw = Stopwatch.StartNew();
-            var apps = _catalog is not null
-                ? CandidateBuilder.GetInstalledApps(_catalog)
-                : (IReadOnlyList<AppCandidate>)[];
-            appsSw.Stop();
-            var topoSw = Stopwatch.StartNew();
-            var topology = _topoService?.CaptureTopology() ?? DisplayTopology.Empty;
-            topoSw.Stop();
-            var foreground = CandidateBuilder.GetForegroundAppName();
-            decisionState = new DecisionState(
-                transcript, foreground, apps, windows,
-                [MediaOperation.Play, MediaOperation.Pause, MediaOperation.Toggle, MediaOperation.Next, MediaOperation.Previous],
-                [SnapDirection.Left, SnapDirection.Right], topology);
-
-            _logger.LogInformation(
-                "Decision prep: windows={WindowsMs:F0}ms (enum={EnumMs:F0}ms proc={ProcMs:F0}ms aumid={AumidMs:F0}ms hit={CacheHits} miss={CacheMisses}) apps={AppsMs:F0}ms topo={TopoMs:F0}ms",
-                windowsSw.ElapsedMilliseconds, winTimings.EnumerateMs, winTimings.ProcessMs,
-                winTimings.AumidMs, winTimings.CacheHits, winTimings.CacheMisses,
-                appsSw.ElapsedMilliseconds, topoSw.ElapsedMilliseconds);
-            trace.Record("decision_prep", windowsSw.Elapsed.TotalMilliseconds
-                + appsSw.Elapsed.TotalMilliseconds + topoSw.Elapsed.TotalMilliseconds);
-
             if (route.MediaOperation is { } mediaOperation)
             {
                 var plan = new VoicePlan(VoiceAction.MediaControl, Media: mediaOperation, Confidence: 1);

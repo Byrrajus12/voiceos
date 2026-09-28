@@ -26,6 +26,9 @@ public static class DirectTargetPolicy
         => app?.ProcessName is { } process && BrowserHostProcesses.Contains(process)
             && app.LaunchArguments?.Contains("--app-id", StringComparison.OrdinalIgnoreCase) != true;
 
+    public static bool IsBrowserHostProcess(string? process)
+        => process is not null && BrowserHostProcesses.Contains(process);
+
     /// <summary>An installed app (including a PWA) that is the service itself, not its browser host.</summary>
     public static bool Represents(ServiceDescriptor service, AppEntry? app)
         => app is not null && !IsGenericBrowserHost(app) && ServiceResolver.IsRepresentedBy(service, app.DisplayName);
