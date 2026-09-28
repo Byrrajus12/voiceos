@@ -121,8 +121,7 @@ internal sealed class GlowPreviewApplication : ApplicationContext
             else
                 _ui.SetErrorMessage("Couldn't find that window");
             _ui.SetState(outcome);
-            await Task.Delay(3000, cancellation);
-            _ui.SetState(ProductUiState.Idle);
+            await Task.Delay(6500, cancellation);
             Console.WriteLine($"{outcome} path complete.");
         }
         catch (TaskCanceledException) { }

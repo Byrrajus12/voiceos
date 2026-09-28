@@ -30,7 +30,6 @@ internal sealed class StatePillOverlay : IDisposable
     private double _phase;
     private double _energy = 0.8;
     private long _lastTick;
-    private long _successAt;
     private bool _disposed;
     private volatile bool _rebuildPending;
 
@@ -67,7 +66,6 @@ internal sealed class StatePillOverlay : IDisposable
             _widthVelocity = 0;
         }
         _state = state;
-        _successAt = state == ProductUiState.Success ? Environment.TickCount64 : 0;
         _lastTick = Environment.TickCount64;
         if (state != ProductUiState.Idle) _topmostTimer.Start();
         else _topmostTimer.Stop();
@@ -109,9 +107,6 @@ internal sealed class StatePillOverlay : IDisposable
         long now = Environment.TickCount64;
         double dt = Math.Clamp((now - _lastTick) / 1000.0, 0, 0.08);
         _lastTick = now;
-        if (_state == ProductUiState.Success && now - _successAt >= 1300)
-            SetState(ProductUiState.Idle);
-
         bool shown = _state != ProductUiState.Idle;
         string message = CurrentMessage(_state);
         bool expanded = _state is ProductUiState.Clarify or ProductUiState.Error

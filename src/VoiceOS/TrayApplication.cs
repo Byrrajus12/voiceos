@@ -16,15 +16,17 @@ public sealed class TrayApplication : ApplicationContext
 
     private readonly ActivationOrchestrator _orchestrator;
     private readonly NotifyIcon _trayIcon;
-    private readonly ProductUiOverlay _ui = new();
+    private readonly ProductUiOverlay _ui;
     private SynchronizationContext? _uiContext;
     private Icon? _currentIcon;
     private bool _disposed;
     private long _lastUiGeneration;
 
-    public TrayApplication(ActivationOrchestrator orchestrator)
+    public TrayApplication(ActivationOrchestrator orchestrator,
+        Microsoft.Extensions.Logging.ILogger? productUiLogger = null)
     {
         _orchestrator = orchestrator;
+        _ui = new ProductUiOverlay(productUiLogger);
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("Exit", null, (_, _) => Application.Exit());
