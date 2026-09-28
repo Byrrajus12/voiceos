@@ -50,4 +50,5 @@ coverage/
 *.log
 
 # Docs
-docs/
+docs/*
+!docs/privacy-policy.md
