@@ -1,4 +1,5 @@
 using VoiceOS.Core.Decision;
+using VoiceOS.Core.Activation;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.Logging;
 
@@ -16,6 +17,11 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
     public async ValueTask<CommandRouteDecision> RouteAsync(
         string transcript, RecentTaskFrame? recentTask,
         CancellationToken cancellationToken = default)
+        => await RouteAsync(transcript, recentTask, null, cancellationToken).ConfigureAwait(false);
+
+    public async ValueTask<CommandRouteDecision> RouteAsync(
+        string transcript, RecentTaskFrame? recentTask, FrontDoorContext? context,
+        CancellationToken cancellationToken = default)
     {
         var criteria = new Dictionary<string, string>
         {
@@ -25,13 +31,16 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
             ["TEXT_TRANSFORM"] = "The utterance asks to rewrite, transform, or generate text rather than literally dictate it or operate a website.",
             ["CLARIFY"] = "The intent is materially ambiguous or cannot safely be assigned to another route."
         };
-        var answers = await gateway.AskAsync(
-            new { utterance = transcript, recentTask = recentTask is null ? null : new {
-                recentTask.SemanticGoal, recentTask.Completion, recentTask.LastUsed } },
+        object state = context is null
+            ? new { utterance = transcript, recentTask = recentTask is null ? null : new {
+                recentTask.SemanticGoal, recentTask.Completion, recentTask.LastUsed } }
+            : new { utterance = transcript, context = context.ToJevState() };
+        string Grounded(string text) => context is null ? "" : " " + text;
+        var answers = await gateway.AskAsync(state,
             new Dictionary<string, JevQuestionDto>
             {
                 ["route"] = new("choice",
-                    "Route the whole utterance before anything executes. DIRECT_CAPABILITY is valid only when native capabilities cover every requested action; never execute merely a native prefix of a larger web task.",
+                    "Route the whole utterance before anything executes. DIRECT_CAPABILITY is valid only when native capabilities cover every requested action; never execute merely a native prefix of a larger web task." + Grounded("Use context.named_matches and context.foreground: a named installed app or open window that is not a web service, operated with window/app verbs, is DIRECT_CAPABILITY. When installed-app and web-service matches coexist, retain the ambiguity rather than assuming either representation."),
                     criteria),
                 ["intent_completeness"] = new("choice",
                     "Independently decide whether this transcript expresses an action the user wants VoiceOS to perform now. Do not supply an implied verb for a standalone name or entity. A supplied recent task may resolve references, but cannot turn a bare entity into a command.",
@@ -78,7 +87,7 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
                     "Select an explicitly named service or product destination from this registry, independently of app/web preference and tab placement. Choose None for an implicit or unlisted destination. A literal URL is extracted separately; never generate a URL.",
                     ServiceResolver.DestinationChoices),
                 ["tab_disposition"] = new("choice",
-                    "Independently classify explicit browser surface intent; do not match or select an actual tab. CurrentTab means the user identifies the currently active browser surface. NewTab means the user explicitly requests a new browser tab or surface. ExistingNamedTab means the user refers to a particular already-open browser tab or surface as such, identifying it by descriptive identity, title, service, or name, even when that name is not a registered service. Content, an item, or a link to act on within a page is not a tab reference. A request to open or switch to a particular named tab is ExistingNamedTab, not CurrentTab. Naming a service, site, or place to go to, open, or use is a destination, classified by the separate destination head, and is not ExistingNamedTab unless the user also refers to an existing tab. Unspecified means no explicit browser surface disposition. Content actions on the current visible surface without explicit surface wording are handled by context_dependency.",
+                    "Independently classify explicit browser surface intent; do not match or select an actual tab. CurrentTab means the user identifies the currently active browser surface. NewTab means the user explicitly requests a new browser tab or surface. ExistingNamedTab means the user refers to a particular already-open browser tab or surface as such, identifying it by descriptive identity, title, service, or name, even when that name is not a registered service. Content, an item, or a link to act on within a page is not a tab reference. A request to open or switch to a particular named tab is ExistingNamedTab, not CurrentTab. Naming a service, site, or place to go to, open, or use is a destination, classified by the separate destination head, and is not ExistingNamedTab unless the user also refers to an existing tab. Unspecified means no explicit browser surface disposition. Content actions on the current visible surface without explicit surface wording are handled by context_dependency." + Grounded("context.browser.matching_tabs lists open tabs that plausibly match the wording; a reference matching none of them, or naming an item on the visible page, is not ExistingNamedTab."),
                     new Dictionary<string, string>
                     {
                         ["Unspecified"] = "No explicit browser surface disposition is expressed.",
@@ -103,13 +112,13 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
                     new Dictionary<string, string> { ["SurfaceOnly"] = "Opening, creating, selecting, or focusing the surface fully satisfies the request; no other action remains.",
                         ["ActionOnSurface"] = "A content, control, or state action remains after surface preparation, including multi-step tasks.",
                         ["Uncertain"] = "Cannot safely tell whether another action remains." }),
-                ["task_relation"] = new("choice", "Does this utterance semantically continue or correct the supplied recent task? A fresh independent request is NewTask. Manual focus changes alone do not end continuity.",
+                ["task_relation"] = new("choice", "Does this utterance semantically continue or correct the supplied recent task? A fresh independent request is NewTask. Manual focus changes alone do not end continuity." + Grounded("context.recent_task provides validated recent task metadata, including still_active_tab and seconds_ago. Use these facts to judge continuity; an absent frame cannot establish a required prior task."),
                     new Dictionary<string, string> { ["NewTask"] = "Independent task or explicit new destination.",
                         ["ContinueRecent"] = "Recent task is useful context or a preferred surface, but this request can still be executed independently if it is stale.",
                         ["RequiresRecent"] = "The requested object or change cannot be identified without the recent task; a stale frame requires clarification.",
                         ["Uncertain"] = "Relation cannot be established safely." }),
                 ["context_dependency"] = new("choice",
-                    "Does this goal depend on information, controls, ordering, or items visible on the current surface right now? Classify current-surface dependency only; do not choose a tab, app, or execution surface. A visible target can require the current surface even when the utterance does not explicitly name the page or tab. TaskRelation separately classifies continuity with earlier VoiceOS work. Explicit tab disposition and destination are decided by separate heads.",
+                    "Does this goal depend on information, controls, ordering, or items visible on the current surface right now? Classify current-surface dependency only; do not choose a tab, app, or execution surface. A visible target can require the current surface even when the utterance does not explicitly name the page or tab. TaskRelation separately classifies continuity with earlier VoiceOS work. Explicit tab disposition and destination are decided by separate heads." + Grounded("context.foreground and context.browser.active_tab describe what is visible now. Content, results, links or controls that plausibly belong to that visible page make the request RequiresCurrentSurface even when the page is not named. A disconnected companion provides no usable current browser surface."),
                     new Dictionary<string, string>
                     {
                         ["SelfContained"] = "The utterance contains enough information to understand the goal without relying on the currently visible surface, including a specific search or destination.",

@@ -475,7 +475,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             {
                 null => new CommandRouteDecision(CommandRoute.DirectCapability, 1, "No command router is configured."),
                 TypeSafeCommandRouter semantic => await semantic.RouteAsync(
-                    transcript, exposedRecentTask, _shutdown.Token).ConfigureAwait(false),
+                    transcript, exposedRecentTask, _config.FrontDoorGrounding ? executionContext.FrontDoor : null,
+                    _shutdown.Token).ConfigureAwait(false),
                 _ => await _commandRouter.RouteAsync(transcript, _shutdown.Token).ConfigureAwait(false)
             };
         }

@@ -199,7 +199,9 @@ public sealed class VoiceOSProduct : IDisposable
             .AddJsonFile("appsettings.json", optional: false, reloadOnChange: false)
             .Build();
 
-        return configuration.GetSection("VoiceOS").Get<VoiceOSConfig>() ?? new VoiceOSConfig();
+        var config = configuration.GetSection("VoiceOS").Get<VoiceOSConfig>() ?? new VoiceOSConfig();
+        config.ApplyEnvironmentOverrides();
+        return config;
     }
 
     private static int ResolveVirtualKey(string keyName) => keyName switch
