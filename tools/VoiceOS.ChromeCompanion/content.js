@@ -5,9 +5,33 @@
   const MAX_ELEMENTS = 100;
   const MAX_VISIBLE_TEXT = 3_500;
   const MAX_CONTEXT_TEXT = 180;
+  const CANDIDATE_SELECTOR = [
+    "a[href]", "button", "input", "textarea", "select", "summary",
+    "[contenteditable='true']", "[role='button']", "[role='link']",
+    "[role='tab']", "[role='menuitem']", "[role='option']",
+    "[role='searchbox']", "[role='combobox']", "[role='textbox']"
+  ].join(",");
   let observationCounter = 0;
   let currentRevision = null;
   let currentElements = new Map();
+  let observationSecrets = [];
+
+  let mutationCount = 0;
+  let lastMutationAt = now();
+  let loadCompleteAt = (typeof document !== "undefined" && document.readyState === "complete") ? now() : null;
+
+  try {
+    if (typeof MutationObserver !== "undefined" && typeof document !== "undefined") {
+      new MutationObserver(() => { mutationCount++; lastMutationAt = now(); })
+        .observe(document, { childList: true, subtree: true });
+    }
+  } catch { /* Not observable in this environment; SETTLE degrades to load-based checks. */ }
+
+  try {
+    document.addEventListener?.("readystatechange", () => {
+      if (document.readyState === "complete" && loadCompleteAt === null) loadCompleteAt = now();
+    });
+  } catch { /* No document to listen on. */ }
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
     try {
@@ -24,6 +48,10 @@
         sendResponse({ acted: true, navigation });
         return false;
       }
+      if (message?.type === "VOICEOS_SETTLE") {
+        settle(message).then(sendResponse).catch(() => sendResponse(settleErrorResponse()));
+        return true;
+      }
     } catch (error) {
       sendResponse({
         __voiceOSError: true,
@@ -35,18 +63,83 @@
     return false;
   });
 
+  function now() {
+    return typeof performance !== "undefined" && typeof performance.now === "function" ? performance.now() : Date.now();
+  }
+
+  function settleErrorResponse() {
+    return { settled: true, reason: "error", waitedMs: 0, mutations: mutationCount, actionable: false };
+  }
+
+  function settle(options) {
+    const quietMs = Number.isFinite(options?.quietMs) ? options.quietMs : 300;
+    const maxMs = Number.isFinite(options?.maxMs) ? options.maxMs : 2_000;
+    const requireActionable = Boolean(options?.requireActionable);
+    const startedAt = now();
+
+    return new Promise((resolve) => {
+      // Evaluated only once a timing condition holds, and sticky once true: the scan
+      // touches computed style for every candidate and is too costly to poll blindly.
+      let actionableSeen = !requireActionable;
+      const actionableNow = () => actionableSeen || (actionableSeen = hasActionable());
+      const finish = (reason) => resolve({
+        settled: true,
+        reason,
+        waitedMs: Math.round(now() - startedAt),
+        mutations: mutationCount,
+        actionable: actionableNow()
+      });
+      const check = () => {
+        try {
+          const elapsed = now() - startedAt;
+          const quiet = now() - lastMutationAt;
+          const complete = typeof document !== "undefined" && document.readyState === "complete";
+          const reason = quiet >= quietMs ? "quiet"
+            : complete && quiet >= Math.min(100, quietMs) ? "load_quiet"
+            : complete && loadCompleteAt !== null && (now() - loadCompleteAt) >= 300 ? "load_hold"
+            : null;
+          if (reason && actionableNow()) { finish(reason); return; }
+          if (elapsed >= maxMs) { finish("max"); return; }
+          setTimeout(check, 30);
+        } catch {
+          resolve(settleErrorResponse());
+        }
+      };
+      check();
+    });
+  }
+
+  function hasActionable() {
+    try {
+      const candidates = document.querySelectorAll(CANDIDATE_SELECTOR);
+      for (const element of candidates) {
+        if (!geometryOf(element)) continue;
+        if (isEditable(element) || isClickable(element)) return true;
+      }
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
   function observe() {
     observationCounter += 1;
     currentRevision = `${Date.now().toString(36)}-${observationCounter}-${randomToken()}`;
     currentElements = new Map();
 
-    const candidates = Array.from(document.querySelectorAll([
-      "a[href]", "button", "input", "textarea", "select", "summary",
-      "[contenteditable='true']", "[role='button']", "[role='link']",
-      "[role='tab']", "[role='menuitem']", "[role='option']",
-      "[role='searchbox']", "[role='combobox']", "[role='textbox']"
-    ].join(",")));
+    const candidates = Array.from(document.querySelectorAll(CANDIDATE_SELECTOR));
+    // Only explicit credential controls; this is not a general PII detector.
+    observationSecrets = candidates.filter(isCredentialControl)
+      .flatMap((element) => [String(element.value ?? ""), String(element.value ?? "").replace(/\s+/g, " ").trim()])
+      .filter(Boolean).sort((left, right) => right.length - left.length);
+    try {
+      return buildObservation(candidates);
+    } finally {
+      observationSecrets = [];
+    }
+  }
 
+  function buildObservation(candidates) {
     const visible = candidates
       .map((element, documentOrder) => ({ element, documentOrder, geometry: geometryOf(element) }))
       .filter((item) => item.geometry !== null)
@@ -68,22 +161,25 @@
         name: accessibleName(element),
         enabled: isEnabled(element),
         editable,
+        search: isSearchField(element),
         value: currentValue(element),
         geometry,
         context: nearbyContext(element)
       };
       if (element instanceof HTMLAnchorElement && element.href) {
-        result.href = element.href;
+        result.href = redactObservationText(element.href);
       }
       return result;
     });
 
+    const bodyText = normalizeText(document.body?.innerText ?? "");
+
     return {
       revision: currentRevision,
-      url: location.href,
-      title: document.title,
-      visibleText: normalizeText(document.body?.innerText ?? "").slice(0, MAX_VISIBLE_TEXT),
-      truncated: normalizeText(document.body?.innerText ?? "").length > MAX_VISIBLE_TEXT,
+      url: redactObservationText(location.href),
+      title: redactObservationText(document.title),
+      visibleText: bodyText.slice(0, MAX_VISIBLE_TEXT),
+      truncated: bodyText.length > MAX_VISIBLE_TEXT,
       viewport: {
         width: window.innerWidth,
         height: window.innerHeight,
@@ -110,9 +206,9 @@
     }
 
     if (message.action === "BACK") {
-      if (history.length <= 1) throw actionError("NO_HISTORY", "The task tab has no prior page.");
-      history.back();
-      return { method: "history.back" };
+      // Only the revision is checked here. The service worker performs the browser-level
+      // traversal and confirms it from navigation evidence; a page cannot report it.
+      return null;
     }
 
     const element = currentElements.get(message.elementRef);
@@ -216,6 +312,12 @@
     return element.tagName.toLowerCase();
   }
 
+  function isSearchField(element) {
+    if (roleOf(element) === "searchbox") return true;
+    if (element instanceof HTMLInputElement && element.type === "search") return true;
+    return typeof element.closest === "function" && element.closest("[role='search'], search") !== null;
+  }
+
   function accessibleName(element) {
     const ariaLabel = element.getAttribute("aria-label");
     if (ariaLabel?.trim()) return normalizeText(ariaLabel).slice(0, 240);
@@ -246,11 +348,25 @@
   }
 
   function currentValue(element) {
+    if (isCredentialControl(element)) return null;
     if (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement || element instanceof HTMLSelectElement) {
-      return String(element.value).slice(0, 1_000);
+      return redactObservationText(String(element.value)).slice(0, 1_000);
     }
     if (element.isContentEditable) return normalizeText(element.innerText).slice(0, 1_000);
     return null;
+  }
+
+  function isCredentialControl(element) {
+    if (!(element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) return false;
+    if (element instanceof HTMLInputElement && element.type.toLowerCase() === "password") return true;
+    const tokens = (element.getAttribute("autocomplete") ?? "").toLowerCase().split(/\s+/);
+    return tokens.some((token) => ["current-password", "new-password", "one-time-code", "cc-csc"].includes(token));
+  }
+
+  function redactObservationText(value) {
+    let text = String(value ?? "");
+    for (const secret of observationSecrets) text = text.split(secret).join("[redacted]");
+    return text;
   }
 
   function nearbyContext(element) {
@@ -282,7 +398,7 @@
   }
 
   function normalizeText(value) {
-    return String(value ?? "").replace(/\s+/g, " ").trim();
+    return redactObservationText(redactObservationText(value).replace(/\s+/g, " ").trim());
   }
 
   function randomToken() {
