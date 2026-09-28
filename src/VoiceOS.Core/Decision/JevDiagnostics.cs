@@ -1,7 +1,16 @@
+using Microsoft.Extensions.Logging;
+
 namespace VoiceOS.Core.Decision;
 
 public static class JevDiagnostics
 {
+    public static void Log(ILogger? logger, string stage, string head, JevAnswer answer)
+    {
+        if (answer.SelectedIsArgMax)
+            logger?.LogInformation("{Stage} {Summary}", stage, Summarize(head, answer));
+        else
+            logger?.LogWarning("{Stage} {Summary}", stage, Summarize(head, answer));
+    }
     public sealed record SummaryRecord(string Stage, string Head, string? Choice, double? P,
         string? RunnerUp, double? P2, double? Margin, double Confidence);
 
