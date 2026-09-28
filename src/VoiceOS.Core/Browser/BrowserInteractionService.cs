@@ -190,6 +190,7 @@ public sealed class BrowserInteractionService(
                 goal.ExplicitUrl is not null ? "explicit_url"
                 : ServiceResolver.Resolve(goal.NamedServiceHint) is not null ? "named_service"
                 : ServiceResolver.Resolve(goal.Normalization?.PreferredService) is not null ? "normalized_service"
+                : BrowserGoal.NormalizedServiceRoot(goal.Normalization) is not null ? "normalized_service_url"
                 : "web_discovery");
             var decisions = new TypeSafeBrowserDecisionSource(gateway, goal, logger: logger,
                 textValues: textValues);
@@ -313,6 +314,7 @@ public sealed class BrowserInteractionService(
             goal.ExplicitUrl is not null ? "explicit_url"
             : ServiceResolver.Resolve(goal.NamedServiceHint) is not null ? "named_service"
             : ServiceResolver.Resolve(goal.Normalization?.PreferredService) is not null ? "normalized_service"
+            : BrowserGoal.NormalizedServiceRoot(goal.Normalization) is not null ? "normalized_service_url"
             : "web_discovery");
 
         var decisions = new TypeSafeBrowserDecisionSource(gateway, goal, logger: logger, textValues: textValues);

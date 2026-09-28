@@ -10,6 +10,46 @@ namespace VoiceOS.Core.Tests.Browser;
 
 public sealed class BrowserSemanticTests
 {
+    [Fact]
+    public void BootstrapUrl_UsesCorroboratedNormalizedServiceUrl()
+        => Assert.Equal("https://www.imdb.com/", BrowserGoal.BootstrapUrl(new("Search IMDb for Dune",
+            Normalization: FakeNormalizer.Normalized with { PreferredService = "IMDb", PreferredServiceUrl = "https://www.imdb.com/" })));
+
+    [Fact]
+    public void BootstrapUrl_RegistryScopedAndExplicitStillWin()
+    {
+        var goal = new BrowserGoal("search", NamedServiceHint: "YouTube", Normalization:
+            FakeNormalizer.Normalized with { PreferredService = "IMDb", PreferredServiceUrl = "https://www.imdb.com/" });
+        Assert.Equal("https://www.youtube.com/", BrowserGoal.BootstrapUrl(goal));
+        goal = goal with { ScopedDestination = new("https://example.org/") };
+        Assert.Equal("https://example.org/", BrowserGoal.BootstrapUrl(goal));
+        Assert.Equal("https://example.com/", BrowserGoal.BootstrapUrl(goal with { ExplicitUrl = new("https://example.com/") }));
+    }
+
+    [Theory]
+    [InlineData("IMDb", "https://evil.example/")]
+    [InlineData(null, "https://www.imdb.com/")]
+    [InlineData("IMDb", "http://www.imdb.com/")]
+    [InlineData("IMDb", "https://www.imdb.com/title/123")]
+    [InlineData("IMDb", "https://user@www.imdb.com/")]
+    [InlineData("IMDb", "https://www.imdb.com/?q=x")]
+    [InlineData("IMDb", "https://www.imdb.com/#x")]
+    [InlineData("The New York Times", "https://www.nytimes.com/")]
+    public void BootstrapUrl_UncorroboratedOrInvalidUrl_FallsBackToGoogle(string? service, string url)
+        => Assert.Equal("https://www.google.com/", BrowserGoal.BootstrapUrl(new("search",
+            Normalization: FakeNormalizer.Normalized with { PreferredService = service, PreferredServiceUrl = url })));
+
+    [Fact]
+    public async Task SearchIMDb_OpensImdbTaskTab()
+    {
+        var transport = new StaticTransport();
+        var gateway = new FakeGateway((_, _) => Answers(("operation", Choice("BLOCKED", .99)), ("stuck", Noul(.99))));
+        var service = new BrowserInteractionService(transport, gateway, new FakeNormalizer { Result =
+            FakeNormalizer.Normalized with { PreferredService = "IMDb", PreferredServiceUrl = "https://www.imdb.com/" } });
+        await service.RunAsync("Search IMDb for Dune");
+        Assert.Equal("https://www.imdb.com/", transport.LastOpenUrl);
+    }
+
     [Theory]
     [InlineData("play", MediaOperation.Play)]
     [InlineData("play the song", MediaOperation.Play)]

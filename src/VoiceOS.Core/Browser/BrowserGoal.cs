@@ -22,8 +22,27 @@ public sealed record BrowserGoal(
            ?? goal.ScopedDestination?.AbsoluteUri
            ?? (ServiceResolver.Resolve(goal.NamedServiceHint)
                ?? ServiceResolver.Resolve(goal.Normalization?.PreferredService))?.WebOrigin.AbsoluteUri
+           ?? NormalizedServiceRoot(goal.Normalization)?.AbsoluteUri
            ?? "https://www.google.com/";
 
+    internal static Uri? NormalizedServiceRoot(BrowserGoalNormalization? normalized)
+        => normalized is not null && !string.IsNullOrWhiteSpace(normalized.PreferredService)
+            && Uri.TryCreate(normalized.PreferredServiceUrl, UriKind.Absolute, out var uri)
+            && uri.Scheme == Uri.UriSchemeHttps && uri.UserInfo.Length == 0
+            && uri.AbsolutePath == "/" && uri.Query.Length == 0 && uri.Fragment.Length == 0
+            && uri.HostNameType == UriHostNameType.Dns
+            && ServiceUrlCorroborates(normalized.PreferredService, uri) ? uri : null;
+
+    internal static bool ServiceUrlCorroborates(string service, Uri uri)
+    {
+        static string Compact(string text) => new(text.Where(char.IsAsciiLetterOrDigit).Select(char.ToLowerInvariant).ToArray());
+        var labels = uri.Host.Split('.');
+        if (labels.Length < 2) return false;
+        var host = Compact(labels[^2]);
+        var name = Compact(service);
+        return host.Length > 0 && name.Length > 0
+            && (host.Contains(name, StringComparison.Ordinal) || name.Contains(host, StringComparison.Ordinal));
+    }
 }
 
 public sealed record BrowserTextCandidate(string Id, string Text);
