@@ -29,9 +29,8 @@ public sealed class WindowsAppCatalog : IAppCatalog
 
     private IReadOnlyList<AppEntry> Discover()
     {
-        var seenIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var seenAumids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var entries = new List<AppEntry>();
+        var shortcuts = new List<AppEntry>();
+        var rejected = 0;
 
         var startMenuDirs = new[]
         {
@@ -41,25 +40,32 @@ public sealed class WindowsAppCatalog : IAppCatalog
                 "Microsoft", "Windows", "Start Menu", "Programs")
         };
 
-        foreach (var dir in startMenuDirs)
+        // Shell link and MSI shortcut resolution require a single-threaded apartment.
+        var scan = new Thread(() =>
         {
-            if (!Directory.Exists(dir)) continue;
-
-            foreach (var lnkPath in Directory.EnumerateFiles(dir, "*.lnk", SearchOption.AllDirectories))
+            foreach (var dir in startMenuDirs)
             {
-                var entry = TryBuildFromShortcut(lnkPath, seenIds, seenAumids);
-                if (entry != null) entries.Add(entry);
+                if (!Directory.Exists(dir)) continue;
+
+                foreach (var lnkPath in Directory.EnumerateFiles(dir, "*.lnk", SearchOption.AllDirectories))
+                {
+                    var entry = TryBuildFromShortcut(lnkPath);
+                    if (entry != null) shortcuts.Add(entry);
+                    else rejected++;
+                }
             }
-        }
+        }) { IsBackground = true, Name = "AppCatalogShortcutScan" };
+        scan.SetApartmentState(ApartmentState.STA);
+        scan.Start();
+        scan.Join();
 
-        // Seed well-known packaged (MSIX) apps that have no Start Menu .lnk shortcut.
-        foreach (var seeded in SeededPackagedApps)
-        {
-            if (seenIds.Add(seeded.Id))
-                entries.Add(seeded);
-        }
+        // Precedence: Start Menu shortcuts, then seeded packaged apps, then the packaged apps the
+        // shell lists in AppsFolder. Duplicates collapse by catalog ID and AUMID.
+        var packaged = EnumeratePackagedApps();
+        var entries = AppCatalogClassifier.Deduplicate(shortcuts.Concat(SeededPackagedApps).Concat(packaged));
 
-        _logger?.LogInformation("App catalog: {Count} entries discovered", entries.Count);
+        _logger?.LogInformation("App catalog: {Count} entries discovered ({Shortcuts} shortcuts, {Packaged} packaged candidates, {Rejected} non-launchable shortcuts rejected)",
+            entries.Count, shortcuts.Count, packaged.Count, rejected);
         return entries;
     }
 
@@ -71,41 +77,121 @@ public sealed class WindowsAppCatalog : IAppCatalog
             AppLaunchKind.PackagedApp, "Microsoft.WindowsTerminal_8wekyb3d8bbwe!App"),
     ];
 
-    private AppEntry? TryBuildFromShortcut(string lnkPath, HashSet<string> seenIds, HashSet<string> seenAumids)
+    /// <summary>
+    /// Packaged (MSIX/UWP) apps the shell lists in AppsFolder for the current user, e.g.
+    /// Calculator and Paint. Each is launched by AUMID through shell:AppsFolder; its process
+    /// name comes from the package manifest when declared.
+    /// </summary>
+    private List<AppEntry> EnumeratePackagedApps()
+    {
+        var result = new List<AppEntry>();
+        try
+        {
+            var manager = new global::Windows.Management.Deployment.PackageManager();
+            foreach (var package in manager.FindPackagesForUser(string.Empty))
+            {
+                try
+                {
+                    if (package.IsFramework || package.IsResourcePackage) continue;
+                    string? manifest = null;
+                    foreach (var app in package.GetAppListEntries())
+                    {
+                        var aumid = app.AppUserModelId;
+                        var name = app.DisplayInfo?.DisplayName;
+                        if (string.IsNullOrWhiteSpace(aumid) || string.IsNullOrWhiteSpace(name)
+                            || name.StartsWith("ms-resource:", StringComparison.OrdinalIgnoreCase)) continue;
+                        var id = MakeId(name);
+                        if (string.IsNullOrEmpty(id)) continue;
+                        manifest ??= ReadManifest(package.InstalledLocation?.Path);
+                        var appId = aumid[(aumid.IndexOf('!') + 1)..];
+                        var process = manifest is null ? null : AppCatalogClassifier.ManifestExecutableProcess(manifest, appId);
+                        result.Add(new AppEntry(id, name, process, AppLaunchKind.PackagedApp, aumid,
+                            AppUserModelId: aumid));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logger?.LogDebug(ex, "App catalog: skipped a packaged app");
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger?.LogWarning(ex, "App catalog: packaged app enumeration failed");
+        }
+        return result;
+    }
+
+    private static string? ReadManifest(string? installedLocation)
+    {
+        try
+        {
+            var path = installedLocation is null ? null : Path.Combine(installedLocation, "AppxManifest.xml");
+            return path is not null && File.Exists(path) ? File.ReadAllText(path) : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private AppEntry? TryBuildFromShortcut(string lnkPath)
     {
         try
         {
             var displayName = Path.GetFileNameWithoutExtension(lnkPath);
             var id = MakeId(displayName);
             if (string.IsNullOrEmpty(id)) return null;
-            if (!seenIds.Add(id)) return null;
 
-            var (targetPath, launchArguments) = ResolveShortcut(lnkPath);
+            var (targetPath, launchArguments, parsingName) = ResolveShortcut(lnkPath);
             var aumid = WindowPropertyStore.GetShortcutAumid(lnkPath);
-
-            // Skip if a different shortcut with the same AUMID was already added.
-            // This collapses shortcuts that represent the same logical app under a different display name.
-            if (aumid != null && !seenAumids.Add(aumid))
-                return null;
-
-            string? processName = null;
-            var launchTarget = lnkPath;
-
-            if (!string.IsNullOrEmpty(targetPath) &&
-                targetPath.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) &&
-                File.Exists(targetPath))
+            // An MSI advertised shortcut stores an icon path; the installer resolves its executable.
+            var target = ResolveAdvertisedTarget(lnkPath)
+                ?? (string.IsNullOrWhiteSpace(targetPath) ? null : Environment.ExpandEnvironmentVariables(targetPath));
+            var isFile = target is not null && File.Exists(target);
+            var facts = new ShortcutFacts(target, launchArguments, aumid, parsingName, isFile,
+                target is not null && Directory.Exists(target),
+                isFile && target!.EndsWith(".exe", StringComparison.OrdinalIgnoreCase) && IsConsoleImage(target));
+            var kind = AppCatalogClassifier.Classify(facts);
+            if (kind == ShortcutKind.Rejected)
             {
-                processName = Path.GetFileNameWithoutExtension(targetPath);
-                launchTarget = targetPath;
+                _logger?.LogDebug("App catalog: rejected non-launchable shortcut {Name} target={Target}",
+                    displayName, target ?? "-");
+                return null;
             }
 
-            return new AppEntry(id, displayName, processName, AppLaunchKind.Win32, launchTarget,
-                LaunchArguments: string.IsNullOrWhiteSpace(launchArguments) ? null : launchArguments,
-                AppUserModelId: aumid);
+            var args = string.IsNullOrWhiteSpace(launchArguments) ? null : launchArguments;
+            return kind switch
+            {
+                ShortcutKind.Executable or ShortcutKind.WebApp => new AppEntry(id, displayName,
+                    Path.GetFileNameWithoutExtension(target), AppLaunchKind.Win32, target!, args, aumid),
+                ShortcutKind.ConsoleExecutable => new AppEntry(id, displayName,
+                    Path.GetFileNameWithoutExtension(target), AppLaunchKind.Win32, target!, args, aumid,
+                    Host: AppHostKind.ConsoleHosted),
+                // Shell-namespace items have no own process; the shortcut itself is the launch target.
+                ShortcutKind.ShellNamespace => new AppEntry(id, displayName, null, AppLaunchKind.Win32,
+                    lnkPath, Host: AppHostKind.ShellNamespace),
+                _ => new AppEntry(id, displayName, null, AppLaunchKind.Win32, lnkPath, AppUserModelId: aumid)
+            };
         }
         catch
         {
             return null;
+        }
+    }
+
+    private static bool IsConsoleImage(string path)
+    {
+        try
+        {
+            using var stream = File.OpenRead(path);
+            var buffer = new byte[4096];
+            var read = stream.Read(buffer, 0, buffer.Length);
+            return AppCatalogClassifier.IsConsoleSubsystem(buffer.AsSpan(0, read));
+        }
+        catch
+        {
+            return false;
         }
     }
 
@@ -130,7 +216,7 @@ public sealed class WindowsAppCatalog : IAppCatalog
         return sb.ToString();
     }
 
-    private static (string? target, string? arguments) ResolveShortcut(string lnkPath)
+    private static (string? target, string? arguments, string? parsingName) ResolveShortcut(string lnkPath)
     {
         try
         {
@@ -147,13 +233,77 @@ public sealed class WindowsAppCatalog : IAppCatalog
             link.GetArguments(buf, buf.Capacity);
             var args = string.IsNullOrWhiteSpace(buf.ToString()) ? null : buf.ToString();
 
-            return (target, args);
+            string? parsingName = null;
+            if (target is null)
+            {
+                try
+                {
+                    link.GetIDList(out var pidl);
+                    if (pidl != IntPtr.Zero)
+                    {
+                        try
+                        {
+                            if (SHGetNameFromIDList(pidl, SIGDN_DESKTOPABSOLUTEPARSING, out var name) == 0)
+                            {
+                                parsingName = Marshal.PtrToStringUni(name);
+                                Marshal.FreeCoTaskMem(name);
+                            }
+                        }
+                        finally
+                        {
+                            Marshal.FreeCoTaskMem(pidl);
+                        }
+                    }
+                }
+                catch
+                {
+                    // No resolvable ID list.
+                }
+            }
+
+            return (target, args, parsingName);
         }
         catch
         {
-            return (null, null);
+            return (null, null, null);
         }
     }
+
+    /// <summary>The executable behind an MSI advertised (Darwin) shortcut, or null when the
+    /// shortcut is not advertised or its component is not installed locally.</summary>
+    private static string? ResolveAdvertisedTarget(string lnkPath)
+    {
+        try
+        {
+            var product = new StringBuilder(39);
+            var feature = new StringBuilder(39);
+            var component = new StringBuilder(39);
+            if (MsiGetShortcutTarget(lnkPath, product, feature, component) != 0) return null;
+            var size = 1024;
+            var path = new StringBuilder(size);
+            MsiGetComponentPath(product.ToString(), component.ToString(), path, ref size);
+            // The install state can report absent for per-user/per-machine mismatches while the
+            // key path exists; the classifier requires the resolved executable to exist.
+            return path.Length > 0 && File.Exists(path.ToString()) ? path.ToString() : null;
+        }
+        catch
+        {
+            return null;
+        }
+    }
+
+    private const uint SIGDN_DESKTOPABSOLUTEPARSING = 0x80028000;
+
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)]
+    private static extern int SHGetNameFromIDList(IntPtr pidl, uint sigdnName, out IntPtr ppszName);
+
+    [DllImport("msi.dll", CharSet = CharSet.Unicode)]
+    private static extern uint MsiGetShortcutTarget(string szShortcutTarget, StringBuilder szProductCode,
+        StringBuilder szFeatureId, StringBuilder szComponentCode);
+
+    [DllImport("msi.dll", CharSet = CharSet.Unicode)]
+    private static extern int MsiGetComponentPath(string szProduct, string szComponent,
+        StringBuilder lpPathBuf, ref int pcchBuf);
 
     // Shell Link CLSID: {00021401-0000-0000-C000-000000000046}
     [ComImport, Guid("00021401-0000-0000-C000-000000000046"), ClassInterface(ClassInterfaceType.None)]

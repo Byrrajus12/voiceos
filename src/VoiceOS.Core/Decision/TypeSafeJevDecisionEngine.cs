@@ -242,13 +242,15 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         string? appCandidateId = null;
         string? appProcessName = null;
         string? appUserModelId = null;
-        if (answers.TryGetValue("target_app", out var appAnswer) && appAnswer.SelectedChoice != null)
+        AppCandidate? appMatch = null;
+        if (answers.TryGetValue("target_app", out var appAnswer) && appAnswer.SelectedChoice != null
+            && appAnswer.SelectedChoice != NoAppChoice
+            && (appMatch = state.InstalledApps.FirstOrDefault(a => a.Id == appAnswer.SelectedChoice)) is { } selectedApp)
         {
-            var match = state.InstalledApps.FirstOrDefault(a => a.Id == appAnswer.SelectedChoice);
-            appCandidate = match?.DisplayName ?? appAnswer.SelectedChoice;
-            appCandidateId = match?.Id;
-            appProcessName = match?.ProcessName;
-            appUserModelId = match?.AppUserModelId;
+            appCandidate = selectedApp.DisplayName;
+            appCandidateId = selectedApp.Id;
+            appProcessName = selectedApp.ProcessName;
+            appUserModelId = selectedApp.AppUserModelId;
             if (action == VoiceAction.OpenApp)
                 confidence = Math.Min(confidence, appAnswer.Confidence);
         }
@@ -428,8 +430,11 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
 
         // For Named-mode window ops, carry the app candidate ID so PlanToStep can use AppTarget
         // (enabling execution-time ambiguity detection at the shared resolution boundary).
+        // The app is used only when its identity corroborates the resolved window; an unrelated
+        // forced app choice must never replace the exact resolved window.
         string? windowAppCandidateId = null;
-        if (isWindowTargetedAction && windowTargetMode == WindowTargetMode.Named)
+        if (isWindowTargetedAction && windowTargetMode == WindowTargetMode.Named
+            && AppCorroboratesWindow(appMatch, state.OpenWindows.FirstOrDefault(w => w.Id == windowCandidateId)))
             windowAppCandidateId = appCandidateId;
 
         return new VoicePlan(
@@ -454,6 +459,31 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             VolumeAdjustAmount: volumeAdjustAmount);
     }
 
+    /// <summary>The target_app choice key meaning no offered app is the target. A forced choice
+    /// over installed apps must never manufacture an executable target by itself.</summary>
+    public const string NoAppChoice = "none";
+
+    internal static Dictionary<string, string> AppChoices(DecisionState state)
+    {
+        var choices = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var app in state.InstalledApps)
+            if (app.Id != NoAppChoice) choices.TryAdd(app.Id, app.DisplayName);
+        if (choices.Count > 0)
+            choices[NoAppChoice] = "No offered application is the named target; the requested app is not installed or not listed.";
+        return choices;
+    }
+
+    /// <summary>A named window operation may carry an app target only when that app's identity
+    /// corroborates the already-resolved window; otherwise the resolved window itself is the target.</summary>
+    internal static bool AppCorroboratesWindow(AppCandidate? app, WindowCandidate? window)
+    {
+        if (app is null || window is null) return false;
+        if (app.AppUserModelId is not null && window.AppUserModelId is not null)
+            return string.Equals(app.AppUserModelId, window.AppUserModelId, StringComparison.OrdinalIgnoreCase);
+        return app.ProcessName is not null
+            && string.Equals(app.ProcessName, window.ProcessName, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static readonly string[] Ordinals = ["first", "second", "third", "fourth"];
     private static string Ordinal(int i) => i >= 1 && i <= 4 ? Ordinals[i - 1] : i.ToString();
 
@@ -465,7 +495,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
     public JevRequestDto BuildBaseRequest(DecisionState state)
     {
         var textCandidates = TextCandidateExtractor.Extract(state.Transcript);
-        var appCandidates = state.InstalledApps.ToDictionary(a => a.Id, a => a.DisplayName);
+        var appCandidates = AppChoices(state);
         var windowCandidates = state.OpenWindows.ToDictionary(w => w.Id, w => w.Title);
 
         var questions = new Dictionary<string, JevQuestionDto>
@@ -507,7 +537,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
                     ["Pause"] = "Pause or stop playback (e.g. 'pause', 'pause this', 'stop')",
                     ["Toggle"] = "Toggle play/pause state",
                     ["Next"] = "Skip to next track (e.g. 'next', 'skip this', 'next song', 'skip')",
-                    ["Previous"] = "Go to previous track (e.g. 'previous', 'go back', 'last song')",
+                    ["Previous"] = "Go to previous track (e.g. 'previous track', 'previous song', 'last song')",
                 }),
 
             ["snap_dir"] = new JevQuestionDto(
@@ -575,7 +605,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         {
             questions["target_app"] = new JevQuestionDto(
                 "choice",
-                "Which application is the target of the command?",
+                "Which application is the target of the command? Choose an offered app only when it is the application the user names or refers to. Choose none when the named application is not offered; never substitute a different app.",
                 appCandidates);
         }
 
@@ -603,7 +633,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
     /// </summary>
     public JevRequestDto BuildCompoundRequest(DecisionState state)
     {
-        var appCandidates = state.InstalledApps.ToDictionary(a => a.Id, a => a.DisplayName);
+        var appCandidates = AppChoices(state);
         var textCandidates = TextCandidateExtractor.Extract(state.Transcript);
 
         var questions = new Dictionary<string, JevQuestionDto>
@@ -736,7 +766,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             {
                 questions[$"unit_{i}_target_app"] = new JevQuestionDto(
                     "choice",
-                    $"Which application is the target of the {ord} action unit in `utterance`?",
+                    $"Which application is the target of the {ord} action unit in `utterance`? Choose none when the named application is not offered; never substitute a different app.",
                     appCandidates);
             }
         }

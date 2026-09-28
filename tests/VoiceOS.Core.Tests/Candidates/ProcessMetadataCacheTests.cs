@@ -138,6 +138,25 @@ public class ProcessMetadataCacheTests
         Assert.Equal(0, cache.Count);
     }
 
+    // ── Package identity is cached with the name; unpackaged processes have none ──
+
+    [Fact]
+    public void GetProcessIdentity_CachesPackageAumidWithName()
+    {
+        var accessor = new FakeProcessAccessor();
+        accessor.AddProcess(7, "Spotify", "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify");
+        accessor.AddProcess(8, "Code");
+        var cache = new ProcessMetadataCache(accessor);
+
+        var first = cache.GetProcessIdentity(7, out _);
+        var second = cache.GetProcessIdentity(7, out var hit);
+
+        Assert.Equal(("Spotify", "SpotifyAB.SpotifyMusic_zpdnekdrzrea0!Spotify"), first);
+        Assert.Equal(first, second);
+        Assert.True(hit);
+        Assert.Null(cache.GetProcessIdentity(8, out _).PackageAumid);
+    }
+
     // ── Fake accessor ────────────────────────────────────────────────────────────
 
     private sealed class FakeProcessAccessor : IProcessAccessor
@@ -148,10 +167,10 @@ public class ProcessMetadataCacheTests
 
         public int OpenCount { get; private set; }
 
-        public void AddProcess(int pid, string name)
+        public void AddProcess(int pid, string name, string? packageAumid = null)
         {
             nint handle = _nextHandle++;
-            var p = new FakeProcess(name, handle, alive: true);
+            var p = new FakeProcess(name, handle, alive: true) { PackageAumid = packageAumid };
             _byPid[pid] = p;
             _byHandle[handle] = p;
         }
@@ -183,6 +202,9 @@ public class ProcessMetadataCacheTests
             return false;
         }
 
+        public string? GetPackageAumid(nint handle)
+            => _byHandle.TryGetValue(handle, out var p) && p.Alive ? p.PackageAumid : null;
+
         public bool HasExited(nint handle)
             => !(_byHandle.TryGetValue(handle, out var p) && p.Alive);
 
@@ -193,6 +215,7 @@ public class ProcessMetadataCacheTests
             public string Name { get; } = name;
             public nint Handle { get; } = handle;
             public bool Alive { get; set; } = alive;
+            public string? PackageAumid { get; init; }
         }
     }
 }

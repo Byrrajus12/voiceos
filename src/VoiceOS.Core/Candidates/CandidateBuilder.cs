@@ -51,7 +51,7 @@ public static class CandidateBuilder
             string title = titleBuf.ToString();
 
             sw.Restart();
-            string processName = GetProcessName(hWnd, out bool hit);
+            var (processName, processAumid) = GetProcessIdentity(hWnd, out bool hit);
             sw.Stop();
             processMs += sw.ElapsedMilliseconds;
             if (hit) cacheHits++; else cacheMisses++;
@@ -68,7 +68,8 @@ public static class CandidateBuilder
                 IsForeground: hWnd == foreground,
                 Hwnd: hWnd,
                 AppUserModelId: aumid,
-                ExecutablePath: null));
+                ExecutablePath: null,
+                ProcessAppUserModelId: processAumid));
 
             return true;
         }, IntPtr.Zero);
@@ -83,6 +84,21 @@ public static class CandidateBuilder
         return windows;
     }
 
+    /// <summary>
+    /// Tests one HWND against the current foreground window without a full EnumWindows pass.
+    /// Semantics match the visible/titled-window predicate GetOpenWindows uses.
+    /// </summary>
+    public static bool IsForegroundProcessWindow(nint hwnd, string processName)
+    {
+        if (hwnd == 0) return false;
+        var handle = (IntPtr)hwnd;
+        if (GetForegroundWindow() != handle) return false;
+        if (!IsWindowVisible(handle)) return false;
+        var buf = new StringBuilder(512);
+        if (GetWindowText(handle, buf, buf.Capacity) == 0) return false;
+        return string.Equals(GetProcessName(handle, out _), processName, StringComparison.OrdinalIgnoreCase);
+    }
+
     public static string GetForegroundAppName()
     {
         var hWnd = GetForegroundWindow();
@@ -94,17 +110,20 @@ public static class CandidateBuilder
     }
 
     private static string GetProcessName(IntPtr hWnd, out bool cacheHit)
+        => GetProcessIdentity(hWnd, out cacheHit).ProcessName;
+
+    private static (string ProcessName, string? PackageAumid) GetProcessIdentity(IntPtr hWnd, out bool cacheHit)
     {
         cacheHit = false;
         try
         {
             GetWindowThreadProcessId(hWnd, out uint pid);
-            if (pid == 0) return string.Empty;
-            return _processCache.GetProcessName((int)pid, out cacheHit);
+            if (pid == 0) return (string.Empty, null);
+            return _processCache.GetProcessIdentity((int)pid, out cacheHit);
         }
         catch
         {
-            return string.Empty;
+            return (string.Empty, null);
         }
     }
 
