@@ -1,0 +1,123 @@
+// Short bounded multi-step browser tasks (discover -> navigate -> open). No forms submitted,
+// no sign-in, no purchases. Each should need roughly 2-4 actions; the ceiling is asserted as
+// an efficiency check (Partial) only where a runaway loop would clearly be wrong.
+[
+  {
+    "id": "multi.restaurant-menu",
+    "name": "Find a restaurant chain's menu page",
+    "family": "browser-multistep",
+    "tags": ["generalization", "browser", "chrome", "discovery"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Find the menu for Shake Shack.",
+    "timeoutSeconds": 120,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 1 },
+      "maxActions": 6,
+      // The menu opens in place on this SPA (URL stays https://shakeshack.com/#/), so the URL cannot
+      // show it. The last activated control must be the menu itself: landing on the homepage from a
+      // search result and declaring success leaves that result as the last activation and fails.
+      "final": { "activeTabOriginContains": "shakeshack.com", "lastActivatedTargetContains": "menu" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "multi.airline-baggage-policy",
+    "name": "Find a specific policy page on an airline site",
+    "family": "browser-multistep",
+    "tags": ["generalization", "browser", "chrome", "discovery"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "What's Delta's checked bag policy? Pull up their page on it.",
+    "timeoutSeconds": 120,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 1 },
+      "maxActions": 6,
+      "final": { "activeTabOriginContains": "delta.com", "activeTabUrlContains": "bag" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    // Careers pages may live on a third-party job host, so only the path is asserted.
+    "id": "multi.company-careers",
+    "name": "Find a public company's careers page",
+    "family": "browser-multistep",
+    "tags": ["generalization", "browser", "chrome", "discovery"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Show me where I can see open jobs at Nvidia.",
+    "timeoutSeconds": 120,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 1 },
+      "maxActions": 6,
+      "final": { "activeTabUrlContains": "career" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "multi.framework-docs-topic",
+    "name": "Find a specific topic in official framework docs",
+    "family": "browser-multistep",
+    "tags": ["generalization", "browser", "chrome", "docs"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Find the Django documentation on model fields.",
+    "timeoutSeconds": 120,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 1 },
+      "maxActions": 6,
+      "final": { "activeTabOriginContains": "djangoproject.com", "activeTabUrlContains": "fields" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "multi.movie-to-imdb-title",
+    "name": "Look up a film and land on its IMDb title page",
+    "family": "browser-multistep",
+    "tags": ["generalization", "browser", "chrome", "discovery"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Look up Oppenheimer and open its IMDb page.",
+    "timeoutSeconds": 120,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 1 },
+      "maxActions": 6,
+      "final": { "activeTabUrlContains": "imdb.com/title/tt15398776" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    // "The Lodge one" may reasonably be lodgecastiron.com or a retailer listing for a Lodge
+    // skillet; both contain "lodge" in the URL.
+    "id": "multi.product-by-brand",
+    "name": "Search a product category and open a named brand's result",
+    "family": "browser-multistep",
+    "tags": ["generalization", "browser", "chrome", "results", "shopping-readonly"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Search for a cast iron skillet and open the Lodge one.",
+    "timeoutSeconds": 120,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 1 },
+      "maxActions": 6,
+      "final": { "activeTabUrlContains": "lodge" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "multi.recipe-on-named-site",
+    "name": "Find a recipe on a specific recipe site",
+    "family": "browser-multistep",
+    "tags": ["generalization", "browser", "chrome", "discovery"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Get me a banana bread recipe from Allrecipes.",
+    "timeoutSeconds": 120,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 1 },
+      "maxActions": 6,
+      "final": { "activeTabOriginContains": "allrecipes.com", "activeTabUrlContains": "allrecipes.com/recipe/" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+]

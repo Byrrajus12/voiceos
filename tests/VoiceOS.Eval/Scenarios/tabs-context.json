@@ -1,0 +1,256 @@
+// Tabs, context, and references. Multi-turn scenarios run on one product instance, so the
+// recent-task frame carries across turns exactly as it does between real voice activations.
+// Tabs opened by setup are user tabs and stay open; VoiceOS task tabs are closed in cleanup.
+[
+  {
+    "id": "tabs.switch-named-docs-tab",
+    "name": "Switch to an existing tab by describing its site",
+    "family": "tabs-context",
+    "tags": ["generalization", "browser", "chrome", "setup-page", "named-tab"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://docs.github.com/en" },
+      { "kind": "wait", "ms": 3000 },
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://www.nasa.gov/" },
+      { "kind": "wait", "ms": 3000 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "activeTabOrigin", "contains": "nasa.gov" },
+    ],
+    "transcript": "Flip over to the GitHub docs tab.",
+    "expect": {
+      "outcome": "Complete",
+      "scope": ["ExistingNamedTab"],
+      "newTabs": { "max": 0 },
+      "final": { "activeTabOriginContains": "docs.github.com" },
+    },
+  },
+  {
+    "id": "tabs.the-other-one",
+    "name": "'The other one' after two consecutive tasks",
+    "family": "tabs-context",
+    "tags": ["generalization", "browser", "chrome", "multi-turn", "reference"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "timeoutSeconds": 90,
+    "turns": [
+      {
+        "transcript": "Pull up the Rust book.",
+        "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "rust-lang.org/book" } },
+      },
+      {
+        "transcript": "Now pull up the Kotlin docs.",
+        "expect": { "outcome": "Complete", "final": { "activeTabOriginContains": "kotlinlang.org" } },
+      },
+      {
+        "transcript": "Switch back to the other one.",
+        "expect": {
+          "outcome": "Complete",
+          "newTabs": { "max": 0 },
+          "final": { "activeTabUrlContains": "rust-lang.org/book" },
+        },
+      },
+    ],
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "tabs.result-from-vendor",
+    "name": "Follow-up picks a search result by its source",
+    "family": "tabs-context",
+    "tags": ["generalization", "browser", "chrome", "multi-turn", "reference", "results"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "timeoutSeconds": 90,
+    "turns": [
+      {
+        "transcript": "Search for compact mechanical keyboards.",
+        "expect": { "outcome": "Complete", "newTabs": { "max": 1 } },
+      },
+      {
+        "transcript": "Open the one from Keychron.",
+        "expect": {
+          "outcome": "Complete",
+          "newTabs": { "max": 0 },
+          "final": { "activeTabUrlContains": "keychron" },
+        },
+      },
+    ],
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "tabs.docs-section-followup",
+    "name": "Continue inside documentation opened by the previous turn",
+    "family": "tabs-context",
+    "tags": ["generalization", "browser", "chrome", "multi-turn", "docs", "continuation"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "timeoutSeconds": 90,
+    "turns": [
+      {
+        "transcript": "Bring up the official Python tutorial.",
+        "expect": { "outcome": "Complete", "final": { "activeTabOriginContains": "docs.python.org" } },
+      },
+      {
+        "transcript": "Go to the section about dictionaries.",
+        "expect": {
+          "outcome": "Complete",
+          "newTabs": { "max": 0 },
+          "final": { "activeTabOriginContains": "docs.python.org", "activeTabUrlContains": "dict" },
+        },
+      },
+    ],
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    // After turn 2 the visible tab is the user's NASA tab while the most recent VoiceOS task is
+    // the Wikipedia tab. "Their" must bind to what is on screen.
+    "id": "tabs.visible-tab-beats-old-task",
+    "name": "Visible current tab outranks an older VoiceOS task tab",
+    "family": "tabs-context",
+    "tags": ["generalization", "browser", "chrome", "multi-turn", "setup-page", "precedence"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://www.nasa.gov/" },
+      { "kind": "wait", "ms": 3000 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "activeTabOrigin", "contains": "nasa.gov" },
+    ],
+    "timeoutSeconds": 90,
+    "turns": [
+      {
+        "transcript": "Look up volcanoes on Wikipedia.",
+        "expect": { "outcome": "Complete", "final": { "activeTabOriginContains": "wikipedia.org" } },
+      },
+      {
+        "transcript": "Switch to the NASA tab.",
+        "expect": { "outcome": "Complete", "newTabs": { "max": 0 }, "final": { "activeTabOriginContains": "nasa.gov" } },
+      },
+      {
+        "transcript": "Check out their news section.",
+        "expect": {
+          "outcome": "Complete",
+          "newTabs": { "max": 0 },
+          "final": { "activeTabOriginContains": "nasa.gov", "activeTabUrlContains": "news" },
+        },
+      },
+    ],
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "tabs.new-task-not-continuation",
+    "name": "Unrelated follow-up starts a new task instead of reusing the last tab",
+    "family": "tabs-context",
+    "tags": ["generalization", "browser", "chrome", "multi-turn", "task-boundary"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "timeoutSeconds": 90,
+    "turns": [
+      {
+        "transcript": "Look up the Eiffel Tower on Wikipedia.",
+        "expect": { "outcome": "Complete", "final": { "activeTabOriginContains": "wikipedia.org" } },
+      },
+      {
+        "transcript": "What's the weather in Paris right now?",
+        "expect": {
+          "outcome": "Complete",
+          "scope": ["NewTaskTab"],
+          "newTabs": { "min": 1, "max": 1 },
+        },
+      },
+    ],
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "tabs.pronoun-content-reference",
+    "name": "Possessive pronoun resolves to the subject of the previous page",
+    "family": "tabs-context",
+    "tags": ["generalization", "browser", "chrome", "multi-turn", "reference"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "timeoutSeconds": 90,
+    "turns": [
+      {
+        "transcript": "Find the Wikipedia article on the Apollo 11 mission.",
+        "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "Apollo_11" } },
+      },
+      {
+        "transcript": "Open the page for its command module pilot.",
+        "expect": {
+          "outcome": "Complete",
+          "newTabs": { "max": 0 },
+          "final": { "activeTabUrlContains": "Michael_Collins" },
+        },
+      },
+    ],
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "tabs.destination-carryover",
+    "name": "Disambiguating follow-up stays on the site of the previous search",
+    "family": "tabs-context",
+    "tags": ["generalization", "browser", "chrome", "multi-turn", "continuation"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "timeoutSeconds": 90,
+    "turns": [
+      {
+        "transcript": "Search IMDb for Dune.",
+        "expect": { "outcome": "Complete", "final": { "activeTabOriginContains": "imdb.com" } },
+      },
+      {
+        "transcript": "Open the 2021 one.",
+        "expect": {
+          "outcome": "Complete",
+          "newTabs": { "max": 0 },
+          "final": { "activeTabUrlContains": "tt1160419" },
+        },
+      },
+    ],
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "tabs.explicit-current-tab-site-search",
+    "name": "Explicitly search within the site in the current tab",
+    "family": "tabs-context",
+    "tags": ["generalization", "browser", "chrome", "setup-page", "current-tab"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://www.gutenberg.org/" },
+      { "kind": "wait", "ms": 3000 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "activeTabOrigin", "contains": "gutenberg.org" },
+    ],
+    "transcript": "Search this site for Pride and Prejudice.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "scope": ["ActiveTab"],
+      "newTabs": { "max": 0 },
+      "final": { "activeTabOriginContains": "gutenberg.org", "activeTabUrlContains": "pride" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "tabs.return-to-earlier-task",
+    "name": "Return to an earlier task after an unrelated one",
+    "family": "tabs-context",
+    "tags": ["generalization", "browser", "chrome", "multi-turn", "reference"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "timeoutSeconds": 90,
+    "turns": [
+      {
+        "transcript": "Take me to the Go documentation.",
+        "expect": { "outcome": "Complete", "final": { "activeTabOriginContains": "go.dev" } },
+      },
+      {
+        "transcript": "Show me today's top headlines on AP News.",
+        "expect": { "outcome": "Complete", "final": { "activeTabOriginContains": "apnews.com" } },
+      },
+      {
+        "transcript": "Bring that docs page back up.",
+        "expect": {
+          "outcome": "Complete",
+          "newTabs": { "max": 0 },
+          "final": { "activeTabOriginContains": "go.dev" },
+        },
+      },
+    ],
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+]

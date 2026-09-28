@@ -5,6 +5,7 @@
     <TargetFramework>net9.0-windows10.0.19041.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+    <UseWindowsForms>true</UseWindowsForms>
     <RootNamespace>VoiceOS.Eval</RootNamespace>
     <AssemblyName>VoiceOS.Eval</AssemblyName>
   </PropertyGroup>
@@ -15,6 +16,16 @@
 
   <ItemGroup>
     <ProjectReference Include="..\..\src\VoiceOS.Core\VoiceOS.Core.csproj" />
+    <ProjectReference Include="..\..\src\VoiceOS\VoiceOS.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Include="Scenarios\**\*.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
+    <None Include="..\..\src\VoiceOS\appsettings.json" Link="appsettings.json">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>

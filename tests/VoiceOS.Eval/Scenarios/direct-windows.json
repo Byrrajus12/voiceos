@@ -1,0 +1,249 @@
+// Direct / Windows control. Window operations are verified from independently probed window
+// state (final.windows: existence, minimized/maximized, snapped half with tolerance, monitor
+// change), never from which window ends up in the foreground: Snap Assist or the shell may take
+// focus after a successful snap. Focus/launch scenarios do use the foreground, since that IS
+// their success criterion.
+// Setup only launches disposable windows (Character Map, Paint, File Explorer); nothing here
+// closes or edits user documents. Launched windows are not auto-closed (no cleanup kind for it).
+[
+  {
+    "id": "direct.focus-open-vscode",
+    "name": "Switch to an already-open VS Code window from Chrome",
+    "family": "direct-windows",
+    "tags": ["generalization", "direct", "requires-app"],
+    "preconditions": [
+      { "kind": "windowOpen", "process": "Code" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+    ],
+    "setup": [
+      { "kind": "focusWindow", "process": "chrome" },
+      { "kind": "wait", "ms": 500 },
+    ],
+    "transcript": "Switch over to VS Code.",
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 0 },
+      "final": { "foregroundProcess": "Code" },
+    },
+  },
+  {
+    // Calculator is a packaged app with no Start Menu .lnk; the VoiceOS catalog may not know it.
+    // A user would still reasonably expect this to work.
+    "id": "direct.launch-calculator",
+    "name": "Launch a common packaged app by generic name",
+    "family": "direct-windows",
+    "tags": ["generalization", "direct"],
+    "transcript": "Bring up the calculator.",
+    "settleMs": 2500,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 0 },
+      "final": { "foregroundTitleContains": "Calculator" },
+    },
+  },
+  {
+    "id": "direct.launch-dynamic-audacity",
+    "name": "Launch a dynamically discovered desktop app",
+    "family": "direct-windows",
+    "tags": ["generalization", "direct", "requires-app"],
+    "preconditions": [ { "kind": "appInstalled", "app": "Audacity" } ],
+    "transcript": "Pull up Audacity.",
+    "settleMs": 6000,
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "route": ["DirectCapability"],
+      "newTabs": { "max": 0 },
+      "final": { "foregroundProcess": "audacity" },
+    },
+  },
+  {
+    "id": "direct.conversational-obsidian",
+    "name": "Conversational request to open an installed note app",
+    "family": "direct-windows",
+    "tags": ["generalization", "direct", "requires-app"],
+    "preconditions": [ { "kind": "appInstalled", "app": "Obsidian" } ],
+    "transcript": "Can you get Obsidian open for me?",
+    "settleMs": 4000,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 0 },
+      "final": { "foregroundProcess": "Obsidian" },
+    },
+  },
+  {
+    "id": "direct.close-named-charmap",
+    "name": "Close a named background utility window",
+    "family": "direct-windows",
+    "tags": ["generalization", "direct"],
+    "setup": [
+      { "kind": "startProcess", "file": "charmap.exe" },
+      { "kind": "wait", "ms": 1500 },
+      { "kind": "focusWindow", "process": "chrome" },
+      { "kind": "wait", "ms": 500 },
+    ],
+    "preconditions": [
+      { "kind": "windowOpen", "process": "charmap" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+    ],
+    "transcript": "Close Character Map.",
+    "expect": {
+      "outcome": "Complete",
+      "directSteps": { "include": ["CloseWindow"], "exclude": ["MediaControl"] },
+      "newTabs": { "max": 0 },
+      "final": { "windows": [ { "process": "charmap", "exists": false } ] },
+    },
+  },
+  {
+    "id": "direct.minimize-current-paint",
+    "name": "Minimize the current window by deixis",
+    "family": "direct-windows",
+    "tags": ["generalization", "direct"],
+    "setup": [
+      { "kind": "startProcess", "file": "mspaint.exe" },
+      { "kind": "wait", "ms": 2500 },
+      { "kind": "focusWindow", "process": "mspaint" },
+      { "kind": "wait", "ms": 500 },
+    ],
+    "preconditions": [ { "kind": "foregroundProcess", "process": "mspaint" } ],
+    "transcript": "Minimize this.",
+    "expect": {
+      "outcome": "Complete",
+      "directSteps": { "include": ["MinimizeWindow"], "exclude": ["CloseWindow"] },
+      "newTabs": { "max": 0 },
+      "final": { "windows": [ { "initialForeground": true, "minimized": true } ] },
+    },
+  },
+  {
+    "id": "direct.maximize-named-paint",
+    "name": "Maximize a named background window using loose wording",
+    "family": "direct-windows",
+    "tags": ["generalization", "direct"],
+    "setup": [
+      { "kind": "startProcess", "file": "mspaint.exe" },
+      { "kind": "wait", "ms": 2500 },
+      { "kind": "focusWindow", "process": "chrome" },
+      { "kind": "wait", "ms": 500 },
+    ],
+    "preconditions": [
+      { "kind": "windowOpen", "process": "mspaint" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+    ],
+    "transcript": "Make the Paint window fill the whole screen.",
+    "expect": {
+      "outcome": "Complete",
+      "directSteps": { "include": ["MaximizeWindow"] },
+      "newTabs": { "max": 0 },
+      "final": { "windows": [ { "process": "mspaint", "maximized": true } ] },
+    },
+  },
+  {
+    "id": "direct.snap-chrome-left",
+    "name": "Snap the browser to the left half",
+    "family": "direct-windows",
+    "tags": ["generalization", "direct"],
+    "preconditions": [ { "kind": "windowOpen", "process": "chrome" } ],
+    "transcript": "Put Chrome on the left half of the screen.",
+    "expect": {
+      "outcome": "Complete",
+      "route": ["DirectCapability"],
+      "directSteps": { "include": ["SnapWindow"] },
+      "newTabs": { "max": 0 },
+      "final": { "windows": [ { "process": "chrome", "snapped": "Left" } ] },
+    },
+  },
+  {
+    "id": "direct.move-current-to-other-monitor",
+    "name": "Move the current window to the other monitor",
+    "family": "direct-windows",
+    "tags": ["generalization", "direct", "multi-monitor"],
+    "setup": [
+      { "kind": "startProcess", "file": "mspaint.exe" },
+      { "kind": "wait", "ms": 2500 },
+      { "kind": "focusWindow", "process": "mspaint" },
+      { "kind": "wait", "ms": 500 },
+    ],
+    "preconditions": [
+      { "kind": "minMonitors", "count": 2 },
+      { "kind": "foregroundProcess", "process": "mspaint" },
+    ],
+    "transcript": "Send this over to my other monitor.",
+    "expect": {
+      "outcome": "Complete",
+      "directSteps": { "include": ["MoveWindow"] },
+      "newTabs": { "max": 0 },
+      "final": { "windows": [ { "initialForeground": true, "monitorChanged": true } ] },
+    },
+  },
+  {
+    // A new window, not a new tab in the existing window. Chrome opens its new-tab page in the
+    // new window, so the tab count is intentionally not asserted.
+    "id": "direct.new-chrome-window",
+    "name": "Open a new instance of an already-running browser",
+    "family": "direct-windows",
+    "tags": ["generalization", "direct"],
+    "preconditions": [ { "kind": "windowOpen", "process": "chrome" } ],
+    "transcript": "I need a fresh Chrome window.",
+    "settleMs": 1500,
+    "expect": {
+      "outcome": "Complete",
+      "route": ["DirectCapability"],
+      "directSteps": { "include": ["OpenApp"] },
+      "final": { "foregroundProcess": "chrome", "windows": [ { "process": "chrome", "isNew": true } ] },
+    },
+  },
+  {
+    // Uses a resizable app: a fixed-size window (e.g. Character Map) cannot occupy a half-screen
+    // snap rectangle, so its geometry could never verify the snap.
+    "id": "direct.compound-open-and-snap",
+    "name": "Compound: open an app and snap it right",
+    "family": "direct-windows",
+    "tags": ["generalization", "direct", "compound", "requires-app"],
+    "preconditions": [ { "kind": "appInstalled", "app": "Obsidian" } ],
+    "transcript": "Open Obsidian and put it on the right side.",
+    "settleMs": 3000,
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "directSteps": { "include": ["SnapWindow"] },
+      "newTabs": { "max": 0 },
+      "final": { "windows": [ { "process": "Obsidian", "snapped": "Right" } ] },
+    },
+  },
+  {
+    // Direct turns share no recent-task frame; "it" must resolve to the window turn 1 produced.
+    "id": "direct.pronoun-chain-explorer",
+    "name": "Open File Explorer, then snap 'it' in a follow-up",
+    "family": "direct-windows",
+    "tags": ["generalization", "direct", "multi-turn", "reference"],
+    "preconditions": [ { "kind": "appInstalled", "app": "File Explorer" } ],
+    "turns": [
+      {
+        "transcript": "Open File Explorer.",
+        "settleMs": 2000,
+        "expect": { "outcome": "Complete", "newTabs": { "max": 0 }, "final": { "foregroundProcess": "explorer" } },
+      },
+      {
+        "transcript": "Now snap it to the left.",
+        "expect": {
+          "outcome": "Complete",
+          "directSteps": { "include": ["SnapWindow"] },
+          "final": { "windows": [ { "process": "explorer", "snapped": "Left" } ] },
+        },
+      },
+    ],
+  },
+  {
+    // Mac-only app with no Windows install. Telling the user it isn't available (Clarify) is the
+    // defensible behavior; silently opening a marketing web page would not be what was asked.
+    "id": "direct.app-not-installed",
+    "name": "Request an app that cannot exist on this machine",
+    "family": "direct-windows",
+    "tags": ["generalization", "direct", "clarify"],
+    "transcript": "Open Final Cut Pro.",
+    "expect": {
+      "outcome": "Clarify",
+      "newTabs": { "max": 0 },
+    },
+  },
+]

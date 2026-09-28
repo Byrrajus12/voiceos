@@ -1,0 +1,224 @@
+// Current-page interaction. Setup opens a real public page with `chrome.exe <url>`, which Chrome
+// treats as a user tab (Provenance=User). The harness cannot close user tabs, so these setup
+// tabs stay open after the run; only VoiceOS-created task tabs are cleaned up.
+// Each scenario checks the setup page is the active tab before the turn runs. Every one expects
+// the work to stay in the current tab (no new tab) and asserts where the page ends up.
+[
+  {
+    "id": "page.wikipedia-inline-link",
+    "name": "Follow a concept link from inside an article body",
+    "family": "browser-current-page",
+    "tags": ["generalization", "browser", "chrome", "setup-page"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://en.wikipedia.org/wiki/Octopus" },
+      { "kind": "wait", "ms": 3500 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+      { "kind": "activeTabOrigin", "contains": "en.wikipedia.org" },
+    ],
+    // Scrolling is not observable, so the goal is a navigation the harness can verify.
+    "transcript": "Open the article on cephalopods.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "scope": ["ActiveTab"],
+      "newTabs": { "max": 0 },
+      "final": { "activeTabUrlContains": "wiki/Cephalopod" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "page.hn-top-story-comments",
+    "name": "Open the discussion for the top item of a news listing",
+    "family": "browser-current-page",
+    "tags": ["generalization", "browser", "chrome", "setup-page", "ordinal"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://news.ycombinator.com/" },
+      { "kind": "wait", "ms": 3000 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+      { "kind": "activeTabOrigin", "contains": "news.ycombinator.com" },
+    ],
+    "transcript": "Show me the comments on the top story.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 0 },
+      "final": { "activeTabUrlContains": "news.ycombinator.com/item?id=" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "page.python-docs-module-link",
+    "name": "Follow a specific link from a documentation index",
+    "family": "browser-current-page",
+    "tags": ["generalization", "browser", "chrome", "setup-page", "docs"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://docs.python.org/3/library/index.html" },
+      { "kind": "wait", "ms": 3000 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+      { "kind": "activeTabOrigin", "contains": "docs.python.org" },
+    ],
+    "transcript": "Go to the json module's page.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      // The request refers to a link on the visible docs index, so the current page is the
+      // correct scope. A new task tab that reaches json.html by searching is WrongScope, not an
+      // efficiency miss: it abandons the visible context.
+      "scope": ["ActiveTab"],
+      "newTabs": { "max": 0 },
+      "final": { "activeTabUrlContains": "library/json.html" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "page.mdn-by-meaning",
+    "name": "Choose a reference entry by describing what it does",
+    "family": "browser-current-page",
+    "tags": ["generalization", "browser", "chrome", "setup-page", "docs", "meaning"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Array" },
+      { "kind": "wait", "ms": 3500 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+      { "kind": "activeTabOrigin", "contains": "developer.mozilla.org" },
+    ],
+    // Describes Array.prototype.filter without naming it.
+    "transcript": "Which method keeps only the elements that pass a test? Open that one.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 0 },
+      "final": { "activeTabUrlContains": "Array/filter" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "page.duckduckgo-official-result",
+    "name": "Pick the official site from a non-Google results page",
+    "family": "browser-current-page",
+    "tags": ["generalization", "browser", "chrome", "setup-page", "results", "meaning"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://duckduckgo.com/?q=rust+programming+language" },
+      { "kind": "wait", "ms": 3500 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+      { "kind": "activeTabOrigin", "contains": "duckduckgo.com" },
+    ],
+    "transcript": "Open the official site.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "scope": ["ActiveTab"],
+      "newTabs": { "max": 0 },
+      "final": { "activeTabOriginContains": "rust-lang.org" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "page.product-listing-by-title",
+    "name": "Open a product from a catalog grid by its title",
+    "family": "browser-current-page",
+    "tags": ["generalization", "browser", "chrome", "setup-page", "listing"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://books.toscrape.com/" },
+      { "kind": "wait", "ms": 3000 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+      { "kind": "activeTabOrigin", "contains": "books.toscrape.com" },
+    ],
+    "transcript": "Click on Sharp Objects.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 0 },
+      "final": { "activeTabUrlContains": "sharp-objects" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "page.pagination-control",
+    "name": "Use a pagination control on a search results page",
+    "family": "browser-current-page",
+    "tags": ["generalization", "browser", "chrome", "setup-page", "control"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://www.gutenberg.org/ebooks/search/?query=sherlock+holmes" },
+      { "kind": "wait", "ms": 3500 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+      { "kind": "activeTabOrigin", "contains": "gutenberg.org" },
+    ],
+    "transcript": "Show me the next page of results.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "scope": ["ActiveTab"],
+      "newTabs": { "max": 0 },
+      "final": { "activeTabUrlContains": "start_index=" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "page.arxiv-first-pdf",
+    "name": "Open a specific link type on the first entry of an index",
+    "family": "browser-current-page",
+    "tags": ["generalization", "browser", "chrome", "setup-page", "ordinal"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://arxiv.org/list/cs.CL/recent" },
+      { "kind": "wait", "ms": 3500 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+      { "kind": "activeTabOrigin", "contains": "arxiv.org" },
+    ],
+    "transcript": "Grab the PDF for the first paper.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 0 },
+      "final": { "activeTabUrlContains": "arxiv.org/pdf/" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "page.stackoverflow-accepted-answer",
+    "name": "Act on the current page's content (not a new task)",
+    "family": "browser-current-page",
+    "tags": ["generalization", "browser", "chrome", "setup-page", "meaning"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://stackoverflow.com/questions/tagged/python?tab=Votes" },
+      { "kind": "wait", "ms": 3500 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+      { "kind": "activeTabOrigin", "contains": "stackoverflow.com" },
+    ],
+    "transcript": "Show me the question about the yield keyword.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "scope": ["ActiveTab"],
+      "newTabs": { "max": 0 },
+      "final": { "activeTabUrlContains": "stackoverflow.com/questions/" , "activeTabTitleContains": "yield" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+]

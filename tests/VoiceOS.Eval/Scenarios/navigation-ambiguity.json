@@ -1,0 +1,155 @@
+// Navigation and ambiguity. Clarify is expected only where two or more readings are genuinely
+// reasonable in the given state; the paired explicit-surface scenario shows the same request
+// resolved once the user disambiguates.
+// NOTE: the product instance persists across scenarios in a run. Cleanup closes VoiceOS task
+// tabs, which also invalidates the recent-task frame, but "Open it"-style scenarios are best run
+// early or alone.
+[
+  {
+    "id": "nav.back-after-followed-link",
+    "name": "Browser back after following a link in the current task",
+    "family": "navigation-ambiguity",
+    "tags": ["generalization", "browser", "chrome", "multi-turn", "back"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "timeoutSeconds": 90,
+    "turns": [
+      {
+        "transcript": "Bring up Wikipedia's article on the Moon.",
+        "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "wiki/Moon" } },
+      },
+      {
+        "transcript": "Click through to the Apollo program article.",
+        "expect": { "outcome": "Complete", "newTabs": { "max": 0 }, "final": { "activeTabUrlContains": "Apollo_program" } },
+      },
+      {
+        "transcript": "Take me back a page.",
+        "expect": {
+          "outcome": "Complete",
+          "noMediaCommand": true,
+          "newTabs": { "max": 0 },
+          "final": { "activeTabUrlContains": "wiki/Moon" },
+        },
+      },
+    ],
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    // A freshly opened tab has no history. Honestly reporting that nothing can be done is
+    // expected; claiming success or pressing media Previous is wrong.
+    "id": "nav.back-without-history",
+    "name": "Back on a tab with no history must not claim success",
+    "family": "navigation-ambiguity",
+    "tags": ["generalization", "browser", "chrome", "setup-page", "back"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://www.nasa.gov/" },
+      { "kind": "wait", "ms": 3000 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+      { "kind": "activeTabOrigin", "contains": "nasa.gov" },
+    ],
+    "transcript": "Go back to the previous page.",
+    "expect": {
+      "outcome": "Failed",
+      // Either non-success is safe; a claimed success never is.
+      "acceptedOutcomes": ["Failed", "Clarify"],
+      "noMediaCommand": true,
+      "newTabs": { "max": 0 },
+    },
+  },
+  {
+    "id": "nav.media-previous-while-browsing",
+    "name": "Explicit previous song while a web page is in front",
+    "family": "navigation-ambiguity",
+    "tags": ["generalization", "media", "chrome", "setup-page"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://en.wikipedia.org/wiki/Jazz" },
+      { "kind": "wait", "ms": 3000 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+      { "kind": "activeTabOrigin", "contains": "wikipedia.org" },
+    ],
+    "transcript": "Play the previous song.",
+    "expect": {
+      "outcome": "Complete",
+      "mediaOperation": "Previous",
+      "directSteps": { "include": ["MediaControl"] },
+      "browserOperations": { "exclude": ["GoBack"] },
+      "newTabs": { "max": 0 },
+      "final": { "activeTabUrlContains": "wiki/Jazz" },
+    },
+  },
+  {
+    // Three Python interpreters are installed and python.org exists; none is clearly meant.
+    "id": "nav.ambiguous-python",
+    "name": "Name that matches both installed apps and a website",
+    "family": "navigation-ambiguity",
+    "tags": ["generalization", "clarify", "requires-app"],
+    "preconditions": [ { "kind": "appInstalled", "app": "Python 3.12 (64-bit)" } ],
+    "transcript": "Open Python.",
+    "expect": {
+      "outcome": "Clarify",
+      // Opening an installed Python app is also acceptable; no browser tab either way.
+      "acceptedOutcomes": ["Clarify", "Complete"],
+      "newTabs": { "max": 0 },
+    },
+  },
+  {
+    "id": "nav.explicit-surface-resolves-python",
+    "name": "Same name, disambiguated by an explicit web surface",
+    "family": "navigation-ambiguity",
+    "tags": ["generalization", "browser", "chrome", "surface-preference"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Open python dot org in Chrome.",
+    "expect": {
+      "outcome": "Complete",
+      "route": ["ComputerUse"],
+      "newTabs": { "max": 1 },
+      "final": { "activeTabOriginContains": "python.org" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    // VS Code, Cursor, PyCharm, and Visual Studio are all installed.
+    "id": "nav.ambiguous-code-editor",
+    "name": "Generic app category with several installed candidates",
+    "family": "navigation-ambiguity",
+    "tags": ["generalization", "clarify", "requires-app"],
+    "preconditions": [
+      { "kind": "appInstalled", "app": "Visual Studio Code" },
+      { "kind": "appInstalled", "app": "Cursor" },
+    ],
+    "transcript": "Open my code editor.",
+    "expect": {
+      "outcome": "Clarify",
+      // Focusing the already-open editor is also acceptable.
+      "acceptedOutcomes": ["Clarify", "Complete"],
+      "newTabs": { "max": 0 },
+    },
+  },
+  {
+    "id": "nav.underspecified-open-it",
+    "name": "Bare pronoun with no established referent",
+    "family": "navigation-ambiguity",
+    "tags": ["generalization", "clarify"],
+    "transcript": "Open it.",
+    "expect": {
+      "outcome": "Clarify",
+      "newTabs": { "max": 0 },
+    },
+  },
+  {
+    "id": "nav.underspecified-look-that-up",
+    "name": "Lookup request with nothing to look up",
+    "family": "navigation-ambiguity",
+    "tags": ["generalization", "clarify"],
+    "transcript": "Look that up for me.",
+    "expect": {
+      "outcome": "Clarify",
+      "newTabs": { "max": 0 },
+    },
+  },
+]
