@@ -29,10 +29,16 @@ public sealed record BrowserExecutionScope(BrowserScopeKind Kind, int? TabId = n
     bool ExplicitSelection = false, bool FocusOnly = false, bool RequireForegroundChrome = false,
     nint ExpectedForegroundHandle = 0, string? NamedServiceHint = null,
     SemanticEndState EndState = SemanticEndState.Unspecified,
-    GoalShape GoalShape = GoalShape.Uncertain, string? ExpectedTitle = null)
+    GoalShape GoalShape = GoalShape.Uncertain, string? ExpectedTitle = null,
+    bool DestinationPending = false, bool TabClaimRefuted = false)
 {
+    /// <summary>Acquiring the surface is the whole goal. A requested entity whose destination is
+    /// not yet known (DestinationPending) still needs navigation, so the surface alone never
+    /// completes it. A current tab reached because the inventory refuted a named-tab claim
+    /// (TabClaimRefuted) was not requested as a surface, so arriving there completes nothing:
+    /// the requested content action still has to run.</summary>
     public bool IsSurfaceOnly => EndState == SemanticEndState.SurfaceReady
-        && GoalShape == GoalShape.SurfaceOnly;
+        && GoalShape == GoalShape.SurfaceOnly && !DestinationPending && !TabClaimRefuted;
 }
 
 public sealed record NativeExecutionScope(nint WindowHandle, string ProcessName,
@@ -74,18 +80,40 @@ public sealed class ScopeResolver
                 ExpectedTitle: kind == BrowserScopeKind.ExistingNamedTab ? tab.Title : null);
         ExecutionScopeDecision Browser(BrowserExecutionScope scope)
             => new(ExecutionScopeKind.Browser, scope with { EndState = route.EndState,
-                GoalShape = route.GoalShape });
+                GoalShape = route.GoalShape,
+                // A generic tab does not satisfy a named entity: without a tab, destination, or
+                // registered service, the browser must still discover and reach it.
+                DestinationPending = route.RequestsNamedEntity && scope.TabId is null
+                    && scope.Destination is null && ServiceResolver.Resolve(scope.NamedServiceHint) is null });
+
+        // Going back without media or navigation evidence: the router leaves it unresolved and
+        // only a browser surface the user is looking at resolves it (as navigation). Ambient
+        // playback is never evidence for media Previous; anything else clarifies.
+        if (route.Reason == RoutingReason.UnresolvedReturn)
+            return chromeForeground && active is not null && !route.RequestsNamedEntity
+                ? Browser(Select(active, BrowserScopeKind.ActiveTab))
+                : new(ExecutionScopeKind.Clarify, Detail: route.Detail);
 
         var destination = route.ExplicitUrl
             ?? ServiceResolver.Resolve(route.DestinationName)?.WebOrigin;
+        // A web-content task becomes native only through an explicit native preference or a
+        // goal that is solely acquiring the app surface; context and app inventory cannot infer it.
+        var nativeInferable = route.Route != CommandRoute.ComputerUse
+            || route.SurfacePreference == SurfacePreference.Native
+            || route.GoalShape == GoalShape.SurfaceOnly;
         if (route.DestinationKind == SemanticDestinationKind.KnownService
             && route.SurfacePreference != SurfacePreference.Browser
-            && route.TabDisposition == TabDisposition.Unspecified)
+            && route.TabDisposition == TabDisposition.Unspecified
+            && nativeInferable)
         {
+            var service = ServiceResolver.Resolve(route.DestinationName);
             var matches = (context.InstalledApps ?? []).Where(app =>
-                string.Equals(app.DisplayName, route.DestinationName, StringComparison.OrdinalIgnoreCase))
+                service is not null && ServiceResolver.IsRepresentedBy(service, app.DisplayName))
                 .Take(2).ToArray();
-            if (matches.Length == 0 && contextual is not null && context.InstalledApps is { Count: > 0 } candidates)
+            // Explicit Native requires an installed representation of the entity itself; a
+            // contextual pick of another app can never satisfy it.
+            if (matches.Length == 0 && route.SurfacePreference != SurfacePreference.Native
+                && contextual is not null && context.InstalledApps is { Count: > 0 } candidates)
             {
                 var selectedAppId = await contextual.SelectInstalledAppAsync(utterance, candidates, cancellationToken)
                     .ConfigureAwait(false);
@@ -116,24 +144,65 @@ public sealed class ScopeResolver
         if (route.TabDisposition == TabDisposition.ExistingNamedTab
             || route.DestinationKind == SemanticDestinationKind.NamedTab)
         {
-            var selectedId = contextual is null ? null : await contextual.SelectNamedTabAsync(
-                utterance, context.BrowserTabs, cancellationToken).ConfigureAwait(false);
-            var selectedTab = context.BrowserTabs.SingleOrDefault(t => t.TabId == selectedId
-                && t.Origin is not null);
-            return selectedTab is not null
-                ? Browser(Select(selectedTab, BrowserScopeKind.ExistingNamedTab, true,
-                    focusOnly: route.EndState == SemanticEndState.SurfaceReady
-                        && route.GoalShape == GoalShape.SurfaceOnly))
-                : new(ExecutionScopeKind.Clarify, Detail: "The named tab was not uniquely identified.");
+            // ExistingNamedTab is a semantic claim; the real tab inventory settles it.
+            var selection = contextual is null ? NamedTabSelection.Unavailable("no_named_tab_picker")
+                : await contextual.SelectNamedTabAsync(utterance, context.BrowserTabs, cancellationToken)
+                    .ConfigureAwait(false);
+            var focusOnly = route.EndState == SemanticEndState.SurfaceReady && route.GoalShape == GoalShape.SurfaceOnly;
+            switch (selection.Kind)
+            {
+                case NamedTabSelectionKind.Selected:
+                    var selectedTab = context.BrowserTabs.SingleOrDefault(t => t.TabId == selection.TabId
+                        && t.Origin is not null);
+                    if (selectedTab is null) break;
+                    // The named tab is already the one in view: it is the current surface.
+                    return chromeForeground && active?.TabId == selectedTab.TabId
+                        ? Browser(Select(selectedTab, BrowserScopeKind.ActiveTab, true, focusOnly))
+                        : Browser(Select(selectedTab, BrowserScopeKind.ExistingNamedTab, true, focusOnly));
+                case NamedTabSelectionKind.Ambiguous:
+                    return new(ExecutionScopeKind.Clarify, Detail: "More than one open tab matches that name.");
+                case NamedTabSelectionKind.NoMatch:
+                    // The claim is refuted. Only a request that itself requires the visible surface,
+                    // with Chrome visibly in front and one identifiable active tab, runs there; it
+                    // never completes merely by being on that page.
+                    if (route.Route == CommandRoute.ComputerUse
+                        && route.ContextDependency == ContextDependency.RequiresCurrentSurface
+                        && route.SurfacePreference != SurfacePreference.Native
+                        && chromeForeground && active is not null)
+                        return Browser(Select(active, BrowserScopeKind.ActiveTab) with { TabClaimRefuted = true });
+                    return new(ExecutionScopeKind.Clarify, Detail: "No open tab matches that name.");
+            }
+            return new(ExecutionScopeKind.Clarify, Detail: "The named tab was not uniquely identified.");
         }
+        // Current-surface dependence is its own dimension, independent of task relation: a new
+        // task can still target what is visible now. A service destination alone does not
+        // relocate such a task: it is the visible surface's own service or an entity on it, and
+        // it cannot send the task to a new or recent tab while a current browser surface is in
+        // view. The destination keeps precedence only when it is corroborated as the task's
+        // surface (a literal URL, an explicit web-surface preference, or a goal that is solely
+        // acquiring that surface), or when no current browser surface is in view.
         if (route.Route == CommandRoute.ComputerUse
             && route.TabDisposition == TabDisposition.Unspecified
-            && route.DestinationKind == SemanticDestinationKind.None
             && route.SurfacePreference != SurfacePreference.Native
             && route.ContextDependency == ContextDependency.RequiresCurrentSurface)
-            return active is not null ? Browser(Select(active, BrowserScopeKind.ActiveTab))
-                : new(ExecutionScopeKind.Clarify,
-                    Detail: "The required current browser surface is unavailable or ambiguous.");
+        {
+            if (route.DestinationKind == SemanticDestinationKind.None)
+                return active is not null ? Browser(Select(active, BrowserScopeKind.ActiveTab))
+                    : new(ExecutionScopeKind.Clarify,
+                        Detail: "The required current browser surface is unavailable or ambiguous.");
+            if (route.DestinationKind == SemanticDestinationKind.KnownService && active is not null
+                && destination is not null
+                && route.SurfacePreference != SurfacePreference.Browser
+                && route.GoalShape != GoalShape.SurfaceOnly)
+            {
+                var activeIsDestination = SameDestination(active, destination, false);
+                if (activeIsDestination || chromeForeground)
+                    return Browser(Select(active, BrowserScopeKind.ActiveTab) with
+                    {
+                        NamedServiceHint = activeIsDestination ? route.DestinationName : null
+                    });
+            }
+        }
         if (destination is not null)
         {
             var owned = context.BrowserTabs.Where(t => t.Provenance == BrowserTabProvenance.VoiceOs
@@ -150,7 +219,7 @@ public sealed class ScopeResolver
             return new(ExecutionScopeKind.Clarify,
                 Detail: "The request depends on prior VoiceOS work without a safe current surface or destination.");
         if (route.SurfacePreference != SurfacePreference.Browser
-            && route.TabDisposition == TabDisposition.Unspecified
+            && route.TabDisposition == TabDisposition.Unspecified && nativeInferable
             && contextual is not null && context.InstalledApps is { Count: > 0 } apps)
         {
             var appId = await contextual.SelectInstalledAppAsync(utterance, apps, cancellationToken)
@@ -166,9 +235,14 @@ public sealed class ScopeResolver
             if (route.SurfacePreference == SurfacePreference.Native)
                 return new(ExecutionScopeKind.Clarify, Detail: "No unique installed native app matched the request.");
         }
+        // Content selection without a destination leaves its provider unnamed. When a usable
+        // current browser surface exists, context judges whether it is that provider.
+        var unnamedContentProvider = route.MediaRequestKind == MediaRequestKind.ContentSelection
+            && contextual is not null && chromeForeground && active is not null;
         if (route.Route == CommandRoute.ComputerUse
             && (route.ContextDependency == ContextDependency.SelfContained
-                || route.TaskRelation == TaskRelation.NewTask))
+                || route.TaskRelation == TaskRelation.NewTask)
+            && !unnamedContentProvider)
             return Browser(new(BrowserScopeKind.NewTaskTab));
         // Only complete actions reach this point. Context can repair a preliminary route.
         if (contextual is null)
@@ -179,7 +253,7 @@ public sealed class ScopeResolver
             if (chromeForeground && active is not null)
                 offered.Add(ContextualSurface.ActiveBrowserTab);
         }
-        if (context.ForegroundWindow is { Hwnd: not 0 } foreground
+        if (nativeInferable && context.ForegroundWindow is { Hwnd: not 0 } foreground
             && !foreground.ProcessName.Equals("chrome", StringComparison.OrdinalIgnoreCase))
             offered.Add(ContextualSurface.ForegroundNativeWindow);
         var selected = await contextual.SelectAsync(utterance, route, context, offered, cancellationToken)

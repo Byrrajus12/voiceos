@@ -119,6 +119,52 @@ public sealed class InteractionEngineTests
     }
 
     [Fact]
+    public async Task ExecutedAction_ObservesViaObserveAfterActionAsync_NotObserveAsync()
+    {
+        var surface = new CountingSurface([InteractionActionResult.Ok()]);
+        var result = await new InteractionEngine().RunAsync(new("save the document"), surface,
+            new FakeDecisions(InteractionDecision.Act(Action), InteractionDecision.Done()), new InteractionBudget(5, 5, 5));
+
+        Assert.Equal(InteractionCompletionState.Complete, result.Completion);
+        Assert.Equal(1, surface.ObserveAfterActionCount);
+        // initial observation + the fresh completion-confirmation observation
+        Assert.Equal(2, surface.ObserveCount);
+    }
+
+    private sealed class CountingSurface(IEnumerable<InteractionActionResult> results) : IInteractionSurface
+    {
+        private readonly Queue<InteractionActionResult> _results = new(results);
+        private int _revision;
+        public int ObserveCount { get; private set; }
+        public int ObserveAfterActionCount { get; private set; }
+
+        public ValueTask<InteractionObservation> ObserveAsync(CancellationToken cancellationToken = default)
+        {
+            ObserveCount++;
+            var revision = ++_revision;
+            return ValueTask.FromResult(new InteractionObservation(revision, $"s{revision}",
+                $"{{\"current_url\":\"https://example.org/{revision}\"}}", [new("save", "Save", [Action])]));
+        }
+
+        public ValueTask<InteractionObservation> ObserveAfterActionAsync(CancellationToken cancellationToken = default)
+        {
+            ObserveAfterActionCount++;
+            var revision = ++_revision;
+            return ValueTask.FromResult(new InteractionObservation(revision, $"s{revision}",
+                $"{{\"current_url\":\"https://example.org/{revision}\"}}", [new("save", "Save", [Action])]));
+        }
+
+        public ValueTask<InteractionActionResult> ExecuteAsync(InteractionAction action,
+            InteractionObservation observation, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(_results.Dequeue());
+
+        public ValueTask<InteractionCompletionAssessment> AssessCompletionAsync(InteractionGoal goal,
+            InteractionObservation observation, IReadOnlyList<InteractionHistoryEntry> recentHistory,
+            CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(new InteractionCompletionAssessment(InteractionCompletionState.Complete));
+    }
+
+    [Fact]
     public async Task AmbiguousTabTopologyStopsBeforeRepeatingSourceAction()
     {
         var surface = new FakeSurface(Observation("source"), [

@@ -1,4 +1,6 @@
 using VoiceOS.Core.Apps;
+using VoiceOS.Core.Browser;
+using VoiceOS.Core.Candidates;
 using VoiceOS.Core.Execution;
 using VoiceOS.Core.Interaction;
 
@@ -6,15 +8,23 @@ namespace VoiceOS.Core.Activation;
 
 internal static class ActivityMessage
 {
-    public static string? ForStep(VoiceStep step, IAppCatalog? catalog) => step switch
+    public static string? ForStep(VoiceStep step, IAppCatalog? catalog,
+        IReadOnlyList<WindowCandidate>? windows = null) => step switch
     {
         OpenAppStep open => AppName(open.App.AppCandidateId, catalog) is { } name
             ? $"Opening {name}…" : "Opening app…",
-        FocusWindowStep => "Switching window…",
+        FocusWindowStep focus => WindowName(focus.Target, catalog, windows) is { } name
+            ? $"Switching to {name}…" : "Switching window…",
         CloseWindowStep => "Closing window…",
-        MinimizeWindowStep => "Minimizing window…",
+        MinimizeWindowStep minimize => WindowName(minimize.Target, catalog, windows) is { } name
+            ? $"Minimizing {name}…" : "Minimizing window…",
         MaximizeWindowStep => "Maximizing window…",
-        SnapWindowStep => "Snapping window…",
+        SnapWindowStep snap => snap.Direction switch
+        {
+            Decision.SnapDirection.Left => "Snapping window left…",
+            Decision.SnapDirection.Right => "Snapping window right…",
+            _ => "Snapping window…"
+        },
         MoveWindowStep => "Moving window…",
         MediaControlStep { Operation: Decision.MediaOperation.Play } => "Playing…",
         MediaControlStep { Operation: Decision.MediaOperation.Pause } => "Pausing…",
@@ -30,14 +40,61 @@ internal static class ActivityMessage
             ? name : null;
     }
 
-    public static string ForBrowserAction(InteractionActionKind? action) => action switch
+    private static string? WindowName(VoiceTarget target, IAppCatalog? catalog,
+        IReadOnlyList<WindowCandidate>? windows)
     {
-        InteractionActionKind.Scroll => "Scrolling…",
-        InteractionActionKind.GoBack => "Going back…",
-        InteractionActionKind.Activate => "Selecting in Chrome…",
-        InteractionActionKind.SetText or InteractionActionKind.TypeText => "Entering text…",
-        _ => "Working in Chrome…"
-    };
+        if (target is AppTarget app) return AppName(app.AppCandidateId, catalog);
+        var window = target switch
+        {
+            CurrentWindowTarget => windows?.FirstOrDefault(static w => w.IsForeground),
+            CandidateWindowTarget selected => windows?.FirstOrDefault(w => w.Id == selected.WindowCandidateId),
+            _ => null
+        };
+        if (window?.ProcessName is not { } process) return null;
+        var names = catalog?.GetAll().Where(app =>
+            string.Equals(app.ProcessName, process, StringComparison.OrdinalIgnoreCase))
+            .Take(2).ToArray();
+        return names is { Length: 1 } ? SafeLabel(names[0].DisplayName) : SafeLabel(process);
+    }
+
+    public static string ForNativeApp(string id, IAppCatalog? catalog)
+        => AppName(id, catalog) is { } name ? $"Opening {name}…" : "Opening app…";
+
+    public static string ForBrowserAction(BrowserActivity activity)
+    {
+        if (activity.Operation == InteractionActionKind.Scroll)
+            return activity.Direction?.ToLowerInvariant() switch
+            {
+                "down" => "Scrolling down…",
+                "up" => "Scrolling up…",
+                _ => "Scrolling…"
+            };
+        if (activity.Operation == InteractionActionKind.GoBack) return "Going back…";
+        if (activity.OpeningTab)
+        {
+            if (SafeLabel(activity.Query) is { } query) return $"Searching for {query}…";
+            if (SafeLabel(activity.Destination) is { } destination)
+                return $"Opening {destination} tab…";
+            return "Opening Chrome tab…";
+        }
+        if (activity.Operation is InteractionActionKind.SetText or InteractionActionKind.TypeText)
+            return SafeLabel(activity.Query) is { } query ? $"Searching for {query}…" : "Entering text…";
+        if (activity.Operation == InteractionActionKind.Activate)
+            return string.Equals(activity.TargetRole, "link", StringComparison.OrdinalIgnoreCase)
+                ? SafeLabel(activity.TargetName) is { } name ? $"Opening {name}…" : "Opening result…"
+                : SafeLabel(activity.Objective) is { } task
+                    ? $"Working on {task}…" : "Selecting…";
+        return SafeLabel(activity.Objective) is { } objective
+            ? $"Working on {objective}…" : "Working in Chrome…";
+    }
+
+    private static string? SafeLabel(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        value = value.Trim();
+        return value.Length <= 32 && value.All(c => char.IsLetterOrDigit(c) || c is ' ' or '-' or '.' or '+' or '#')
+            ? value : null;
+    }
 
     public static string ForClarification(string? detail) => detail switch
     {
@@ -53,7 +110,6 @@ internal static class ActivityMessage
 
     public static string ForFailure(string? detail) => detail switch
     {
-        "Empty transcript" => "I didn't catch that.",
         "Text insertion is unavailable" => "Couldn't insert that text.",
         "Managed browser interaction is unavailable" => "Chrome is unavailable.",
         "Native UI interaction is not enabled yet." => "That app action isn't available yet.",

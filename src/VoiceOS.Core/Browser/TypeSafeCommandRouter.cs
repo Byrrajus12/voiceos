@@ -57,17 +57,34 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
                         ["Next"] = "Skip to the next item.",
                         ["Previous"] = "Go to the previous item."
                     }),
+                ["return_target"] = new("choice",
+                    "Independently classify what a request to go back, return, or go to the previous thing moves through. Judge the whole utterance, not the verb alone.",
+                    new Dictionary<string, string>
+                    {
+                        ["None"] = "No going back, returning, or previous-item request.",
+                        ["MediaPlayback"] = "The previous track, song, episode, video, or other item in media playback.",
+                        ["NavigationHistory"] = "The previous page, screen, or location in browser or app navigation history.",
+                        ["Uncertain"] = "Going back is requested, but whether media playback or navigation is meant cannot be established."
+                    }),
+                ["requested_entity"] = new("choice",
+                    "Independently identify what the user wants opened, focused, or used, regardless of surface preference, tab wording, or whether it is installed or listed anywhere.",
+                    new Dictionary<string, string>
+                    {
+                        ["None"] = "No particular app, service, website, or product is requested, such as current-window, media, volume, or current-page actions.",
+                        ["BrowserItself"] = "Only a generic web browser itself, a browser window, or a blank or new browser tab.",
+                        ["NamedEntity"] = "A specific named app, service, website, or product other than a generic web browser, whether or not it is registered or installed."
+                    }),
                 ["destination"] = new("choice",
                     "Select an explicitly named service or product destination from this registry, independently of app/web preference and tab placement. Choose None for an implicit or unlisted destination. A literal URL is extracted separately; never generate a URL.",
                     ServiceResolver.DestinationChoices),
                 ["tab_disposition"] = new("choice",
-                    "Independently classify explicit browser surface intent; do not match or select an actual tab. CurrentTab means the user identifies the currently active browser surface. NewTab means the user explicitly requests a new browser tab or surface. ExistingNamedTab means the user identifies a particular existing browser tab or surface by descriptive identity, title, topic, service, or name, even when that name is not a registered service. A request to open or switch to a particular named tab is ExistingNamedTab, not CurrentTab. Unspecified means no explicit browser surface disposition. Content actions on the current visible surface without explicit surface wording are handled by context_dependency.",
+                    "Independently classify explicit browser surface intent; do not match or select an actual tab. CurrentTab means the user identifies the currently active browser surface. NewTab means the user explicitly requests a new browser tab or surface. ExistingNamedTab means the user refers to a particular already-open browser tab or surface as such, identifying it by descriptive identity, title, service, or name, even when that name is not a registered service. Content, an item, or a link to act on within a page is not a tab reference. A request to open or switch to a particular named tab is ExistingNamedTab, not CurrentTab. Naming a service, site, or place to go to, open, or use is a destination, classified by the separate destination head, and is not ExistingNamedTab unless the user also refers to an existing tab. Unspecified means no explicit browser surface disposition. Content actions on the current visible surface without explicit surface wording are handled by context_dependency.",
                     new Dictionary<string, string>
                     {
                         ["Unspecified"] = "No explicit browser surface disposition is expressed.",
                         ["CurrentTab"] = "The user identifies the currently active browser page, tab, screen, or surface.",
                         ["NewTab"] = "The user explicitly requests a new browser tab or surface.",
-                        ["ExistingNamedTab"] = "The user identifies a particular existing browser tab or surface by its descriptive identity, title, topic, service, or name."
+                        ["ExistingNamedTab"] = "The user refers to a particular already-open browser tab or surface by its descriptive identity, title, service, or name; a destination to go to is not a tab reference, nor is content to act on within a page."
                     }),
                 ["surface_preference"] = new("choice", "Classify only an explicit user preference for native application versus browser or web. A product name alone is not a preference.",
                     new Dictionary<string, string> { ["Unspecified"] = "No explicit surface type.", ["Native"] = "Explicit native app or desktop application.", ["Browser"] = "Explicit browser, web, website, or tab." }),
@@ -121,7 +138,8 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
             EndState = ChoiceEnum<SemanticEndState>(answers, "end_state", confidenceThreshold),
             TaskRelation = ChoiceEnum<TaskRelation>(answers, "task_relation", confidenceThreshold),
             GoalShape = ChoiceEnum<GoalShape>(answers, "goal_shape", confidenceThreshold),
-            ContextDependency = ChoiceEnum<ContextDependency>(answers, "context_dependency", confidenceThreshold)
+            ContextDependency = ChoiceEnum<ContextDependency>(answers, "context_dependency", confidenceThreshold),
+            RequestedEntity = ChoiceEnum<RequestedEntityKind>(answers, "requested_entity", confidenceThreshold)
         };
 
         var mediaKind = answers.TryGetValue("media_request_kind", out var mediaAnswer)
@@ -145,6 +163,12 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
             return WithScope(new(CommandRoute.ComputerUse, mediaAnswer!.Confidence,
                 "A new media content target requires selection.", RoutingReason.NewContentTarget,
                 MediaRequestKind: mediaKind));
+        var returnTarget = ChoiceEnum<ReturnTarget>(answers, "return_target", confidenceThreshold);
+        // Going back through navigation history is never a native capability; it acts on the
+        // current browser surface, whose availability the scope resolver decides.
+        CommandRouteDecision NavigationBack(double confidence) => WithScope(new(CommandRoute.ComputerUse,
+            confidence, "Navigation back on the current surface.", MediaRequestKind: MediaRequestKind.None))
+            with { ContextDependency = ContextDependency.RequiresCurrentSurface };
         if (mediaKind == MediaRequestKind.Transport)
         {
             if (destinationKind != SemanticDestinationKind.None || disposition != TabDisposition.Unspecified)
@@ -155,8 +179,20 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
                 && operationAnswer.Confidence >= confidenceThreshold
                 && Enum.TryParse<MediaOperation>(operationAnswer.SelectedChoice, out var operation)
                 && operation is not MediaOperation.Toggle)
+            {
+                // Previous collides with navigation Back, so it needs affirmative media semantics;
+                // the media_op prediction alone never emits a media key.
+                // An unresolved return is preserved for the scope resolver, which owns current-surface context.
+                if (operation == MediaOperation.Previous && returnTarget != ReturnTarget.MediaPlayback)
+                    return returnTarget == ReturnTarget.NavigationHistory
+                        ? NavigationBack(mediaAnswer!.Confidence)
+                        : WithScope(new(CommandRoute.Clarify, mediaAnswer!.Confidence,
+                            "Going back could mean media playback or page navigation.",
+                            returnTarget == ReturnTarget.Uncertain ? RoutingReason.UnresolvedReturn : RoutingReason.AmbiguousIntent,
+                            MediaRequestKind: mediaKind));
                 return WithScope(new(CommandRoute.DirectCapability, Math.Min(mediaAnswer!.Confidence, operationAnswer.Confidence),
                     "Current-media transport.", RoutingReason.MediaTransport, operation, mediaKind));
+            }
             return WithScope(new(CommandRoute.Clarify, mediaAnswer!.Confidence,
                 "The current-media operation is uncertain.", RoutingReason.LowConfidence,
                 MediaRequestKind: mediaKind));
@@ -164,6 +200,17 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
         if (!answers.TryGetValue("route", out var answer) || answer.QuestionType != "choice" || answer.Confidence < confidenceThreshold)
             return WithScope(new(CommandRoute.Clarify, answer?.Confidence ?? 0, "Routing confidence was too low.", RoutingReason.LowConfidence,
                 MediaRequestKind: mediaKind));
+        if (answer.SelectedChoice == "DIRECT_CAPABILITY")
+        {
+            if (returnTarget == ReturnTarget.NavigationHistory)
+                return NavigationBack(answer.Confidence);
+            // An explicit web preference for a named entity is a browser destination; no native
+            // capability (including opening the browser app itself) satisfies it.
+            var scoped = WithScope(new(CommandRoute.DirectCapability, answer.Confidence, MediaRequestKind: mediaKind));
+            if (scoped.SurfacePreference == SurfacePreference.Browser && scoped.RequestsNamedEntity
+                && scoped.GoalShape != GoalShape.ActionOnSurface)
+                return scoped with { Route = CommandRoute.ComputerUse, Detail = "Explicit web destination." };
+        }
         return WithScope(answer.SelectedChoice switch
         {
             "DIRECT_CAPABILITY" => new(CommandRoute.DirectCapability, answer.Confidence, MediaRequestKind: mediaKind),
@@ -181,7 +228,7 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
     {
         var criteria = offered.Distinct().ToDictionary(x => x.ToString(), x => x switch
         {
-            ContextualSurface.ActiveBrowserTab => "Use only when the user semantically addresses this current page or strong task context makes it the intended surface. Mere technical ability to perform the action is insufficient.",
+            ContextualSurface.ActiveBrowserTab => "Use only when the user semantically addresses this current page or strong task context makes it the intended surface, such as a request naming no destination whose content this active service itself provides. Mere technical ability to perform the action is insufficient.",
             ContextualSurface.RecentOwnedBrowserTab => "Reuse this previously owned VoiceOS task tab only when its metadata makes the action belong there.",
             ContextualSurface.NewBrowserTaskTab => "Preserve unrelated user work and start a separate VoiceOS task tab for a fresh browser task.",
             ContextualSurface.ForegroundNativeWindow => "The complete action concerns controls inside the foreground native app; representation only.",
@@ -206,62 +253,79 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
             ? selected : ContextualSurface.Clarify;
     }
 
-    public async ValueTask<int?> SelectNamedTabAsync(string utterance,
+    /// <summary>
+    /// Settles a named-tab claim against the real tab inventory. Selecting a tab needs a
+    /// high-confidence unique match; refuting the claim (NoMatch) needs only ordinary confidence
+    /// because a refuted claim never switches tabs by itself.
+    /// </summary>
+    public async ValueTask<NamedTabSelection> SelectNamedTabAsync(string utterance,
         IReadOnlyList<BrowserTabInfo> tabs, CancellationToken cancellationToken = default)
     {
         var offered = tabs.Where(t => t.Origin is not null).Take(128).ToArray();
         if (offered.Length == 0)
         {
-            logger?.LogInformation("Named tab reference={Reference} candidate_count=0 outcome=clarify reason=no_candidates", utterance);
-            return null;
+            logger?.LogInformation("Named tab reference={Reference} candidate_count=0 outcome=no_match reason=no_candidates", utterance);
+            return NamedTabSelection.NoMatch("no_candidates");
         }
         string? KnownService(BrowserTabInfo tab) => ServiceResolver.DestinationChoices.Keys
             .Select(ServiceResolver.Resolve)
             .FirstOrDefault(s => s is not null && Uri.Compare(tab.Origin!, s.WebOrigin,
                 UriComponents.SchemeAndServer, UriFormat.Unescaped, StringComparison.OrdinalIgnoreCase) == 0)
             ?.CanonicalName;
-        var ids = offered.ToDictionary(t => $"tab_{t.TabId}", t =>
-        {
-            return $"title={t.Title}; origin={t.Origin}; host={t.Origin?.Host}; service={KnownService(t) ?? "unknown"}";
-        });
-        ids["NONE"] = "No offered tab is a sufficiently plausible match.";
+        // Recency rank 1 is the most recently used tab VoiceOS knows about.
+        var recency = offered.Where(t => t.LastUsedSequence is not null)
+            .OrderByDescending(t => t.LastUsedSequence)
+            .Select((t, index) => (t.TabId, Rank: index + 1))
+            .ToDictionary(x => x.TabId, x => x.Rank);
+        string Describe(BrowserTabInfo t)
+            => $"title={t.Title}; origin={t.Origin}; host={t.Origin?.Host}; service={KnownService(t) ?? "unknown"}; "
+                + $"active={(t.Active ? "yes" : "no")}; opened_by={(t.Provenance == BrowserTabProvenance.VoiceOs ? "VoiceOS" : "user")}; "
+                + $"recency_rank={(recency.TryGetValue(t.TabId, out var rank) ? rank.ToString() : "unknown")}";
+        var ids = offered.ToDictionary(t => $"tab_{t.TabId}", Describe);
+        ids["NONE"] = "No offered tab is a sufficiently plausible match; the reference is not to any open tab.";
         ids["AMBIGUOUS"] = "Multiple offered tabs plausibly match the reference.";
         logger?.LogInformation("Named tab reference={Reference} candidate_count={Count}", utterance, offered.Length);
         foreach (var tab in offered)
         {
             var candidateId = $"tab_{tab.TabId}";
-            logger?.LogInformation("Named tab candidate_id={CandidateId} title={Title} hostname={Hostname} origin={Origin} service={Service}",
-                candidateId, tab.Title, tab.Origin?.Host, tab.Origin, KnownService(tab));
+            logger?.LogInformation("Named tab candidate_id={CandidateId} title={Title} hostname={Hostname} origin={Origin} service={Service} active={Active} provenance={Provenance} recency_rank={Rank}",
+                candidateId, tab.Title, tab.Origin?.Host, tab.Origin, KnownService(tab), tab.Active, tab.Provenance,
+                recency.TryGetValue(tab.TabId, out var r) ? r : null);
         }
         var answers = await gateway.AskAsync(new { utterance }, new Dictionary<string, JevQuestionDto>
         {
             ["tab"] = new("choice",
-                "Which offered existing browser tab does the user's reference identify? Choose one offered candidate ID only when exactly one candidate is the clear semantic match. Choose AMBIGUOUS when multiple offered candidates plausibly satisfy the reference. Choose NONE when no offered candidate is sufficiently plausible. Use title, hostname, origin, and known service identity. Do not invent a tab, URL, service, or candidate.", ids)
+                "Which offered existing browser tab does the user's reference identify? Choose one offered candidate ID only when exactly one candidate is the clear semantic match. Choose AMBIGUOUS when multiple offered candidates plausibly satisfy the reference. Choose NONE when no offered candidate is sufficiently plausible, including when the reference names content, an item, or a link rather than a tab. Use title, hostname, origin, and known service identity; when several match, whether VoiceOS opened a tab and how recently it was used may distinguish them. Do not invent a tab, URL, service, or candidate.", ids)
         }, cancellationToken).ConfigureAwait(false);
         var tabThreshold = Math.Max(confidenceThreshold, .7);
         answers.TryGetValue("tab", out var answer);
         logger?.LogInformation("Named tab selected_semantic_value={Selection} confidence={Confidence:F2} confidence_floor={Floor:F2} confidence_floor_passed={Passed}",
             answer?.SelectedChoice, answer?.Confidence, tabThreshold,
             answer?.QuestionType == "choice" && answer.Confidence >= tabThreshold);
-        int? Reject(string reason)
+        NamedTabSelection Outcome(NamedTabSelection selection)
         {
-            logger?.LogInformation("Named tab outcome=clarify reason={Reason}", reason);
-            return null;
+            logger?.LogInformation("Named tab outcome={Outcome} reason={Reason} candidate_id={CandidateId}",
+                selection.Kind, selection.Reason ?? "-", selection.TabId is int id ? $"tab_{id}" : "-");
+            return selection;
         }
         if (answer?.QuestionType != "choice" || answer.SelectedChoice is null)
-            return Reject("missing_or_invalid_choice");
-        if (answer.Confidence < tabThreshold) return Reject("choice_confidence_below_floor");
-        if (answer.SelectedChoice == "NONE") return Reject("no_plausible_match");
-        if (answer.SelectedChoice == "AMBIGUOUS") return Reject("multiple_plausible_matches");
-        if (!ids.ContainsKey(answer.SelectedChoice)) return Reject("candidate_not_offered");
-        if (!int.TryParse(answer.SelectedChoice.AsSpan(4), out var id)) return Reject("invalid_candidate_id");
-        var selected = offered.SingleOrDefault(t => t.TabId == id);
-        if (selected is null) return Reject("candidate_missing");
+            return Outcome(NamedTabSelection.Unavailable("missing_or_invalid_choice"));
+        if (answer.Confidence < confidenceThreshold)
+            return Outcome(NamedTabSelection.Unavailable("choice_confidence_below_threshold"));
+        if (answer.SelectedChoice == "NONE") return Outcome(NamedTabSelection.NoMatch("no_plausible_match"));
+        if (answer.SelectedChoice == "AMBIGUOUS") return Outcome(NamedTabSelection.Ambiguous("multiple_plausible_matches"));
+        if (!ids.ContainsKey(answer.SelectedChoice)) return Outcome(NamedTabSelection.Unavailable("candidate_not_offered"));
+        if (!int.TryParse(answer.SelectedChoice.AsSpan(4), out var tabId))
+            return Outcome(NamedTabSelection.Unavailable("invalid_candidate_id"));
+        var selected = offered.SingleOrDefault(t => t.TabId == tabId);
+        if (selected is null) return Outcome(NamedTabSelection.Unavailable("candidate_missing"));
+        // A selection that is not confidently unique is not a switch.
+        if (answer.Confidence < tabThreshold)
+            return Outcome(NamedTabSelection.Ambiguous("selection_confidence_below_floor"));
         var duplicates = offered.Count(t => string.Equals(t.Title, selected.Title,
             StringComparison.OrdinalIgnoreCase) && Equals(t.Origin, selected.Origin));
-        if (duplicates != 1) return Reject("duplicate_title_and_origin");
-        logger?.LogInformation("Named tab outcome=selected candidate_id={CandidateId}", answer.SelectedChoice);
-        return id;
+        if (duplicates != 1) return Outcome(NamedTabSelection.Ambiguous("duplicate_title_and_origin"));
+        return Outcome(NamedTabSelection.Select(tabId));
     }
 
     public async ValueTask<string?> SelectInstalledAppAsync(string utterance,

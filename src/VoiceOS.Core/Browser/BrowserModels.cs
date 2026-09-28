@@ -5,7 +5,9 @@ using VoiceOS.Core.Decision;
 namespace VoiceOS.Core.Browser;
 
 public enum CommandRoute { DirectCapability, ComputerUse, NativeInteraction, TextTransform, Clarify }
-public enum RoutingReason { None, MediaTransport, NewContentTarget, IncompleteIntent, LowConfidence, AmbiguousIntent, RouterFailure }
+public enum RoutingReason { None, MediaTransport, NewContentTarget, IncompleteIntent, LowConfidence, AmbiguousIntent, RouterFailure,
+    /// <summary>Going back was requested but neither media playback nor navigation was established.</summary>
+    UnresolvedReturn }
 public enum MediaRequestKind { None, Transport, ContentSelection, Uncertain }
 public enum SemanticDestinationKind { None, KnownService, ExplicitUrl, NamedTab }
 public enum TabDisposition { Unspecified, CurrentTab, NewTab, ExistingNamedTab }
@@ -14,6 +16,10 @@ public enum SemanticEndState { Unspecified, SurfaceReady, ResultsVisible, Resour
 public enum GoalShape { Uncertain, SurfaceOnly, ActionOnSurface }
 public enum TaskRelation { NewTask, ContinueRecent, RequiresRecent, Uncertain }
 public enum ContextDependency { Uncertain, SelfContained, RequiresCurrentSurface }
+/// <summary>What a back/previous request returns through; separates media Previous from navigation Back.</summary>
+public enum ReturnTarget { Uncertain, None, MediaPlayback, NavigationHistory }
+/// <summary>The requested thing to open or use, independent of the surface that could host it.</summary>
+public enum RequestedEntityKind { Uncertain, None, BrowserItself, NamedEntity }
 public sealed record CommandRouteDecision(CommandRoute Route, double Confidence, string? Detail = null,
     RoutingReason Reason = RoutingReason.None, MediaOperation? MediaOperation = null,
     MediaRequestKind MediaRequestKind = MediaRequestKind.Uncertain,
@@ -25,7 +31,14 @@ public sealed record CommandRouteDecision(CommandRoute Route, double Confidence,
     TaskRelation TaskRelation = TaskRelation.NewTask,
     string? NamedTabTarget = null,
     GoalShape GoalShape = GoalShape.Uncertain,
-    ContextDependency ContextDependency = ContextDependency.Uncertain);
+    ContextDependency ContextDependency = ContextDependency.Uncertain,
+    RequestedEntityKind RequestedEntity = RequestedEntityKind.Uncertain)
+{
+    /// <summary>A specific non-browser app, service, or site was requested. A generic browser
+    /// host (e.g. Chrome itself) cannot satisfy it.</summary>
+    public bool RequestsNamedEntity => RequestedEntity == RequestedEntityKind.NamedEntity
+        || DestinationKind == SemanticDestinationKind.KnownService;
+}
 public interface ICommandRouter
 {
     ValueTask<CommandRouteDecision> RouteAsync(string transcript, CancellationToken cancellationToken = default);
@@ -47,7 +60,8 @@ public sealed record BrowserElement(
     [property: JsonPropertyName("value")] string? Value,
     [property: JsonPropertyName("href")] string? Href,
     [property: JsonPropertyName("geometry")] BrowserGeometry Geometry,
-    [property: JsonPropertyName("context")] string Context);
+    [property: JsonPropertyName("context")] string Context,
+    [property: JsonPropertyName("search")] bool Search = false);
 
 public sealed record BrowserViewport(
     [property: JsonPropertyName("width")] int Width,
@@ -86,6 +100,10 @@ public interface IChromeCompanionTransport
     ValueTask<BrowserSnapshot> ObserveAsync(string sessionId, int tabId, CancellationToken cancellationToken = default);
     ValueTask<BrowserSnapshot> ActAsync(BrowserActionRequest action, CancellationToken cancellationToken = default);
     ValueTask FocusTaskTabAsync(string sessionId, int tabId, CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+    /// <summary>Best-effort cleanup of a task tab this session started but never used (e.g. normalization
+    /// failed while startup was overlapped). The extension refuses to close adopted user tabs or other
+    /// sessions' tabs, so failures here are swallowed by the caller.</summary>
+    ValueTask CloseTaskTabAsync(string sessionId, int tabId, CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
     bool IsConnected => false;
     ValueTask<IReadOnlyList<BrowserTabInfo>> ListTabsAsync(CancellationToken cancellationToken = default)
         => ValueTask.FromResult<IReadOnlyList<BrowserTabInfo>>([]);
@@ -98,14 +116,35 @@ public interface IChromeCompanionTransport
 }
 
 public enum ContextualSurface { ActiveBrowserTab, RecentOwnedBrowserTab, NewBrowserTaskTab, ForegroundNativeWindow, Clarify }
+
+/// <summary>How the real tab inventory settled a named-tab claim.</summary>
+public enum NamedTabSelectionKind
+{
+    /// <summary>Exactly one open tab is the named tab.</summary>
+    Selected,
+    /// <summary>No open tab matches: the named-tab claim is refuted.</summary>
+    NoMatch,
+    /// <summary>Several open tabs plausibly match.</summary>
+    Ambiguous,
+    /// <summary>The inventory could not be judged (no picker, invalid or low-confidence answer).</summary>
+    Unavailable
+}
+
+public sealed record NamedTabSelection(NamedTabSelectionKind Kind, int? TabId = null, string? Reason = null)
+{
+    public static NamedTabSelection Select(int tabId) => new(NamedTabSelectionKind.Selected, tabId);
+    public static NamedTabSelection NoMatch(string reason) => new(NamedTabSelectionKind.NoMatch, Reason: reason);
+    public static NamedTabSelection Ambiguous(string reason) => new(NamedTabSelectionKind.Ambiguous, Reason: reason);
+    public static NamedTabSelection Unavailable(string reason) => new(NamedTabSelectionKind.Unavailable, Reason: reason);
+}
 public interface IContextualScopeDecisionSource
 {
     ValueTask<ContextualSurface> SelectAsync(string utterance, CommandRouteDecision intent,
         ExecutionContextSnapshot context, IReadOnlyList<ContextualSurface> offered,
         CancellationToken cancellationToken = default);
-    ValueTask<int?> SelectNamedTabAsync(string utterance, IReadOnlyList<BrowserTabInfo> tabs,
+    ValueTask<NamedTabSelection> SelectNamedTabAsync(string utterance, IReadOnlyList<BrowserTabInfo> tabs,
         CancellationToken cancellationToken = default)
-        => ValueTask.FromResult<int?>(null);
+        => ValueTask.FromResult(NamedTabSelection.Unavailable("no_named_tab_picker"));
     ValueTask<string?> SelectInstalledAppAsync(string utterance,
         IReadOnlyList<VoiceOS.Core.Candidates.AppCandidate> apps, CancellationToken cancellationToken = default)
         => ValueTask.FromResult<string?>(null);

@@ -153,6 +153,10 @@ public interface IInteractionSurface
 {
     ValueTask<InteractionObservation> ObserveAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>May reuse state the surface obtained as the direct result of its last executed action; otherwise observes fresh.</summary>
+    ValueTask<InteractionObservation> ObserveAfterActionAsync(CancellationToken cancellationToken = default)
+        => ObserveAsync(cancellationToken);
+
     ValueTask<InteractionActionResult> ExecuteAsync(
         InteractionAction action,
         InteractionObservation observation,

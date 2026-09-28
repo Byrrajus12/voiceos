@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.RegularExpressions;
 using System.Diagnostics;
 using Microsoft.Extensions.Logging;
+using VoiceOS.Core.Activation;
 using VoiceOS.Core.Decision;
 using VoiceOS.Core.Interaction;
 
@@ -44,6 +45,7 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                 answers = await _gateway.AskAsync(State(context.Observation, context.RecentHistory,
                     context.Progress, correction), space.Questions, cancellationToken).ConfigureAwait(false);
                 jevTimer.Stop();
+                LatencyTrace.Current?.Record("browser_decision", jevTimer.Elapsed.TotalMilliseconds);
                 _logger?.LogInformation("Browser stage=jev_decision http_ms={ElapsedMs:F0} attempt={Attempt}",
                     jevTimer.Elapsed.TotalMilliseconds, retry + 1);
             }
@@ -55,6 +57,24 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             }
 
             LogDiagnostics(context.Observation, answers, space);
+            var achieved = Probability(answers, "goal_achieved");
+            var stuck = Probability(answers, "stuck");
+            var evidence = BrowserCompletionEvidence.Evaluate(_goal,
+                BrowserPageFacts.From(context.Observation, context.RecentHistory));
+            var completionThreshold = evidence.Threshold(_completionThreshold);
+            _logger?.LogInformation("Browser completion evidence page={Page} evidence={Evidence} reason={Reason} threshold={Threshold:F2} goal_achieved={Goal:F2}",
+                PageSummary(context.Observation), evidence.Strength, evidence.Reason, completionThreshold, achieved);
+            var proposed = answers.GetValueOrDefault("operation")?.SelectedChoice;
+            // Once the typed end state is independently judged achieved on this page, no further
+            // action runs, whatever the operation head proposed; the fresh confirmation decides.
+            if (proposed != "DONE" && achieved >= completionThreshold)
+            {
+                _logger?.LogInformation("Browser completion preempts operation={Operation} evidence={Evidence} reason={Reason} goal_achieved={Goal:F2}",
+                    proposed, evidence.Strength, evidence.Reason, achieved);
+                _proposedCompletion = true;
+                return InteractionDecision.Done("The requested end state is already observed; no further action is needed.")
+                    with { GoalConfidence = achieved };
+            }
             if (!TryChoice(answers, "operation", space.Operations, out var operation))
             {
                 if (retry == 0) { correction = "Choose one offered operation."; continue; }
@@ -63,11 +83,14 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             if (operation.Confidence < _decisionThreshold)
                 return Exit("low_operation_confidence", $"The browser operation is not confident enough ({operation.Confidence:F2}).");
 
-            var achieved = Probability(answers, "goal_achieved");
-            var stuck = Probability(answers, "stuck");
             if (operation.SelectedChoice == "DONE")
             {
-                if (achieved < _completionThreshold)
+                if (evidence.IsUnestablished)
+                {
+                    if (retry == 0) { correction = $"DONE was rejected because nothing observed yet shows the requested {_goal.Normalization?.ResourceType}; the page is still the site's default landing. Choose an operation that opens it."; continue; }
+                    return Exit("unestablished_completion", "Nothing observed yet shows the requested resource.", ClarificationChoices(context.Observation));
+                }
+                if (achieved < completionThreshold)
                 {
                     if (retry == 0) { correction = "DONE was rejected because independent goal_achieved evidence is weak. Choose an advancing operation."; continue; }
                     return Exit("unconfirmed_completion", "Completion lacks independent evidence.", ClarificationChoices(context.Observation));
@@ -103,6 +126,9 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
 
             if (action is null)
                 return Exit("unoffered_operation", "The selected browser operation is unavailable.");
+            if (RepeatsEarlierActivation(action, context))
+                return Exit("repeated_action",
+                    "The next step would repeat an earlier click on this page without reaching the goal.", ProgressChoices());
 
             if (operation.SelectedChoice == "TYPE_TEXT")
             {
@@ -114,6 +140,7 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                     value = await _textValues.ResolveAsync(new(_goal, field, context.Observation), cancellationToken)
                         .ConfigureAwait(false);
                     textTimer.Stop();
+                    LatencyTrace.Current?.Record("text_value", textTimer.Elapsed.TotalMilliseconds);
                     _logger?.LogInformation("Browser stage=text_value elapsed_ms={ElapsedMs:F0}", textTimer.Elapsed.TotalMilliseconds);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -147,6 +174,17 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
     {
         if (!_proposedCompletion)
             return new(InteractionCompletionState.Incomplete, "No completion was proposed.");
+        var evidence = BrowserCompletionEvidence.Evaluate(_goal, BrowserPageFacts.From(observation, recentHistory));
+        if (evidence.IsUnestablished || evidence.IsConfirmed)
+        {
+            // Both are decided by the fresh observation itself; a model judgment cannot change them.
+            _logger?.LogInformation("Browser completion confirmation page={Page} evidence={Evidence} reason={Reason}",
+                PageSummary(observation), evidence.Strength, evidence.Reason);
+            return evidence.IsConfirmed
+                ? new(InteractionCompletionState.Complete, "The requested site is open on a fresh observation.")
+                : new(InteractionCompletionState.Incomplete,
+                    $"Nothing observed yet shows the requested {_goal.Normalization?.ResourceType}.");
+        }
         // InteractionEngine has already taken a fresh observation. Independently ask Jev
         // about that observation, even when its stable state key matches the prior one.
         try
@@ -158,12 +196,13 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                     ["goal_achieved"] = GoalQuestion()
                 }, cancellationToken).ConfigureAwait(false);
             confirmationTimer.Stop();
+            LatencyTrace.Current?.Record("completion_confirmation", confirmationTimer.Elapsed.TotalMilliseconds);
             _logger?.LogInformation("Browser stage=fresh_completion_confirmation http_ms={ElapsedMs:F0}",
                 confirmationTimer.Elapsed.TotalMilliseconds);
             var probability = Probability(answers, "goal_achieved");
-            _logger?.LogInformation("Browser completion confirmation page={Page} goal_achieved={Probability:F2}",
-                PageSummary(observation), probability);
-            return probability >= _completionThreshold
+            _logger?.LogInformation("Browser completion confirmation page={Page} goal_achieved={Probability:F2} evidence={Evidence} reason={Reason}",
+                PageSummary(observation), probability, evidence.Strength, evidence.Reason);
+            return probability >= evidence.Threshold(_completionThreshold)
                 ? new(InteractionCompletionState.Complete, "The whole browser goal is confirmed on a fresh observation.")
                 : new(InteractionCompletionState.Incomplete, "The fresh browser observation does not confirm the whole goal.");
         }
@@ -282,6 +321,31 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
         var page = ReadPage(observation.Evidence);
         return BrowserSurface.LogOrigin(page.Url);
     }
+
+    /// <summary>
+    /// Structural loop check: the same control (by its semantic label, not its per-snapshot ref)
+    /// was already clicked from this same URL during this run. Re-clicking it cannot be progress
+    /// (Home re-selected, a Guide toggled back); a click from a different URL (the next page of
+    /// results) is not a repeat.
+    /// </summary>
+    private static bool RepeatsEarlierActivation(InteractionAction action, InteractionDecisionContext context)
+    {
+        if (action.Kind != InteractionActionKind.Activate) return false;
+        var label = context.Observation.Candidates.FirstOrDefault(candidate => candidate.Id == action.TargetId)?.Label;
+        var url = ReadPage(context.Observation.Evidence).Url;
+        if (label is null || url is null) return false;
+        return context.RecentHistory.Any(entry => !entry.Suppressed
+            && entry.Action.Kind == InteractionActionKind.Activate
+            && StringComparer.Ordinal.Equals(entry.TargetLabel, label)
+            && StringComparer.Ordinal.Equals(ReadPage(entry.ObservationEvidence).Url, url));
+    }
+
+    private static IReadOnlyList<InteractionChoice> ProgressChoices() =>
+    [
+        new("complete", "Looks complete", "Accept the current page as the result."),
+        new("continue", "Keep going", "Continue interacting from the current page."),
+        new("cancel", "Cancel", "Stop without taking another browser action.")
+    ];
 
     private static IReadOnlyList<InteractionChoice> ClarificationChoices(InteractionObservation observation)
     {

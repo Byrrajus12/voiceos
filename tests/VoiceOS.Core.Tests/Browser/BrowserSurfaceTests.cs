@@ -208,6 +208,57 @@ public sealed class BrowserSurfaceTests
         Assert.Equal(7, surface.TabId);
     }
 
+    private static InteractionAction BackAction(InteractionObservation observation)
+        => observation.Candidates.SelectMany(c => c.Actions).Single(a => a.Kind == InteractionActionKind.GoBack);
+
+    [Fact]
+    public async Task ConfirmedBack_ActionResultSnapshotReflectsPreviousPage()
+    {
+        var session = "back-session-a";
+        var current = ButtonSnapshot(session, 7, "e1") with { CanGoBack = true };
+        var previous = new BrowserSnapshot(7, session, "rev-back", "https://example.com/results", "Results",
+            "text", false, Viewport, [new("e9", "link", "Result", true, false, null, null, Geo, "ctx")]);
+        var transport = new FakeTransport([current, previous]);
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("go back"), new NeverComplete(), session);
+        var observation = await surface.ObserveAsync();
+
+        var result = await surface.ExecuteAsync(BackAction(observation), observation);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal("BACK", transport.LastAction?.Action);
+        var observeCount = transport.ObserveCount;
+        var after = await surface.ObserveAfterActionAsync();
+        Assert.Equal(observeCount, transport.ObserveCount);
+        Assert.Equal("https://example.com/results", surface.LatestSnapshot?.Url);
+        Assert.NotNull(after.Candidates.SingleOrDefault(c => c.Id == "e9"));
+    }
+
+    [Theory]
+    [InlineData("NO_HISTORY", InteractionResultStatus.NoEffect)]
+    [InlineData("NAVIGATION_NOT_OBSERVED", InteractionResultStatus.NoEffect)]
+    [InlineData("NAVIGATION_UNCONFIRMED", InteractionResultStatus.PlatformFailure)]
+    [InlineData("NAVIGATION_FAILED", InteractionResultStatus.PlatformFailure)]
+    public async Task UnconfirmedBack_IsNeverSuccessAndDoesNotForwardASnapshot(string code,
+        InteractionResultStatus expected)
+    {
+        var session = "back-session-b";
+        var current = ButtonSnapshot(session, 7, "e1") with { CanGoBack = true };
+        var transport = new FakeTransport([current, current])
+        {
+            ThrowOnAct = new ChromeCompanionException(code, "Going back was not confirmed.")
+        };
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("go back"), new NeverComplete(), session);
+        var observation = await surface.ObserveAsync();
+
+        var result = await surface.ExecuteAsync(BackAction(observation), observation);
+
+        Assert.False(result.Succeeded);
+        Assert.Equal(expected, result.Status);
+        var before = transport.ObserveCount;
+        await surface.ObserveAfterActionAsync();
+        Assert.Equal(before + 1, transport.ObserveCount);
+    }
+
     private static BrowserSnapshot ButtonSnapshot(string sessionId, int tabId, string elemRef)
         => new(tabId, sessionId, "rev1", "https://example.com/", "Test Page", "Some visible text",
             false, Viewport, [new(elemRef, "button", "Click Me", true, false, null, null, Geo, "test context")]);
@@ -231,7 +282,9 @@ public sealed class BrowserSurfaceTests
         public BrowserActionRequest? LastAction { get; private set; }
         public int OpenCount { get; private set; }
         public int ObserveCount { get; private set; }
+        public int ActCount { get; private set; }
         public int? LastObservedTabId { get; private set; }
+        public ChromeCompanionException? ThrowOnAct { get; set; }
 
         public ValueTask<BrowserSnapshot> OpenTaskTabAsync(string sessionId, string url, CancellationToken ct = default)
         {
@@ -248,10 +301,161 @@ public sealed class BrowserSurfaceTests
 
         public ValueTask<BrowserSnapshot> ActAsync(BrowserActionRequest action, CancellationToken ct = default)
         {
+            ActCount++;
             LastAction = action;
+            if (ThrowOnAct is { } ex) throw ex;
             return ValueTask.FromResult(Next());
         }
 
         private BrowserSnapshot Next() => snapshots[Math.Min(_index++, snapshots.Length - 1)];
+    }
+
+    [Fact]
+    public async Task ObserveAfterActionAsync_ReusesActReturnedSnapshot_WithoutExtraTransportObserve()
+    {
+        var session = "reuse-session-a";
+        var initial = ButtonSnapshot(session, 7, "e1");
+        var afterAct = ButtonSnapshot(session, 7, "e1") with { Revision = "rev-act" };
+        var transport = new FakeTransport([initial, afterAct]);
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("open result"), new NeverComplete(), session);
+        var observation = await surface.ObserveAsync();
+        var click = observation.Candidates.SelectMany(c => c.Actions).Single(a => a.Kind == InteractionActionKind.Activate);
+
+        var result = await surface.ExecuteAsync(click, observation);
+        Assert.True(result.Succeeded);
+        var observeCountBefore = transport.ObserveCount;
+
+        var reused = await surface.ObserveAfterActionAsync();
+
+        Assert.Equal(observeCountBefore, transport.ObserveCount);
+        Assert.Equal(1, transport.ActCount);
+        Assert.NotNull(reused.Candidates.SingleOrDefault(c => c.Id == "e1"));
+    }
+
+    [Fact]
+    public async Task ObserveAfterActionAsync_WithNothingPending_CallsTransport()
+    {
+        var session = "reuse-session-b";
+        var snapshot = ButtonSnapshot(session, 7, "e1");
+        var transport = new FakeTransport([snapshot, snapshot, snapshot]);
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("open result"), new NeverComplete(), session);
+        var observation = await surface.ObserveAsync();
+        var click = observation.Candidates.SelectMany(c => c.Actions).Single(a => a.Kind == InteractionActionKind.Activate);
+        await surface.ExecuteAsync(click, observation);
+
+        await surface.ObserveAfterActionAsync(); // consumes the pending action snapshot
+        var before = transport.ObserveCount;
+
+        await surface.ObserveAfterActionAsync(); // nothing pending now
+
+        Assert.Equal(before + 1, transport.ObserveCount);
+    }
+
+    [Fact]
+    public async Task ObserveAsync_AfterAction_IsFreshAndDiscardsPendingActionSnapshot()
+    {
+        var session = "reuse-session-c";
+        var snapshot = ButtonSnapshot(session, 7, "e1");
+        var transport = new FakeTransport([snapshot, snapshot, snapshot]);
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("open result"), new NeverComplete(), session);
+        var observation = await surface.ObserveAsync();
+        var click = observation.Candidates.SelectMany(c => c.Actions).Single(a => a.Kind == InteractionActionKind.Activate);
+        await surface.ExecuteAsync(click, observation);
+
+        var before = transport.ObserveCount;
+        await surface.ObserveAsync(); // fresh, discards the pending action snapshot
+
+        Assert.Equal(before + 1, transport.ObserveCount);
+
+        var afterFresh = transport.ObserveCount;
+        await surface.ObserveAfterActionAsync(); // nothing pending, hits transport again
+
+        Assert.Equal(afterFresh + 1, transport.ObserveCount);
+    }
+
+    [Fact]
+    public async Task ActionReturnedNavigationSnapshot_UpdatesRevision_StaleOldRevisionRejected()
+    {
+        var session = "nav-session-d";
+        var initial = ButtonSnapshot(session, 7, "e1");
+        var navigated = new BrowserSnapshot(7, session, "rev2", "https://example.com/next", "Next Page", "text",
+            false, Viewport, [new("e2", "button", "Continue", true, false, null, null, Geo, "ctx")]);
+        var afterNav = navigated with { Revision = "rev3" };
+        var transport = new FakeTransport([initial, navigated, afterNav]);
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("open result"), new NeverComplete(), session);
+        var observation = await surface.ObserveAsync();
+        var click = observation.Candidates.SelectMany(c => c.Actions).Single(a => a.Kind == InteractionActionKind.Activate);
+
+        var result = await surface.ExecuteAsync(click, observation);
+        Assert.True(result.Succeeded);
+
+        var reused = await surface.ObserveAfterActionAsync();
+        Assert.Equal("https://example.com/next", surface.LatestSnapshot?.Url);
+
+        var stale = await surface.ExecuteAsync(click, observation);
+        Assert.Equal(InteractionResultStatus.StaleTarget, stale.Status);
+
+        var newClick = reused.Candidates.SelectMany(c => c.Actions).Single(a => a.Kind == InteractionActionKind.Activate);
+        var success = await surface.ExecuteAsync(newClick, reused);
+        Assert.True(success.Succeeded);
+    }
+
+    [Fact]
+    public async Task FailingAction_LeavesNothingPending_SoNextObserveAfterActionHitsTransport()
+    {
+        var session = "fail-session-e";
+        var snapshot = ButtonSnapshot(session, 7, "e1");
+        var transport = new FakeTransport([snapshot, snapshot])
+        {
+            ThrowOnAct = new ChromeCompanionException("ELEMENT_NOT_VISIBLE", "The element is no longer visible.")
+        };
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("open result"), new NeverComplete(), session);
+        var observation = await surface.ObserveAsync();
+        var click = observation.Candidates.SelectMany(c => c.Actions).Single(a => a.Kind == InteractionActionKind.Activate);
+
+        var result = await surface.ExecuteAsync(click, observation);
+        Assert.Equal(InteractionResultStatus.TargetUnavailable, result.Status);
+
+        var before = transport.ObserveCount;
+        await surface.ObserveAfterActionAsync();
+
+        Assert.Equal(before + 1, transport.ObserveCount);
+    }
+
+    [Fact]
+    public async Task AdoptedChildTabSnapshot_IsReusedByObserveAfterAction()
+    {
+        const string session = "child-session-f";
+        var source = ButtonSnapshot(session, 7, "e1");
+        var child = ButtonSnapshot(session, 9, "e2") with { Url = "https://destination.example/", AdoptedFromTabId = 7 };
+        var transport = new FakeTransport([source, child]);
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("open the resource"), new NeverComplete(), session);
+        var observation = await surface.ObserveAsync();
+        var click = observation.Candidates.SelectMany(x => x.Actions).Single(x => x.Kind == InteractionActionKind.Activate);
+
+        var result = await surface.ExecuteAsync(click, observation);
+        Assert.True(result.Succeeded);
+
+        var before = transport.ObserveCount;
+        await surface.ObserveAfterActionAsync();
+
+        Assert.Equal(before, transport.ObserveCount);
+        Assert.Equal(9, surface.TabId);
+        Assert.Equal("https://destination.example/", surface.LatestSnapshot?.Url);
+    }
+
+    [Fact]
+    public async Task SearchElement_LabelIncludesPurposeSearchMarker()
+    {
+        var session = "purpose-search-session";
+        var snapshot = new BrowserSnapshot(7, session, "rev1", "https://youtube.com/", "YouTube", "text",
+            false, Viewport, [new("combo1", "combobox", "", true, true, null, null, Geo, "context", Search: true)]);
+        var transport = new FakeTransport([snapshot]);
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("search for KSI"), new NeverComplete(), session);
+
+        var observation = await surface.ObserveAsync();
+
+        var label = observation.Candidates.Single(c => c.Id == "combo1").Label;
+        Assert.Contains("purpose='search'", label);
     }
 }

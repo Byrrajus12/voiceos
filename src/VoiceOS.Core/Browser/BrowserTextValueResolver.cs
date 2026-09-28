@@ -28,7 +28,8 @@ public sealed class GroundedBrowserTextValueResolver : IBrowserTextValueResolver
         var field = request.Field.Label;
         // These grounded candidates are search terms, not arbitrary form values.
         // A context-dependent field needs a future value-only helper or clarification.
-        if (!Regex.IsMatch(field, @"\b(searchbox|search|query|find)\b", RegexOptions.IgnoreCase))
+        if (!Regex.IsMatch(field, @"\b(searchbox|search|query|find)\b", RegexOptions.IgnoreCase)
+            && !field.Contains("purpose='search'", StringComparison.Ordinal))
             return ValueTask.FromResult<string?>(null);
         // A selected field already holding the proposed value must not be filled again.
         var current = Regex.Match(field, @"\bvalue='(?<value>[^']*)'").Groups["value"].Value;

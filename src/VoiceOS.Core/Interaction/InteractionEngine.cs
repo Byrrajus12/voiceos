@@ -140,7 +140,7 @@ public sealed class InteractionEngine
                 return Finish(InteractionCompletionState.Uncertain,
                     result.Detail ?? "The browser action changed tabs ambiguously.");
             }
-            var next = await surface.ObserveAsync(token).ConfigureAwait(false);
+            var next = await surface.ObserveAfterActionAsync(token).ConfigureAwait(false);
             var changed = !StringComparer.Ordinal.Equals(observation.StateKey, next.StateKey);
             if (result.Succeeded && !changed)
                 result = InteractionActionResult.Fail(InteractionResultStatus.NoEffect,
