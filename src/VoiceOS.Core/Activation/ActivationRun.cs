@@ -41,6 +41,11 @@ public sealed class ActivationRun
     public int ActionCount { get; internal set; }
 
     public CommandRouteDecision? InitialRoute { get; internal set; }
+    public IReadOnlyList<JevDiagnostics.SummaryRecord> RouteHeads =>
+        (InitialRoute?.RawAnswers ?? new Dictionary<string, JevAnswer>())
+            .Select(x => JevDiagnostics.Record("route", x.Key, x.Value))
+            .Concat((Decision?.RawAnswers ?? new Dictionary<string, JevAnswer>())
+                .Select(x => JevDiagnostics.Record("direct", x.Key, x.Value))).ToArray();
     /// <summary>The route after any direct-to-browser reroute.</summary>
     public CommandRouteDecision? Route { get; internal set; }
     public bool ReroutedFromDirect { get; internal set; }

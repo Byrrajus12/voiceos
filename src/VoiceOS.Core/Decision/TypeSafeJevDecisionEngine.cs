@@ -176,6 +176,8 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         try
         {
             var textCandidates = TextCandidateExtractor.Extract(state.Transcript);
+            foreach (var head in answers)
+                _logger.LogInformation("Direct head {Summary}", JevDiagnostics.Summarize(head.Key, head.Value));
             var plan = BuildPlan(answers, state, textCandidates);
             var program = _planner.TryBuildProgram(answers, state, textCandidates);
             return new DecisionResult(plan, program, answers, durationMs, inputTokens, outputTokens);

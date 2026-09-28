@@ -86,6 +86,7 @@ public sealed record TurnRecord(
     /// <summary>Failed advisory checks (efficiency budgets, outcome/scope preference) of a turn whose
     /// correctness passed; recorded separately so they never change the classification.</summary>
     public IReadOnlyList<string> EfficiencyMisses { get; init; } = [];
+    public IReadOnlyList<JevDiagnostics.SummaryRecord> Heads { get; init; } = [];
 }
 
 public enum CheckCategory { Outcome, Route, Scope, SideEffect, Efficiency, EndState, Precondition }

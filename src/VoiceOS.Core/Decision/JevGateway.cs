@@ -103,7 +103,13 @@ public static class JevAnswerParser
             if (element.TryGetProperty("choice", out var choiceElement))
                 choice = choiceElement.GetString();
             confidence = ReadProbability(element, "confidence") ?? 0;
-            foreach (var property in element.EnumerateObject())
+            if (element.TryGetProperty("probabilities", out var nested) && nested.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in nested.EnumerateObject())
+                    if (ReadProbability(nested, property.Name) is { } probability)
+                        probabilities[property.Name] = probability;
+            }
+            else foreach (var property in element.EnumerateObject())
             {
                 if (property.Name is "type" or "choice" or "confidence" || property.Value.ValueKind != JsonValueKind.Number)
                     continue;

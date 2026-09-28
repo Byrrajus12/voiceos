@@ -257,6 +257,8 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
     private void LogDiagnostics(InteractionObservation observation, IReadOnlyDictionary<string, JevAnswer> answers,
         BrowserDecisionSpace space)
     {
+        foreach (var head in answers)
+            _logger?.LogInformation("Browser heads {Summary}", JevDiagnostics.Summarize(head.Key, head.Value));
         static string Top(JevAnswer? answer, IReadOnlyDictionary<string, string>? labels, int count)
             => answer is null || labels is null ? "missing" : string.Join(" | ", answer.Probabilities
                 .Where(item => labels.ContainsKey(item.Key)).OrderByDescending(static item => item.Value)

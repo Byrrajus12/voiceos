@@ -33,7 +33,7 @@ public static class RunMapper
         return new TurnRecord(index, transcript, run.ActivationId, run.PostSttStart ?? run.StartedAt, run.CompletedAt,
             run.Lane, run.Outcome, outcomeClass, terminal?.Phase.ToString(), terminal?.Status, run.Failure?.Message,
             MapRoute(run.InitialRoute), MapRoute(run.Route), run.ReroutedFromDirect, MapScope(run.Scope),
-            MapExecution(run), latency, counts, initial, final, [], Classification.HarnessError);
+            MapExecution(run), latency, counts, initial, final, [], Classification.HarnessError) { Heads = run.RouteHeads };
     }
 
     private static OutcomeClass Classify(ActivationRun run, ApplicationInteractionSnapshot? terminal)

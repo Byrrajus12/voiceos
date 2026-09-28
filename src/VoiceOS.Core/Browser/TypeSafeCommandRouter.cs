@@ -118,6 +118,8 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
                     })
             }, cancellationToken).ConfigureAwait(false);
 
+        foreach (var head in answers)
+            logger?.LogInformation("Command route head {Summary}", JevDiagnostics.Summarize(head.Key, head.Value));
         var literalUrl = ExtractLiteralUrl(transcript);
         var destinationAnswer = answers.TryGetValue("destination", out var da) && da.QuestionType == "choice"
             && da.Confidence >= confidenceThreshold ? da.SelectedChoice : null;
@@ -132,6 +134,7 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
         var destinationName = destinationKind == SemanticDestinationKind.NamedTab ? namedTab : service?.CanonicalName;
         CommandRouteDecision WithScope(CommandRouteDecision value) => value with
         {
+            RawAnswers = answers,
             DestinationKind = destinationKind, DestinationName = destinationName,
             ExplicitUrl = literalUrl, TabDisposition = disposition,
             SurfacePreference = ChoiceEnum<SurfacePreference>(answers, "surface_preference", confidenceThreshold),
@@ -247,6 +250,8 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
         {
             ["surface"] = new("choice", "Choose only one offered execution surface from metadata. Do not infer an action for a bare entity. No DOM or page actions are available here.", criteria)
         }, cancellationToken).ConfigureAwait(false);
+        foreach (var head in result)
+            logger?.LogInformation("Contextual surface {Summary}", JevDiagnostics.Summarize(head.Key, head.Value));
         return result.TryGetValue("surface", out var answer) && answer.QuestionType == "choice"
             && answer.Confidence >= confidenceThreshold
             && Enum.TryParse<ContextualSurface>(answer.SelectedChoice, out var selected) && offered.Contains(selected)
@@ -298,6 +303,8 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
                 "Which offered existing browser tab does the user's reference identify? Choose one offered candidate ID only when exactly one candidate is the clear semantic match. Choose AMBIGUOUS when multiple offered candidates plausibly satisfy the reference. Choose NONE when no offered candidate is sufficiently plausible, including when the reference names content, an item, or a link rather than a tab. Use title, hostname, origin, and known service identity; when several match, whether VoiceOS opened a tab and how recently it was used may distinguish them. Do not invent a tab, URL, service, or candidate.", ids)
         }, cancellationToken).ConfigureAwait(false);
         var tabThreshold = Math.Max(confidenceThreshold, .7);
+        foreach (var head in answers)
+            logger?.LogInformation("Named tab {Summary}", JevDiagnostics.Summarize(head.Key, head.Value));
         answers.TryGetValue("tab", out var answer);
         logger?.LogInformation("Named tab selected_semantic_value={Selection} confidence={Confidence:F2} confidence_floor={Floor:F2} confidence_floor_passed={Passed}",
             answer?.SelectedChoice, answer?.Confidence, tabThreshold,
@@ -340,6 +347,8 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
         {
             ["app"] = new("choice", "Choose an installed native app only when the user clearly names that product as the intended task destination. Use only offered app IDs. Incidental app mentions and foreground context are not sufficient. Choose none if uncertain.", ids)
         }, cancellationToken).ConfigureAwait(false);
+        foreach (var head in answers)
+            logger?.LogInformation("Installed app {Summary}", JevDiagnostics.Summarize(head.Key, head.Value));
         return answers.TryGetValue("app", out var answer) && answer.QuestionType == "choice"
             && answer.Confidence >= confidenceThreshold && answer.SelectedChoice is { } id
             && id != "none" && offered.Any(x => x.Id == id) ? id : null;
