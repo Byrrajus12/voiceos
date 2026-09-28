@@ -42,7 +42,11 @@ public sealed record EvalSummary(
     double WrongTargetRate, EfficiencyInfo Efficiency,
     Percentiles TotalPostSttMs, Percentiles FirstActionMs,
     IReadOnlyDictionary<string, Percentiles> PerStageMs,
-    IReadOnlyList<ScenarioReliability> Reliability);
+    IReadOnlyList<ScenarioReliability> Reliability)
+{
+    public int InfrastructureUnavailable => ClassificationCounts.GetValueOrDefault(Classification.InfrastructureUnavailable);
+    public bool ComparisonValid => InfrastructureUnavailable <= 3;
+}
 
 /// <summary>Pure aggregation over already-produced ScenarioResults. No I/O, no product calls.</summary>
 public static class EvalAggregator

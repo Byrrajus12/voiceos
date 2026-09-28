@@ -858,7 +858,7 @@ public sealed class BrowserSemanticTests
             Requests++;
             Assert.Equal("https://openrouter.ai/api/v1/chat/completions", request.RequestUri!.ToString());
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            { Content = new StringContent("{\"choices\":[{\"message\":{\"content\":\"invalid json\"}}]") });
+            { Content = new StringContent("{\"choices\":[{\"message\":{\"content\":\"invalid json\"}}]}") });
         }
     }
 

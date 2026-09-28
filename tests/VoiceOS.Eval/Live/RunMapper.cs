@@ -38,9 +38,10 @@ public static class RunMapper
 
     private static OutcomeClass Classify(ActivationRun run, ApplicationInteractionSnapshot? terminal)
     {
+        if (terminal?.Phase == ApplicationInteractionPhase.Unavailable) return OutcomeClass.Unavailable;
         if (run.Failure is not null) return OutcomeClass.Failed;
         if (terminal?.Phase == ApplicationInteractionPhase.NeedsChoice) return OutcomeClass.Clarify;
-        if (run.Outcome == "Unavailable") return OutcomeClass.Unsupported;
+        if (run.Outcome == "Unsupported") return OutcomeClass.Unsupported;
         if (run.Outcome is "Succeeded" or "Complete" && terminal?.Phase == ApplicationInteractionPhase.Succeeded)
             return OutcomeClass.Complete;
         return OutcomeClass.Failed;

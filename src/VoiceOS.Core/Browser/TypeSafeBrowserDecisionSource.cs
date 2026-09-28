@@ -49,11 +49,12 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                 _logger?.LogInformation("Browser stage=jev_decision http_ms={ElapsedMs:F0} attempt={Attempt}",
                     jevTimer.Elapsed.TotalMilliseconds, retry + 1);
             }
-            catch (Exception ex) when (ex is not OperationCanceledException)
+            catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
             {
                 _logger?.LogWarning("Browser decision exit reason=jev_error type={Type} detail={Detail}",
                     ex.GetType().Name, ex.Message);
-                return InteractionDecision.Unsure($"The bounded browser decision failed: {ex.Message}");
+                throw new InfrastructureUnavailableException(UnavailableReason.IntentService,
+                    "Can't reach the command service.", ex);
             }
 
             LogDiagnostics(context.Observation, answers, space);
@@ -206,10 +207,11 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                 ? new(InteractionCompletionState.Complete, "The whole browser goal is confirmed on a fresh observation.")
                 : new(InteractionCompletionState.Incomplete, "The fresh browser observation does not confirm the whole goal.");
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !cancellationToken.IsCancellationRequested)
         {
             _logger?.LogWarning("Browser completion check failed type={Type}", ex.GetType().Name);
-            return new(InteractionCompletionState.Uncertain, "The fresh completion check failed.");
+            throw new InfrastructureUnavailableException(UnavailableReason.IntentService,
+                "Can't reach the command service.", ex);
         }
     }
 

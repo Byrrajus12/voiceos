@@ -52,7 +52,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         if (baseResp == null)
         {
             totalSw.Stop();
-            return ErrorResult(totalSw.Elapsed.TotalMilliseconds, "Base Jev request failed");
+            return ErrorResult(totalSw.Elapsed.TotalMilliseconds, "Base Jev request failed", providerFailed: true);
         }
 
         // ── Pass 2: compound-detail request (only when is_compound fires) ──────────────
@@ -72,6 +72,8 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
 
             var compoundHttpSw = Stopwatch.StartNew();
             compoundResp = await SendAndParseAsync(compoundReq, ct);
+            if (compoundResp is null)
+                return ErrorResult(totalSw.Elapsed.TotalMilliseconds, "Compound Jev request failed", providerFailed: true);
             compoundHttpSw.Stop();
             compoundHttpMs = compoundHttpSw.Elapsed.TotalMilliseconds;
         }
@@ -110,7 +112,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         {
             resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             _logger.LogError(ex, "Jev HTTP request failed");
             return null;
@@ -121,7 +123,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         {
             body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             _logger.LogError(ex, "Failed to read Jev response body");
             return null;
@@ -789,10 +791,10 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         return criteria;
     }
 
-    private static DecisionResult ErrorResult(double durationMs, string reason)
+    private static DecisionResult ErrorResult(double durationMs, string reason, bool providerFailed = false)
         => new(new VoicePlan(VoiceAction.Rejected, RejectionReason: reason),
                null,
-               new Dictionary<string, JevAnswer>(), durationMs, 0, 0);
+               new Dictionary<string, JevAnswer>(), durationMs, 0, 0) { ProviderFailed = providerFailed };
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

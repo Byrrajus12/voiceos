@@ -199,12 +199,15 @@ public sealed class BrowserSurface : IInteractionSurface
         }
         catch (ChromeCompanionException ex)
         {
+            if (ex.Code == "TRANSPORT_DISCONNECTED")
+                throw new InfrastructureUnavailableException(UnavailableReason.ChromeCompanion,
+                    "Chrome companion isn't connected.", ex);
             _logger?.LogWarning("Browser action operation={Operation} ref={Ref} outcome={Code}", protocolAction, action.TargetId, ex.Code);
             var status = ex.Code switch
             {
                 "STALE_REVISION" or "STALE_ELEMENT" => InteractionResultStatus.StaleTarget,
                 "TAB_NOT_OWNED" or "SESSION_MISMATCH" => InteractionResultStatus.ScopeViolation,
-                "TAB_TOPOLOGY_AMBIGUOUS" or "TRANSPORT_DISCONNECTED"
+                "TAB_TOPOLOGY_AMBIGUOUS"
                     => InteractionResultStatus.TopologyAmbiguous,
                 "ELEMENT_NOT_VISIBLE" or "ELEMENT_DISABLED" => InteractionResultStatus.TargetUnavailable,
                 // The companion confirmed no navigation happened: the tab has no earlier entry,

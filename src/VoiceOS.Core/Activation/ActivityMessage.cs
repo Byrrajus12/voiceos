@@ -8,6 +8,13 @@ namespace VoiceOS.Core.Activation;
 
 internal static class ActivityMessage
 {
+    public static string ForUnavailable(UnavailableReason? reason) => reason switch
+    {
+        UnavailableReason.IntentService => "Can't reach the command service.",
+        UnavailableReason.BrowserGoalService => "Browser help is unavailable right now.",
+        UnavailableReason.ChromeCompanion => "Chrome companion isn't connected.",
+        _ => "The service is unavailable right now."
+    };
     public static string? ForStep(VoiceStep step, IAppCatalog? catalog,
         IReadOnlyList<WindowCandidate>? windows = null) => step switch
     {

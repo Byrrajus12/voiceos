@@ -155,4 +155,4 @@ public sealed record BrowserInteractionOutcome(
     InteractionCompletionState Completion, string? Detail,
     IReadOnlyList<InteractionChoice>? Choices, string? Url, string? Title,
     int Decisions = 0, int Actions = 0, int? TabId = null, string? SessionId = null,
-    string? SemanticGoal = null);
+    string? SemanticGoal = null, UnavailableReason? Unavailable = null);

@@ -126,7 +126,7 @@ public sealed class InteractionEngine
                 {
                     result = await surface.ExecuteAsync(action, observation, token).ConfigureAwait(false);
                 }
-                catch (Exception ex) when (ex is not OperationCanceledException)
+                catch (Exception ex) when (ex is not OperationCanceledException and not InfrastructureUnavailableException)
                 {
                     result = InteractionActionResult.Fail(InteractionResultStatus.PlatformFailure, ex.Message);
                 }

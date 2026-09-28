@@ -79,7 +79,8 @@ public sealed class ActivationRun
         {
             lock (_lock)
                 return _snapshots.LastOrDefault(static s => s.Phase is ApplicationInteractionPhase.Succeeded
-                    or ApplicationInteractionPhase.Failed or ApplicationInteractionPhase.NeedsChoice);
+                    or ApplicationInteractionPhase.Failed or ApplicationInteractionPhase.NeedsChoice
+                    or ApplicationInteractionPhase.Unavailable);
         }
     }
 

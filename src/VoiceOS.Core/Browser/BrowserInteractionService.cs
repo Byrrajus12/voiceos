@@ -50,7 +50,7 @@ public sealed class BrowserInteractionService(
     {
         if (normalizer is null) return;
         var clock = Stopwatch.StartNew();
-        var task = normalizer.NormalizeAsync(utterance, cancellationToken).AsTask();
+        var task = NormalizeAsync(utterance, cancellationToken);
         _prefetch = (activationId, utterance, task, clock);
     }
 
@@ -141,6 +141,11 @@ public sealed class BrowserInteractionService(
                     normalized = await normalizationTask.ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+                catch (InfrastructureUnavailableException)
+                {
+                    if (selectionTask is not null) Observe(selectionTask);
+                    throw;
+                }
                 catch { /* A provider failure cannot turn an ungrounded request into a literal query. */ }
                 finally { normalizationCts?.Dispose(); }
                 if (selectionTask is not null)
@@ -211,6 +216,11 @@ public sealed class BrowserInteractionService(
             }
             return await RunSurfaceAsync(goal, surface, decisions, cancellationToken).ConfigureAwait(false);
         }
+        catch (InfrastructureUnavailableException ex)
+        {
+            _pending = null;
+            return new(InteractionCompletionState.Incomplete, ex.Message, null, null, null, Unavailable: ex.Reason);
+        }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
         {
             logger?.LogWarning("Browser task exit reason=time_budget_expired");
@@ -219,7 +229,9 @@ public sealed class BrowserInteractionService(
         catch (ChromeCompanionException ex)
         {
             logger?.LogWarning("Browser task exit reason=companion_error code={Code}", ex.Code);
-            return new(InteractionCompletionState.Incomplete, $"Chrome companion unavailable: {ex.Message}", null, null, null);
+            _pending = null;
+            return new(InteractionCompletionState.Incomplete, $"Chrome companion unavailable: {ex.Message}", null, null, null,
+                Unavailable: ex.Code == "TRANSPORT_DISCONNECTED" ? UnavailableReason.ChromeCompanion : null);
         }
         finally { _gate.Release(); }
     }
@@ -259,6 +271,11 @@ public sealed class BrowserInteractionService(
                 normalized = await normalizationTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+            catch (InfrastructureUnavailableException)
+            {
+                await CleanupStartupAsync(startupTask, sessionId).ConfigureAwait(false);
+                throw;
+            }
             catch { /* A provider failure cannot turn an ungrounded request into a literal query. */ }
         }
         catch (OperationCanceledException)
@@ -345,6 +362,9 @@ public sealed class BrowserInteractionService(
         }
         catch (ChromeCompanionException ex)
         {
+            if (ex.Code == "TRANSPORT_DISCONNECTED")
+                throw new InfrastructureUnavailableException(UnavailableReason.ChromeCompanion,
+                    "Chrome companion isn't connected.", ex);
             logger?.LogWarning("Browser task exit reason=companion_error code={Code}", ex.Code);
             selectTimer.Stop();
             LatencyTrace.Current?.Record("tab_select", selectTimer.Elapsed.TotalMilliseconds);
@@ -377,8 +397,11 @@ public sealed class BrowserInteractionService(
         if (normalizer is null)
             return (Task.FromResult<BrowserGoalNormalization?>(null), null);
         var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        return (normalizer.NormalizeAsync(utterance, cts.Token).AsTask(), cts);
+        return (NormalizeAsync(utterance, cts.Token), cts);
     }
+
+    private async Task<BrowserGoalNormalization?> NormalizeAsync(string utterance, CancellationToken token)
+        => await normalizer!.NormalizeAsync(utterance, token).ConfigureAwait(false);
 
     private async Task<BrowserGoalNormalization?> ObservePrefetchAsync(
         Task<BrowserGoalNormalization?> task, Stopwatch clock)

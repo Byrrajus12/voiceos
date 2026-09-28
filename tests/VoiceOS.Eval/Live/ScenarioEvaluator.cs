@@ -10,6 +10,11 @@ public static class ScenarioEvaluator
         var expectedOutcome = expect?.PrimaryOutcome ?? ExpectedOutcome.Complete;
         var accepted = expect?.AllAcceptedOutcomes ?? [expectedOutcome];
         var checks = new List<CheckResult>();
+        if (turn.OutcomeClass == OutcomeClass.Unavailable)
+        {
+            checks.Add(Outcome(accepted, turn));
+            return turn with { Checks = checks, Classification = Classification.InfrastructureUnavailable };
+        }
 
         if (turn.OutcomeClass == OutcomeClass.Timeout)
         {

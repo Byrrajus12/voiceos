@@ -74,7 +74,7 @@ public sealed record LatencyInfo(double TotalPostSttMs, double? FirstActionMs,
 public sealed record CountInfo(int Actions, int BrowserDecisions, int DirectSteps, int TabsCreated,
     int ModelStages, int Clarifications);
 
-public enum OutcomeClass { Complete, Clarify, Unsupported, Failed, Timeout }
+public enum OutcomeClass { Complete, Clarify, Unsupported, Failed, Timeout, Unavailable }
 
 public sealed record TurnRecord(
     int Index, string Transcript, string ActivationId, DateTimeOffset StartedAt, DateTimeOffset? CompletedAt,
@@ -97,7 +97,7 @@ public enum Classification
 {
     Pass, CorrectClarify, Partial, UnnecessaryClarify, MissedClarify, WrongRoute, WrongScope, WrongTarget,
     WrongAction, FalseSuccess, ExecutionFailure, Unsupported, Timeout, SetupFailure, EnvironmentMismatch,
-    UnexpectedOutcome, HarnessError, Skipped
+    UnexpectedOutcome, HarnessError, Skipped, InfrastructureUnavailable
 }
 
 public sealed record ScenarioResult(string RunId, string ScenarioId, string Name, string Family,

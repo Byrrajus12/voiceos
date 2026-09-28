@@ -8,4 +8,7 @@ public record DecisionResult(
     IReadOnlyDictionary<string, JevAnswer> RawAnswers,
     double RequestDurationMs,
     int InputTokens,
-    int OutputTokens);
+    int OutputTokens)
+{
+    public bool ProviderFailed { get; init; }
+}

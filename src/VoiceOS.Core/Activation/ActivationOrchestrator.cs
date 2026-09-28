@@ -472,10 +472,11 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 _ => await _commandRouter.RouteAsync(transcript, _shutdown.Token).ConfigureAwait(false)
             };
         }
-        catch (Exception ex) when (ex is not OperationCanceledException)
+        catch (Exception ex) when (ex is not OperationCanceledException || !_shutdown.IsCancellationRequested)
         {
             _logger.LogError(ex, "Command routing failed");
-            route = new(CommandRoute.Clarify, 0, "Command routing failed safely.", RoutingReason.RouterFailure);
+            PublishUnavailable(run, UnavailableReason.IntentService, ActivityMessage.ForUnavailable(UnavailableReason.IntentService));
+            return;
         }
         routeTimer.Stop();
         trace.Record("route", routeTimer.Elapsed.TotalMilliseconds);
@@ -536,9 +537,19 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         trace.Record("context", contextTimer.Elapsed.TotalMilliseconds);
         run.ExecutionContext = executionContext;
         var scopeTimer = Stopwatch.StartNew();
-        var executionScope = await _scopeResolver.ResolveAsync(transcript, route,
-            executionContext, _commandRouter as IContextualScopeDecisionSource,
-            _shutdown.Token).ConfigureAwait(false);
+        ExecutionScopeDecision executionScope;
+        try
+        {
+            executionScope = await _scopeResolver.ResolveAsync(transcript, route,
+                executionContext, _commandRouter as IContextualScopeDecisionSource,
+                _shutdown.Token).ConfigureAwait(false);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException || !_shutdown.IsCancellationRequested)
+        {
+            _logger.LogError(ex, "Scope selection service failed");
+            PublishUnavailable(run, UnavailableReason.IntentService, ActivityMessage.ForUnavailable(UnavailableReason.IntentService));
+            return;
+        }
         scopeTimer.Stop();
         trace.Record("scope", scopeTimer.Elapsed.TotalMilliseconds);
         run.Scope = executionScope;
@@ -558,9 +569,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             if (_browserTransport?.IsConnected != true
                 && !await StartChromeCompanionAsync(_shutdown.Token).ConfigureAwait(false))
             {
-                run.Outcome = "Unavailable";
-                PublishSnapshot(new(ApplicationInteractionPhase.Failed, kind,
-                    transcript, "Chrome did not connect to the Companion within the startup period."));
+                PublishUnavailable(run, UnavailableReason.ChromeCompanion,
+                    "Chrome did not connect to the Companion within the startup period.");
                 return;
             }
 
@@ -569,6 +579,12 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             var browserResult = await _browserInteraction.RunAsync(transcript, _shutdown.Token,
                 activationId, executionScope.Browser).ConfigureAwait(false);
             run.BrowserOutcome = browserResult;
+            if (browserResult.Unavailable is { } unavailable)
+            {
+                run.ActionCount = browserResult.Actions;
+                PublishUnavailable(run, unavailable, browserResult.Detail);
+                return;
+            }
             if (browserResult is { TabId: int tabId, SessionId: { } sessionId, Url: { } url }
                 && browserResult.Completion is InteractionCompletionState.Complete or InteractionCompletionState.Uncertain)
                 _recentTask = new(tabId, sessionId, url,
@@ -608,7 +624,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                     prepared.Detail));
                 return;
             }
-            run.Outcome = "Unavailable";
+            run.Outcome = "Unsupported";
             PublishSnapshot(new(ApplicationInteractionPhase.Failed, kind,
                 transcript, "Native UI interaction is not enabled yet."));
             return;
@@ -673,12 +689,19 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 {
                     run.Decision = await _decisionEngine.DecideAsync(decisionState).ConfigureAwait(false);
                 }
-                catch (Exception ex)
+                catch (Exception ex) when (ex is not OperationCanceledException || !_shutdown.IsCancellationRequested)
                 {
                     _logger.LogError(ex, "Decision engine error");
+                    PublishUnavailable(run, UnavailableReason.IntentService, ActivityMessage.ForUnavailable(UnavailableReason.IntentService));
+                    return;
                 }
                 run.JevEnd = DateTimeOffset.UtcNow;
                 trace.Record("direct_decision", (run.JevEnd.Value - run.JevStart.Value).TotalMilliseconds);
+            }
+            if (run.Decision?.ProviderFailed == true)
+            {
+                PublishUnavailable(run, UnavailableReason.IntentService, ActivityMessage.ForUnavailable(UnavailableReason.IntentService));
+                return;
             }
             if (run.Decision is { } made)
                 _logger.LogInformation("Direct decision action_kind={ActionKind} media_op={MediaOp} snap_dir={SnapDir} target_app={TargetApp} target_window={TargetWindow} jev_ms={JevMs:F0}",
@@ -886,10 +909,20 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         PublishSnapshot(snapshot);
     }
 
+    private void PublishUnavailable(ActivationRun run, UnavailableReason reason, string? detail)
+    {
+        run.Outcome = "Unavailable";
+        _logger.LogWarning("Outcome unavailable reason={Reason} detail={Detail}", reason, detail);
+        PublishSnapshot(new(ApplicationInteractionPhase.Unavailable, run.Kind, run.Transcript, detail, Unavailable: reason));
+    }
+
     private void PublishSnapshot(ApplicationInteractionSnapshot snapshot)
     {
         switch (snapshot.Phase)
         {
+            case ApplicationInteractionPhase.Unavailable:
+                PublishUi(ProductUiPhase.Error, ActivityMessage.ForUnavailable(snapshot.Unavailable));
+                break;
             case ApplicationInteractionPhase.Succeeded:
                 PublishUi(ProductUiPhase.Success);
                 break;

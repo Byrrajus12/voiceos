@@ -1,6 +1,7 @@
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
+using VoiceOS.Core.Interaction;
 
 namespace VoiceOS.Core.Browser;
 
@@ -40,7 +41,8 @@ public sealed class OpenRouterBrowserGoalNormalizer(HttpClient http, string? api
 
     public async ValueTask<BrowserGoalNormalization?> NormalizeAsync(string utterance, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(apiKey)) return null;
+        if (string.IsNullOrWhiteSpace(apiKey))
+            throw new InfrastructureUnavailableException(UnavailableReason.BrowserGoalService, "Browser help is unavailable right now.");
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://openrouter.ai/api/v1/chat/completions");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         request.Content = JsonContent.Create(new
@@ -51,13 +53,25 @@ public sealed class OpenRouterBrowserGoalNormalizer(HttpClient http, string? api
             max_completion_tokens = 300,
             reasoning = new { effort = "low" }
         });
+        string content;
         try
         {
             using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
-            if (!response.IsSuccessStatusCode) return null;
+            if (!response.IsSuccessStatusCode)
+                throw new InfrastructureUnavailableException(UnavailableReason.BrowserGoalService, "Browser help is unavailable right now.");
             using var body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken).ConfigureAwait(false);
-            var content = body.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString();
-            if (content is null) return null;
+            content = body.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString()
+                ?? throw new InvalidOperationException("Missing provider content.");
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (InfrastructureUnavailableException) { throw; }
+        catch (Exception)
+        {
+            // Provider envelopes and transport errors are infrastructure failures; do not expose credentials or response content.
+            throw new InfrastructureUnavailableException(UnavailableReason.BrowserGoalService, "Browser help is unavailable right now.");
+        }
+        try
+        {
             using var parsed = JsonDocument.Parse(content);
             var value = parsed.RootElement;
             var objective = Required(value, "objective");
