@@ -35,6 +35,7 @@ public sealed record CommandRouteDecision(CommandRoute Route, double Confidence,
     RequestedEntityKind RequestedEntity = RequestedEntityKind.Uncertain)
 {
     public IReadOnlyDictionary<string, JevAnswer>? RawAnswers { get; init; }
+    public bool TaskRelationEstablished { get; init; }
     /// <summary>A specific non-browser app, service, or site was requested. A generic browser
     /// host (e.g. Chrome itself) cannot satisfy it.</summary>
     public bool RequestsNamedEntity => RequestedEntity == RequestedEntityKind.NamedEntity

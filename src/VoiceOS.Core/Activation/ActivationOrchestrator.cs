@@ -40,6 +40,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
     private readonly IWindowAwareLauncher? _windowAwareLauncher;
     private readonly ScopeResolver _scopeResolver = new();
     private RecentTaskFrame? _recentTask;
+    internal RecentTaskFrame? RecentTaskForTesting => _recentTask;
     private readonly VoiceOSConfig _config;
     private readonly ILogger<ActivationOrchestrator> _logger;
     private readonly CancellationTokenSource _shutdown = new();
@@ -460,6 +461,30 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         var trace = run.Trace = LatencyTrace.Begin(activationId);
 
         PublishState(kind, ActivationState.Understanding);
+        // Validate only the existing memory before showing it to interpretation. Full execution
+        // context collection stays after routing; the inventory is reused there when needed.
+        RecentTaskFrame? exposedRecentTask = null;
+        IReadOnlyList<BrowserTabInfo> recentInventory = [];
+        bool? recentInventoryKnown = null;
+        if (_recentTask is not null)
+        {
+            recentInventoryKnown = _browserTransport?.IsConnected == true;
+            if (recentInventoryKnown == true)
+            {
+                try { recentInventory = await _browserTransport!.ListTabsAsync(_shutdown.Token).ConfigureAwait(false); }
+                catch (Exception ex) when (ex is not OperationCanceledException)
+                {
+                    _logger.LogWarning(ex, "Recent task inventory failed");
+                    recentInventoryKnown = false;
+                }
+            }
+            var validation = RecentTaskPolicy.Validate(_recentTask, recentInventoryKnown == true,
+                recentInventory, DateTimeOffset.UtcNow);
+            _recentTask = validation.Stored;
+            exposedRecentTask = validation.Exposed;
+            _logger.LogInformation("Recent task stored={Stored} exposed={Exposed} reason={Reason}",
+                _recentTask is not null, exposedRecentTask is not null, validation.Reason);
+        }
         CommandRouteDecision route;
         var routeTimer = Stopwatch.StartNew();
         try
@@ -468,7 +493,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             {
                 null => new CommandRouteDecision(CommandRoute.DirectCapability, 1, "No command router is configured."),
                 TypeSafeCommandRouter semantic => await semantic.RouteAsync(
-                    transcript, _recentTask, _shutdown.Token).ConfigureAwait(false),
+                    transcript, exposedRecentTask, _shutdown.Token).ConfigureAwait(false),
                 _ => await _commandRouter.RouteAsync(transcript, _shutdown.Token).ConfigureAwait(false)
             };
         }
@@ -484,8 +509,6 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         _logger.LogInformation("Command route heads destination_kind={DestinationKind} destination={Destination} tab_disposition={TabDisposition} context_dependency={ContextDependency} task_relation={TaskRelation} surface_preference={SurfacePreference} goal_shape={GoalShape} end_state={EndState}",
             route.DestinationKind, route.DestinationName ?? "-", route.TabDisposition, route.ContextDependency,
             route.TaskRelation, route.SurfacePreference, route.GoalShape, route.EndState);
-        if (route.TaskRelation == TaskRelation.NewTask)
-            _recentTask = null;
         run.Lane = route.Route.ToString();
         _logger.LogInformation("Command route={Route} confidence={Confidence:P0} reason={Reason} media_request_kind={MediaRequestKind} media_op={MediaOp} route_ms={RouteMs:F0}",
             route.Route, route.Confidence, route.Reason, route.MediaRequestKind,
@@ -513,7 +536,12 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             var windows = CandidateBuilder.GetOpenWindows();
             IReadOnlyList<BrowserTabInfo> tabs = [];
             var connected = _browserTransport?.IsConnected == true;
-            if (connected)
+            if (recentInventoryKnown is { } known)
+            {
+                connected = known;
+                tabs = recentInventory;
+            }
+            else if (connected)
             {
                 try { tabs = await _browserTransport!.ListTabsAsync(_shutdown.Token).ConfigureAwait(false); }
                 catch (Exception ex) when (ex is not OperationCanceledException)
@@ -522,13 +550,14 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                     connected = false;
                 }
             }
-            if (connected && _recentTask is { } prior
-                && !tabs.Any(tab => tab.TabId == prior.TabId
-                    && tab.SessionId == prior.SessionId
-                    && StringComparer.Ordinal.Equals(tab.Url, prior.Url)))
-                _recentTask = null;
+            var validation = RecentTaskPolicy.Validate(_recentTask, connected, tabs, DateTimeOffset.UtcNow);
+            _recentTask = validation.Stored;
+            var scopeRecentTask = RecentTaskPolicy.ExposedForScope(validation.Exposed, route);
+            _logger.LogInformation("Recent task stored={Stored} exposed={Exposed} reason={Reason}",
+                _recentTask is not null, scopeRecentTask is not null,
+                validation.Exposed is not null && scopeRecentTask is null ? "new_task_hidden" : validation.Reason);
             executionContext = new(windows.FirstOrDefault(static w => w.IsForeground),
-                windows, connected, tabs, _recentTask,
+                windows, connected, tabs, scopeRecentTask,
                 _catalog is null ? [] : CandidateBuilder.GetInstalledApps(_catalog));
         }
         else
@@ -585,11 +614,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 PublishUnavailable(run, unavailable, browserResult.Detail);
                 return;
             }
-            if (browserResult is { TabId: int tabId, SessionId: { } sessionId, Url: { } url }
-                && browserResult.Completion is InteractionCompletionState.Complete or InteractionCompletionState.Uncertain)
-                _recentTask = new(tabId, sessionId, url,
-                    browserResult.SemanticGoal ?? transcript,
-                    browserResult.Completion, DateTimeOffset.UtcNow);
+            _recentTask = RecentTaskPolicy.AfterBrowserRun(_recentTask, browserResult, transcript, DateTimeOffset.UtcNow);
             run.ActionCount = browserResult.Actions;
             run.Outcome = browserResult.Completion.ToString();
             if (browserResult.Completion == InteractionCompletionState.Uncertain)

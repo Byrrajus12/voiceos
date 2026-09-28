@@ -135,6 +135,10 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
         CommandRouteDecision WithScope(CommandRouteDecision value) => value with
         {
             RawAnswers = answers,
+            TaskRelationEstablished = answers.TryGetValue("task_relation", out var relation)
+                && relation.QuestionType == "choice" && relation.Confidence >= confidenceThreshold
+                && Enum.TryParse<TaskRelation>(relation.SelectedChoice, out var taskRelation)
+                && Enum.IsDefined(taskRelation),
             DestinationKind = destinationKind, DestinationName = destinationName,
             ExplicitUrl = literalUrl, TabDisposition = disposition,
             SurfacePreference = ChoiceEnum<SurfacePreference>(answers, "surface_preference", confidenceThreshold),
