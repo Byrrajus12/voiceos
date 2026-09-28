@@ -49,5 +49,12 @@ coverage/
 *.tmp
 *.log
 
-# Docs
-docs/
+# Docs (except companion publishing/privacy guides and canonical icons)
+docs/*
+!docs/chrome-web-store.md
+!docs/privacy-policy.md
+!docs/branding/
+docs/branding/*
+!docs/branding/vos-companion-icon-16.png
+!docs/branding/vos-companion-icon-48.png
+!docs/branding/vos-companion-icon-128.png

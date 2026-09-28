@@ -1,4 +1,15 @@
-# VoiceOS Chrome Companion — Alpha 0.1 proof
+# VOS Companion — Alpha 0.1 proof
+
+For Chrome Web Store packaging, temporary icons, and production native-host origin
+setup, see [the publishing guide](../../docs/chrome-web-store.md). Build the upload ZIP
+from the repository root with:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\VoiceOS.ChromeCompanion\package.ps1
+```
+
+This packages only runtime files into `artifacts/vos-companion.zip`; do not ZIP this
+whole directory, which also contains tests, documentation, and packaging tooling.
 
 This directory is a thin, unpacked Manifest V3 extension. It has no model, API key,
 planner, site-specific workflow, remote-debugging access, or Windows UI Automation
@@ -55,7 +66,7 @@ powershell -ExecutionPolicy Bypass -File tools\VoiceOS.ChromeNativeHost\uninstal
    dotnet run --project src\VoiceOS\VoiceOS.csproj --no-build
    ```
 
-3. Note the current tab count, pin the VoiceOS extension if desired, then click its
+3. Note the current tab count, pin VOS Companion if desired, then click its
    toolbar action once.
 4. Confirm exactly one new Google task tab appears and the pre-existing tabs are
    unchanged.
