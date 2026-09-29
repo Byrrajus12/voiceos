@@ -17,12 +17,20 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
     private readonly IBrowserTextValueResolver _textValues;
     private readonly double _decisionThreshold;
     private readonly double _completionThreshold;
+    private readonly bool _bindHead;
+    private readonly bool _effectAwareRepeat;
     private bool _proposedCompletion;
 
+    /// <param name="bindHead">Adds one focused <c>bind</c> head to the existing fan-out for Activate steps and reports
+    /// the binding with each action; it never changes which action is chosen.</param>
+    /// <param name="effectAwareRepeat">Keys the repeat-click guard on the identity of the earlier activated element
+    /// (from the effect ledger) instead of its visible label.</param>
     public TypeSafeBrowserDecisionSource(IJevGateway gateway, BrowserGoal goal,
         double decisionThreshold = .35, double completionThreshold = .55, ILogger? logger = null,
-        IBrowserTextValueResolver? textValues = null)
+        IBrowserTextValueResolver? textValues = null, bool bindHead = false, bool effectAwareRepeat = false)
     {
+        _bindHead = bindHead;
+        _effectAwareRepeat = effectAwareRepeat;
         _gateway = gateway;
         _goal = goal;
         _logger = logger;
@@ -34,7 +42,8 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
     public async ValueTask<InteractionDecision> DecideAsync(
         InteractionDecisionContext context, CancellationToken cancellationToken = default)
     {
-        var space = BrowserDecisionSpace.From(context.Observation, context.RecentHistory);
+        var bindStep = _bindHead && context.Goal.Step is { Family: ProofFamily.Activate } activateStep ? activateStep : null;
+        var space = BrowserDecisionSpace.From(context.Observation, context.RecentHistory, bindStep);
         string? correction = null;
         for (var retry = 0; retry <= 1; retry++)
         {
@@ -58,6 +67,7 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             }
 
             LogDiagnostics(context.Observation, answers, space);
+            var binding = bindStep is null ? null : Bind(context, space, answers, bindStep);
             var achieved = Probability(answers, "goal_achieved");
             var stuck = Probability(answers, "stuck");
             var evidence = BrowserCompletionEvidence.Evaluate(_goal,
@@ -127,7 +137,7 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
 
             if (action is null)
                 return Exit("unoffered_operation", "The selected browser operation is unavailable.");
-            if (RepeatsEarlierActivation(action, context))
+            if (_effectAwareRepeat ? RepeatsEarlierElement(action, context) : RepeatsEarlierActivation(action, context))
                 return Exit("repeated_action",
                     "The next step would repeat an earlier click on this page without reaching the goal.", ProgressChoices());
 
@@ -156,7 +166,9 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             }
             _logger?.LogInformation("Browser selected operation={Operation} target={Target} has_text={HasText}",
                 operation.SelectedChoice, action.TargetId, action.Text is not null);
-            return InteractionDecision.Act(action) with { GoalConfidence = achieved };
+            if (binding is not null)
+                LogBindingAgreement(binding, action, answers);
+            return InteractionDecision.Act(action) with { GoalConfidence = achieved, TargetBinding = binding };
 
             InteractionDecision Exit(string reason, string detail, IReadOnlyList<InteractionChoice>? choices = null)
             {
@@ -213,6 +225,76 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             throw new InfrastructureUnavailableException(UnavailableReason.IntentService,
                 "Can't reach the command service.", ex);
         }
+    }
+
+    /// <summary>
+    /// Binds the step's descriptor to one offered control: an exact unique accessible name equal to the
+    /// user's stated entity first, else the focused bind head. Null when nothing is bound (NONE, missing head).
+    /// </summary>
+    private TargetBinding? Bind(InteractionDecisionContext context, BrowserDecisionSpace space,
+        IReadOnlyDictionary<string, JevAnswer> answers, OutcomeStep step)
+    {
+        if (!space.Targets.TryGetValue("CLICK", out var clickable) || clickable.Count == 0) return null;
+        var revision = context.Observation.Revision;
+        var elements = ReadElements(context.Observation.Evidence);
+        var names = clickable.Keys.Select(id => (Id: id, Name: elements.GetValueOrDefault(id))).ToArray();
+        var entity = NormalizeName(_goal.Normalization?.Entity);
+        if (entity.Length > 0)
+        {
+            var exact = names.Where(item => NormalizeName(item.Name) == entity).ToArray();
+            if (exact.Length == 1)
+            {
+                var binding = new TargetBinding(exact[0].Id, revision, BindingMethod.ExactLabel, clickable.Count,
+                    Label: exact[0].Name);
+                _logger?.LogInformation("Browser bind method=ExactLabel target={Target} candidates={Candidates}", binding.ElementRef, clickable.Count);
+                _logger?.LogDebug("Browser bind diag label={Label} descriptor={Descriptor}", exact[0].Name, step.What.Phrase);
+                return binding;
+            }
+        }
+        if (!answers.TryGetValue("bind", out var answer) || answer.QuestionType != "choice"
+            || answer.Top is not { } top || answer.Margin is not { } margin) return null;
+        _logger?.LogInformation("Browser bind method=JevChoice top={Top} p={P:F2} margin={Margin:F2} candidates={Candidates} none={None:F2}",
+            top.Choice, top.P, margin, clickable.Count, answer.Probabilities.GetValueOrDefault("NONE"));
+        var ranked = answer.Probabilities.Where(item => item.Key != top.Choice).OrderByDescending(static item => item.Value)
+            .Take(2).Select(static item => (item.Key, item.Value)).ToArray();
+        _logger?.LogDebug("Browser bind diag top_label={Label} descriptor={Descriptor} runners={Runners}",
+            elements.GetValueOrDefault(top.Choice), step.What.Phrase,
+            string.Join(" | ", ranked.Select(item => $"{item.Key}:{item.Value:F2}:{elements.GetValueOrDefault(item.Key)}")));
+        if (top.Choice == "NONE" || !clickable.ContainsKey(top.Choice)) return null;
+        return new TargetBinding(top.Choice, revision, BindingMethod.JevChoice, clickable.Count, top.P, margin,
+            elements.GetValueOrDefault(top.Choice), ranked);
+    }
+
+    private void LogBindingAgreement(TargetBinding binding, InteractionAction action, IReadOnlyDictionary<string, JevAnswer> answers)
+    {
+        var click = answers.GetValueOrDefault("click_target");
+        _logger?.LogInformation("Browser bind agreement bound={Bound} action_kind={Kind} action_target={Target} same={Same} click_target_top={ClickTop}",
+            binding.ElementRef, action.Kind, action.TargetId, binding.ElementRef == action.TargetId, click?.Top?.Choice ?? "-");
+    }
+
+    private static string NormalizeName(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name)) return "";
+        var tokens = BrowserCompletionEvidence.Tokens(name).Where(static t => t is not ("the" or "a" or "an" or "tab" or "button" or "link" or "page"));
+        return string.Join(' ', tokens);
+    }
+
+    private static Dictionary<string, string> ReadElements(string? evidence)
+    {
+        var result = new Dictionary<string, string>(StringComparer.Ordinal);
+        try
+        {
+            if (evidence is null) return result;
+            using var document = JsonDocument.Parse(evidence);
+            if (!document.RootElement.TryGetProperty("elements", out var elements) || elements.ValueKind != JsonValueKind.Array)
+                return result;
+            foreach (var element in elements.EnumerateArray())
+                if (element.ValueKind == JsonValueKind.Object && element.TryGetProperty("id", out var id)
+                    && id.GetString() is { } key && element.TryGetProperty("Name", out var name) && name.GetString() is { } value)
+                    result[key] = value;
+        }
+        catch { }
+        return result;
     }
 
     private object State(InteractionObservation observation, IReadOnlyList<InteractionHistoryEntry> history,
@@ -344,6 +426,45 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             && StringComparer.Ordinal.Equals(ReadPage(entry.ObservationEvidence).Url, url));
     }
 
+    /// <summary>
+    /// Effect-aware loop check: the same <em>element</em> (role, name, context and href, as recorded on the
+    /// Activated effect) was already activated from this same URL. A different control that merely shares a
+    /// visible label with an earlier one (the recipe page's second "Search") is not a repeat, while re-clicking
+    /// the very same control on an unchanged page (a Guide toggle) still is.
+    /// </summary>
+    private static bool RepeatsEarlierElement(InteractionAction action, InteractionDecisionContext context)
+    {
+        if (action.Kind != InteractionActionKind.Activate) return false;
+        if (context.Effects is not { } effects) return RepeatsEarlierActivation(action, context);
+        var url = ReadPage(context.Observation.Evidence).Url;
+        var candidate = ReadElement(context.Observation.Evidence, action.TargetId);
+        if (url is null || candidate is null) return RepeatsEarlierActivation(action, context);
+        var fingerprint = BrowserEffectEmitter.Fingerprint(candidate.Value.Role, candidate.Value.Name, candidate.Value.Context, candidate.Value.Href);
+        return effects.Where(static e => e.Kind == EffectKind.Activated && e.Subject is not null)
+            .Where(e => StringComparer.Ordinal.Equals(e.Subject!.Fingerprint, fingerprint))
+            .Any(e => context.RecentHistory.Any(entry => !entry.Suppressed
+                && StringComparer.Ordinal.Equals(entry.Action.Id, e.ActionId)
+                && StringComparer.Ordinal.Equals(ReadPage(entry.ObservationEvidence).Url, url)));
+    }
+
+    private static (string? Role, string? Name, string? Context, string? Href)? ReadElement(string? evidence, string? id)
+    {
+        try
+        {
+            if (evidence is null || id is null) return null;
+            using var document = JsonDocument.Parse(evidence);
+            if (!document.RootElement.TryGetProperty("elements", out var elements) || elements.ValueKind != JsonValueKind.Array) return null;
+            foreach (var element in elements.EnumerateArray())
+            {
+                if (element.ValueKind != JsonValueKind.Object || !element.TryGetProperty("id", out var elementId) || elementId.GetString() != id) continue;
+                string? Text(string name) => element.TryGetProperty(name, out var value) && value.ValueKind == JsonValueKind.String ? value.GetString() : null;
+                return (Text("Role"), Text("Name"), Text("Context"), Text("Href"));
+            }
+        }
+        catch { }
+        return null;
+    }
+
     private static IReadOnlyList<InteractionChoice> ProgressChoices() =>
     [
         new("complete", "Looks complete", "Accept the current page as the result."),
@@ -375,7 +496,7 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
         };
 
         public static BrowserDecisionSpace From(InteractionObservation observation,
-            IReadOnlyList<InteractionHistoryEntry> history)
+            IReadOnlyList<InteractionHistoryEntry> history, OutcomeStep? bindStep = null)
         {
             var space = new BrowserDecisionSpace();
             var failed = history.Where(entry => entry.Result.IsFailure
@@ -438,6 +559,18 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                     $"If the next operation is {operation}, choose only a compatible offered target. " +
                     "Use its role, name, value, href, context, and section from the shared observation. " +
                     "This head is ignored when another operation is selected.", labels);
+            }
+            if (bindStep is not null && space.Targets.TryGetValue("CLICK", out var bindable))
+            {
+                var labels = bindable.ToDictionary(item => item.Key,
+                    item => observation.Candidates.Single(candidate => candidate.Id == item.Key).Label,
+                    StringComparer.Ordinal);
+                labels["NONE"] = "No offered control is the described target.";
+                space.Questions["bind"] = new("choice",
+                    $"Descriptor of the target the user wants opened or used: \"{bindStep.What.Phrase}\". Choose the single offered control " +
+                    "that IS that target, or NONE. A control that only advances toward it (search box or button, category, menu, pagination, " +
+                    "a different item) is NOT the target. Judge from role, name, href, context and section in the shared observation; " +
+                    "this head is independent of the chosen operation.", labels);
             }
             return space;
         }

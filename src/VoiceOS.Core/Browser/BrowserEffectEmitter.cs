@@ -12,7 +12,10 @@ internal static class BrowserEffectEmitter
 {
     /// <summary>Cross-observation identity: element refs are renumbered per snapshot, this is not.</summary>
     internal static string Fingerprint(BrowserElement element)
-        => Hash($"{element.Role}\u001f{element.Name}\u001f{element.Context}\u001f{element.Href}");
+        => Fingerprint(element.Role, element.Name, element.Context, element.Href);
+
+    internal static string Fingerprint(string? role, string? name, string? context, string? href)
+        => Hash($"{role}\u001f{name}\u001f{context}\u001f{href}");
 
     internal static TypedRef ElementRef(BrowserSnapshot snapshot, BrowserElement element, long revision)
         => new(snapshot.TabId, snapshot.SessionId, revision, element.Ref, Fingerprint(element),

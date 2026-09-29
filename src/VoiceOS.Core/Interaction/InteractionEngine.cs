@@ -5,7 +5,10 @@ namespace VoiceOS.Core.Interaction;
 /// advertised by the current observation, records structured outcomes, and
 /// stops when evidence is not changing instead of retrying blindly.
 /// </summary>
-public sealed class InteractionEngine
+/// <param name="activeFamilies">Families whose verdicts may end the run when <paramref name="proofMode"/> is On;
+/// null means every family. Verdicts of other families are still evaluated and recorded (shadow behavior).</param>
+public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode proofMode = ProofMode.Off,
+    IReadOnlySet<ProofFamily>? activeFamilies = null)
 {
     public async ValueTask<InteractionRunResult> RunAsync(
         InteractionGoal goal,
@@ -35,11 +38,15 @@ public sealed class InteractionEngine
         bool awaitingProgressJudgment = false;
         var observation = await surface.ObserveAsync(token).ConfigureAwait(false);
         ledger.Append(observation.Effects);
+        var proofs = new List<ProofRecord>();
+        if (goal.Step is { } initialStep && Evaluate(initialStep, null, null) is { Status: ProofStatus.Proved } initialProof
+            && Acts(initialProof))
+            return Finish(InteractionCompletionState.Complete, $"proof:{initialProof.Rule}");
 
         while (progress.Decisions < budget.MaxDecisions && progress.Actions < budget.MaxActions)
         {
             token.ThrowIfCancellationRequested();
-            var context = new InteractionDecisionContext(goal, observation, history.ToArray(), budget, progress);
+            var context = new InteractionDecisionContext(goal, observation, history.ToArray(), budget, progress, ledger.All.ToArray());
             var decision = await decisions.DecideAsync(context, token).ConfigureAwait(false);
             progress = progress with { Decisions = progress.Decisions + 1 };
             if (awaitingProgressJudgment)
@@ -144,6 +151,13 @@ public sealed class InteractionEngine
                 return Finish(InteractionCompletionState.Uncertain,
                     result.Detail ?? "The browser action changed tabs ambiguously.");
             }
+            // The companion definitively reported there is no earlier page: that is a failed operation, not a question.
+            if (proofMode == ProofMode.On && action.Kind == InteractionActionKind.GoBack
+                && (result.Effects ?? []).Any(static e => e.Kind == EffectKind.NoEffect && e.Get("reason") == "NO_HISTORY"))
+            {
+                AddHistory(action, result, observation.StateKey, suppressed: false, observation.Evidence);
+                return Finish(InteractionCompletionState.Incomplete, "There is no earlier page in this tab.");
+            }
             var next = await surface.ObserveAfterActionAsync(token).ConfigureAwait(false);
             ledger.Append(next.Effects, action.Id);
             var changed = !StringComparer.Ordinal.Equals(observation.StateKey, next.StateKey);
@@ -163,6 +177,13 @@ public sealed class InteractionEngine
                     : progress.ConsecutiveNoProgress + 1
             };
             observation = next;
+            if (goal.Step is { } step && Evaluate(step, action, decision.TargetBinding) is { } verdict && Acts(verdict))
+            {
+                if (verdict.Status == ProofStatus.Proved)
+                    return Finish(InteractionCompletionState.Complete, $"proof:{verdict.Rule}");
+                if (verdict.Status == ProofStatus.Refuted)
+                    return Finish(InteractionCompletionState.Incomplete, $"proof_refuted:{verdict.Rule}");
+            }
             if (progress.ConsecutiveNoProgress >= budget.MaxConsecutiveNoProgress)
                 return Finish(InteractionCompletionState.Incomplete,
                     "The interaction stopped after reaching the no-progress budget.");
@@ -170,6 +191,17 @@ public sealed class InteractionEngine
         }
 
         return Finish(InteractionCompletionState.Incomplete, "The interaction budget was exhausted.");
+
+        // Shadow and On both evaluate and record; only On, for an active family, lets a verdict end the run.
+        bool Acts(ProofVerdict verdict) => proofMode == ProofMode.On && (activeFamilies is null || activeFamilies.Contains(verdict.Family));
+
+        ProofVerdict? Evaluate(OutcomeStep step, InteractionAction? action, TargetBinding? binding)
+        {
+            if (proof is null || proofMode == ProofMode.Off) return null;
+            var verdict = proof.Evaluate(new(step, ledger.All, action, binding, observation));
+            proofs.Add(new(progress.Actions, verdict, binding));
+            return verdict;
+        }
 
         bool WasFailedWithoutStateChange(InteractionAction action, string stateKey) => history.Any(entry =>
             !entry.Suppressed
@@ -196,7 +228,8 @@ public sealed class InteractionEngine
             InteractionCompletionState state,
             string? detail,
             IReadOnlyList<InteractionChoice>? choices = null)
-            => new(state, observation, history.ToArray(), progress, detail, choices, ledger.All.ToArray());
+            => new(state, observation, history.ToArray(), progress, detail, choices, ledger.All.ToArray(),
+                proofs.Count == 0 ? null : proofs.ToArray());
 
         static IReadOnlyList<InteractionChoice> CompletionChoices() =>
         [

@@ -67,14 +67,14 @@ public sealed record Effect(
         var parts = new List<string> { $"kind={Kind}" };
         if (ActionId is not null) parts.Add($"action={ActionId}");
         if (Subject is { } subject)
-            parts.Add($"subject={subject.ElementRef ?? "page"}@r{subject.ObservationRevision}({subject.Role ?? "?"})");
+            parts.Add($"subject={subject.ElementRef ?? "page"}@r{subject.ObservationRevision}({subject.Role ?? "?"}) tab={subject.TabId} session={subject.SessionId}");
         foreach (var key in SafeDataKeys)
             if (Get(key) is { } value) parts.Add($"{key}={value}");
         return string.Join(' ', parts);
     }
 
     private static readonly string[] SafeDataKeys =
-        ["mode", "signal", "reason", "matched", "subjectPresent", "toOrigin"];
+        ["mode", "signal", "reason", "matched", "subjectPresent", "toOrigin", "fromTabId"];
 }
 
 /// <summary>Append-only record of the effects of one interaction run.</summary>

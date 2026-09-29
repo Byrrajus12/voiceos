@@ -94,7 +94,8 @@ public sealed record InteractionDecision(
     InteractionAction? Action = null,
     string? Detail = null,
     IReadOnlyList<InteractionChoice>? Choices = null,
-    double GoalConfidence = 0)
+    double GoalConfidence = 0,
+    TargetBinding? TargetBinding = null)
 {
     public static InteractionDecision Act(InteractionAction action, string? detail = null)
         => new(InteractionCompletionState.Incomplete, action, detail);
@@ -144,7 +145,8 @@ public sealed record InteractionDecisionContext(
     InteractionObservation Observation,
     IReadOnlyList<InteractionHistoryEntry> RecentHistory,
     InteractionBudget Budget,
-    InteractionProgress Progress);
+    InteractionProgress Progress,
+    IReadOnlyList<Effect>? Effects = null);
 
 public sealed record InteractionRunResult(
     InteractionCompletionState Completion,
@@ -153,7 +155,8 @@ public sealed record InteractionRunResult(
     InteractionProgress Progress,
     string? Detail = null,
     IReadOnlyList<InteractionChoice>? Choices = null,
-    IReadOnlyList<Effect>? Effects = null);
+    IReadOnlyList<Effect>? Effects = null,
+    IReadOnlyList<ProofRecord>? Proof = null);
 
 public interface IInteractionSurface
 {

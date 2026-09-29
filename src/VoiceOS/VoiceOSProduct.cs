@@ -137,7 +137,8 @@ public sealed class VoiceOSProduct : IDisposable
                 new BrowserTextValueResolver(new GroundedBrowserTextValueResolver(),
                     new OpenRouterBrowserTextValueResolver(
                         new HttpClient(openRouterHandler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(15) },
-                        Environment.GetEnvironmentVariable("OPENROUTER_API_KEY"))));
+                        Environment.GetEnvironmentVariable("OPENROUTER_API_KEY"))),
+                proofMode: config.BrowserProofMode);
         }
         else
         {

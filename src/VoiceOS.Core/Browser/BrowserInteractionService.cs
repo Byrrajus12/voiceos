@@ -37,10 +37,12 @@ public sealed class BrowserInteractionService(
     ILogger<BrowserInteractionService>? logger = null,
     IBrowserTextValueResolver? textValues = null,
     Func<nint, bool>? foregroundVerifier = null,
-    double preparedFreshnessThresholdMs = 150) : IBrowserInteractionService, IBrowserActivitySource
+    double preparedFreshnessThresholdMs = 150,
+    ProofMode proofMode = ProofMode.Off,
+    ProofThresholds? proofThresholds = null,
+    IReadOnlySet<ProofFamily>? activeProofFamilies = null) : IBrowserInteractionService, IBrowserActivitySource
 {
     public event Action<BrowserActivity>? ActionStarting;
-    private readonly InteractionEngine _engine = new();
     private readonly SemaphoreSlim _gate = new(1, 1);
     private PendingRun? _pending;
     private (string ActivationId, string Utterance, Task<BrowserGoalNormalization?> Task, Stopwatch Clock)? _prefetch;
@@ -198,8 +200,8 @@ public sealed class BrowserInteractionService(
                 : ServiceResolver.Resolve(goal.Normalization?.PreferredService) is not null ? "normalized_service"
                 : BrowserGoal.NormalizedServiceRoot(goal.Normalization) is not null ? "normalized_service_url"
                 : "web_discovery");
-            var decisions = new TypeSafeBrowserDecisionSource(gateway, goal, logger: logger,
-                textValues: textValues);
+            var decisions = new TypeSafeBrowserDecisionSource(gateway, goal, logger: logger, bindHead: proofMode != ProofMode.Off,
+                effectAwareRepeat: proofMode == ProofMode.On, textValues: textValues);
             if (scope?.TabId is not null)
                 ActionStarting?.Invoke(ActivityFor(goal, scope, null));
             var surface = CreateSurface(goal, scope, decisions, sessionId, scope?.TabId, scope?.ExpectedUrl);
@@ -335,7 +337,8 @@ public sealed class BrowserInteractionService(
             : BrowserGoal.NormalizedServiceRoot(goal.Normalization) is not null ? "normalized_service_url"
             : "web_discovery");
 
-        var decisions = new TypeSafeBrowserDecisionSource(gateway, goal, logger: logger, textValues: textValues);
+        var decisions = new TypeSafeBrowserDecisionSource(gateway, goal, logger: logger, textValues: textValues,
+            bindHead: proofMode != ProofMode.Off, effectAwareRepeat: proofMode == ProofMode.On);
         var surface = CreateSurface(goal, scope, decisions, sessionId, tabId: null, expectedFirstUrl: null);
         // The page kept hydrating while normalization ran; only reuse the startup snapshot as the
         // first observation when it finished at (or after) normalization, within a small margin.
@@ -523,7 +526,9 @@ public sealed class BrowserInteractionService(
         if (plan is not null)
             logger?.LogInformation("Browser step framed id={StepId} family={Family} descriptor_reliable={Reliable} has_query={HasQuery}",
                 plan.Only.Id, plan.Only.Family, plan.Only.DescriptorReliable, plan.Only.What.Query is not null);
-        var result = await _engine.RunAsync(new(goal.OriginalUtterance, plan?.Only), surface, decisions,
+        var engine = new InteractionEngine(plan is null ? null : new BrowserProofEvaluator(goal, proofThresholds), proofMode,
+            activeProofFamilies ?? DefaultActiveProofFamilies);
+        var result = await engine.RunAsync(new(goal.OriginalUtterance, plan?.Only), surface, decisions,
             new InteractionBudget(30, 24, 3, 30, TimeSpan.FromSeconds(90)), cancellationToken).ConfigureAwait(false);
         if (scope is { Kind: BrowserScopeKind.ActiveTab, ExplicitSelection: false }
             && result.Completion == InteractionCompletionState.Complete && result.Progress.Actions == 0)
@@ -531,15 +536,51 @@ public sealed class BrowserInteractionService(
                 Detail = "Nothing was done on the current page yet.", Choices = [new("cancel", "Cancel")] };
         foreach (var effect in result.Effects ?? [])
             logger?.LogInformation("Browser effect id={EffectId} {Effect}", effect.Id, effect.Summarize());
+        LogProof(result);
         _pending = result.Completion == InteractionCompletionState.Uncertain
             ? new(goal, surface, decisions, result) : null;
         logger?.LogInformation("Browser task outcome={Outcome} resumable={Resumable} detail={Detail} decisions={Decisions} actions={Actions} origin={Origin}",
             result.Completion, _pending is not null, result.Detail,
             result.Progress.Decisions, result.Progress.Actions, BrowserSurface.LogOrigin(surface.LatestSnapshot?.Url));
-        return new(result.Completion, result.Detail, result.Choices,
+        return new(result.Completion, UserDetail(result.Detail, plan?.Only.Family), result.Choices,
             surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title,
             result.Progress.Decisions, result.Progress.Actions, surface.TabId, surface.SessionId,
             goal.Normalization?.Objective);
+    }
+
+    /// <summary>Families a proof may complete when proof is On. Find stays shadow-only (25% shadow coverage), Reach is legacy.</summary>
+    internal static readonly IReadOnlySet<ProofFamily> DefaultActiveProofFamilies =
+        new HashSet<ProofFamily> { ProofFamily.Surface, ProofFamily.Activate };
+
+    /// <summary>Proof outcomes carry an engine rule id; the user sees a plain sentence instead.</summary>
+    internal static string? UserDetail(string? detail, ProofFamily? family)
+    {
+        if (detail is null) return null;
+        if (detail.StartsWith("proof_refuted:", StringComparison.Ordinal))
+            return family == ProofFamily.Find ? "The results shown do not match what was searched for."
+                : "The page that opened is not the one that was requested.";
+        if (!detail.StartsWith("proof:", StringComparison.Ordinal)) return detail;
+        return family switch
+        {
+            ProofFamily.Surface => "The requested site is open.",
+            ProofFamily.Find => "The search results are showing.",
+            _ => "The requested page is open."
+        };
+    }
+
+    private void LogProof(InteractionRunResult result)
+    {
+        if (result.Proof is not { Count: > 0 } records) return;
+        foreach (var record in records)
+            logger?.LogInformation("Browser proof mode={Mode} family={Family} after_actions={Actions} status={Status} rule={Rule} binding={TargetBinding} detail={Detail} effects={Effects}",
+                proofMode, record.Verdict.Family, record.Actions, record.Verdict.Status, record.Verdict.Rule,
+                record.TargetBinding is null ? "none" : $"{record.TargetBinding.Method}:{record.TargetBinding.ElementRef}@r{record.TargetBinding.ObservationRevision}",
+                record.Verdict.Detail ?? "-", string.Join(',', record.Verdict.EffectIds ?? []));
+        var proved = records.FirstOrDefault(static r => r.Verdict.Status == ProofStatus.Proved);
+        var refuted = records.FirstOrDefault(static r => r.Verdict.Status == ProofStatus.Refuted);
+        logger?.LogInformation("Browser proof summary mode={Mode} family={Family} first_proved_actions={ProvedAt} proved_rule={Rule} refuted_rule={Refuted} final_completion={Completion} final_actions={Actions} final_decisions={Decisions} final_detail={Detail}",
+            proofMode, records[0].Verdict.Family, proved?.Actions.ToString() ?? "none", proved?.Verdict.Rule ?? "-",
+            refuted?.Verdict.Rule ?? "-", result.Completion, result.Progress.Actions, result.Progress.Decisions, result.Detail);
     }
 
     private sealed record PendingRun(BrowserGoal Goal, BrowserSurface Surface,

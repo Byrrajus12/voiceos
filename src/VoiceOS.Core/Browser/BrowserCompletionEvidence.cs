@@ -163,7 +163,7 @@ public sealed partial record BrowserCompletionEvidence(CompletionEvidenceStrengt
     private static BrowserCompletionEvidence Supporting(string reason) => new(CompletionEvidenceStrength.Supporting, reason);
     private static BrowserCompletionEvidence Neutral(string reason) => new(CompletionEvidenceStrength.Neutral, reason);
 
-    private static IEnumerable<Uri> Destinations(BrowserGoal goal)
+    internal static IEnumerable<Uri> Destinations(BrowserGoal goal)
     {
         if (goal.ExplicitUrl is { } explicitUrl) yield return explicitUrl;
         if (goal.ScopedDestination is { } scoped) yield return scoped;
@@ -238,7 +238,7 @@ public sealed partial record BrowserCompletionEvidence(CompletionEvidenceStrengt
     internal static bool IsSiteItself(string? resourceType)
         => resourceType is not null && SiteWords().IsMatch(resourceType);
 
-    private static IEnumerable<string> Tokens(string? text) => text is null ? []
+    internal static IEnumerable<string> Tokens(string? text) => text is null ? []
         : WordPattern().Matches(text.ToLowerInvariant()).Select(match => match.Value);
 
     [GeneratedRegex(@"[\p{L}\p{N}]+")]

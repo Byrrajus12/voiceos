@@ -20,6 +20,8 @@ public class VoiceOSConfig
     public bool FrontDoorGrounding { get; set; } = true;
     public bool SpeculativeDirectDecision { get; set; } = true;
     public bool DirectRescue { get; set; } = true;
+    /// <summary>Off (default), Shadow (evaluate and log only) or On (a proof may complete or refute a browser step).</summary>
+    public Interaction.ProofMode BrowserProofMode { get; set; } = Interaction.ProofMode.Off;
 
     public void ApplyEnvironmentOverrides()
     {
@@ -28,6 +30,8 @@ public class VoiceOSConfig
         FrontDoorGrounding = Read("VOICEOS_FRONT_DOOR_GROUNDING", FrontDoorGrounding);
         SpeculativeDirectDecision = Read("VOICEOS_SPECULATIVE_DIRECT_DECISION", SpeculativeDirectDecision);
         DirectRescue = Read("VOICEOS_DIRECT_RESCUE", DirectRescue);
+        if (Enum.TryParse<Interaction.ProofMode>(Environment.GetEnvironmentVariable("VOICEOS_BROWSER_PROOF"), true, out var proof))
+            BrowserProofMode = proof;
     }
 
     public TimeSpan HoldThreshold => TimeSpan.FromMilliseconds(HoldThresholdMs);
