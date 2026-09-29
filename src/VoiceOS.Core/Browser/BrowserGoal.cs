@@ -53,7 +53,8 @@ public sealed record BrowserGoalNormalization(
     string Objective, string? Entity, string? ResourceType, string? PreferredService,
     string? PreferredServiceUrl, IReadOnlyList<string> SearchQueries,
     string CompletionHint, IReadOnlyList<BrowserCorrectedTerm> CorrectedTerms,
-    SemanticEndState EndState = SemanticEndState.OtherBoundedGoal);
+    SemanticEndState EndState = SemanticEndState.OtherBoundedGoal,
+    string? Descriptor = null, bool UnresolvedReference = false);
 
 /// <summary>Produces a small set of exact substrings; it never generates prose.</summary>
 public static class BrowserTextCandidates

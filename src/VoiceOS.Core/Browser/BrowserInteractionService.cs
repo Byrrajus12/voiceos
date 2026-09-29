@@ -215,7 +215,7 @@ public sealed class BrowserInteractionService(
                 return new(InteractionCompletionState.Complete, "The requested browser surface is ready.",
                     null, surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title);
             }
-            return await RunSurfaceAsync(goal, surface, decisions, cancellationToken, scope).ConfigureAwait(false);
+            return await RunSurfaceAsync(goal, surface, decisions, cancellationToken, scope, activationId).ConfigureAwait(false);
         }
         catch (InfrastructureUnavailableException ex)
         {
@@ -342,7 +342,7 @@ public sealed class BrowserInteractionService(
         var reuse = startupDoneAtMs is not { } doneAt || (normalizationDoneAtMs - doneAt) <= _preparedFreshnessThresholdMs;
         surface.Prepare(startupSnapshot, reuse);
         ActionStarting?.Invoke(ActivityFor(goal, scope, null));
-        return await RunSurfaceAsync(goal, surface, decisions, cancellationToken, scope).ConfigureAwait(false);
+        return await RunSurfaceAsync(goal, surface, decisions, cancellationToken, scope, activationId).ConfigureAwait(false);
     }
 
     private static bool IsWebContent(string? url)
@@ -516,9 +516,15 @@ public sealed class BrowserInteractionService(
 
     private async ValueTask<BrowserInteractionOutcome> RunSurfaceAsync(
         BrowserGoal goal, BrowserSurface surface, TypeSafeBrowserDecisionSource decisions,
-        CancellationToken cancellationToken, BrowserExecutionScope? scope = null)
+        CancellationToken cancellationToken, BrowserExecutionScope? scope = null, string? turnId = null)
     {
-        var result = await _engine.RunAsync(new(goal.OriginalUtterance), surface, decisions,
+        // Observational framing: the step rides on the goal but no decision or completion consults it yet.
+        var plan = goal.Normalization is null ? null : BrowserStepFramer.Frame(goal, turnId ?? surface.SessionId);
+        if (plan is not null)
+            logger?.LogInformation("Browser step framed id={StepId} family={Family} descriptor_reliable={Reliable} has_descriptor={HasDescriptor} has_query={HasQuery}",
+                plan.Only.Id, plan.Only.Family, plan.Only.DescriptorReliable,
+                goal.Normalization?.Descriptor is not null, plan.Only.What.Query is not null);
+        var result = await _engine.RunAsync(new(goal.OriginalUtterance, plan?.Only), surface, decisions,
             new InteractionBudget(30, 24, 3, 30, TimeSpan.FromSeconds(90)), cancellationToken).ConfigureAwait(false);
         if (scope is { Kind: BrowserScopeKind.ActiveTab, ExplicitSelection: false }
             && result.Completion == InteractionCompletionState.Complete && result.Progress.Actions == 0)

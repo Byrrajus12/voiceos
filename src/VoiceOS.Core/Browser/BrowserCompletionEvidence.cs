@@ -235,7 +235,7 @@ public sealed partial record BrowserCompletionEvidence(CompletionEvidenceStrengt
     private static string Singular(string term) => term.Length > 3 && term.EndsWith('s') ? term[..^1] : term;
 
     /// <summary>The requested resource is the site itself (website, homepage), not a page within it.</summary>
-    private static bool IsSiteItself(string? resourceType)
+    internal static bool IsSiteItself(string? resourceType)
         => resourceType is not null && SiteWords().IsMatch(resourceType);
 
     private static IEnumerable<string> Tokens(string? text) => text is null ? []

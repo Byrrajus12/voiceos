@@ -28,7 +28,7 @@ public sealed class InteractionEngine
         var token = timeout.Token;
 
         var history = new List<InteractionHistoryEntry>();
-        var ledger = new EffectLedger();
+        var ledger = new EffectLedger(goal.Step?.Id ?? "s1");
         var rejectedCompletionStates = new HashSet<string>(StringComparer.Ordinal);
         var progress = new InteractionProgress(0, 0, 0, 0);
         double previousGoalConfidence = 0;

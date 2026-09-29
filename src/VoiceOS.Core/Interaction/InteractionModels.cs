@@ -1,6 +1,7 @@
 namespace VoiceOS.Core.Interaction;
 
-public sealed record InteractionGoal(string Text)
+/// <param name="Step">Optional framed outcome; null keeps legacy behavior for every caller.</param>
+public sealed record InteractionGoal(string Text, OutcomeStep? Step = null)
 {
     public bool IsValid => !string.IsNullOrWhiteSpace(Text);
 }
