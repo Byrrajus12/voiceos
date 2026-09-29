@@ -524,6 +524,8 @@ public sealed class BrowserInteractionService(
             && result.Completion == InteractionCompletionState.Complete && result.Progress.Actions == 0)
             result = result with { Completion = InteractionCompletionState.Uncertain,
                 Detail = "Nothing was done on the current page yet.", Choices = [new("cancel", "Cancel")] };
+        foreach (var effect in result.Effects ?? [])
+            logger?.LogInformation("Browser effect id={EffectId} {Effect}", effect.Id, effect.Summarize());
         _pending = result.Completion == InteractionCompletionState.Uncertain
             ? new(goal, surface, decisions, result) : null;
         logger?.LogInformation("Browser task outcome={Outcome} resumable={Resumable} detail={Detail} decisions={Decisions} actions={Actions} origin={Origin}",

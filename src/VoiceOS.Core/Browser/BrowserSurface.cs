@@ -31,6 +31,10 @@ public sealed class BrowserSurface : IInteractionSurface
     private long _revision;
     private BrowserSnapshot? _actionSnapshot;
     private BrowserSnapshot? _preparedSnapshot;
+    // Acquisition facts the next accepted observation reports exactly once.
+    private (string Mode, int? FromTabId)? _pendingAcquisition;
+    // Evidence already built for the last action snapshot so Accept does not serialize it twice.
+    private (BrowserSnapshot Snapshot, string Evidence, string StateKey)? _actionEvidence;
 
     public BrowserSurface(IChromeCompanionTransport transport, BrowserGoal goal,
         IBrowserCompletionEvaluator completion, string? sessionId = null, ILogger? logger = null,
@@ -63,6 +67,7 @@ public sealed class BrowserSurface : IInteractionSurface
         ValidateOwnership(snapshot);
         _tabId = snapshot.TabId;
         LatestSnapshot = snapshot;
+        _pendingAcquisition = ("opened", null);
         if (reuseAsFirstObservation)
             _preparedSnapshot = snapshot;
     }
@@ -83,6 +88,7 @@ public sealed class BrowserSurface : IInteractionSurface
             ? await _transport.ObserveAsync(_sessionId, tabId, cancellationToken).ConfigureAwait(false)
             : await _transport.OpenTaskTabAsync(_sessionId, BrowserGoal.BootstrapUrl(_goal), cancellationToken).ConfigureAwait(false);
         transportTimer.Stop();
+        if (startup) _pendingAcquisition = ("opened", null);
         LatencyTrace.Current?.Record(startup ? "tab_startup_and_first_observation"
             : _revision == 0 ? "first_observation" : "observation", transportTimer.Elapsed.TotalMilliseconds);
         _logger?.LogInformation("Browser stage={Stage} transport_ms={ElapsedMs:F0}",
@@ -120,6 +126,20 @@ public sealed class BrowserSurface : IInteractionSurface
         _snapshots.Clear();
         _snapshots[revision] = snapshot;
         var candidates = BuildCandidates(snapshot, revision);
+        var (evidence, stateKey) = _actionEvidence is { } cached && ReferenceEquals(cached.Snapshot, snapshot)
+            ? (cached.Evidence, cached.StateKey) : BuildEvidence(snapshot);
+        _actionEvidence = null;
+        IReadOnlyList<Effect>? effects = null;
+        if (_pendingAcquisition is { } acquired)
+        {
+            _pendingAcquisition = null;
+            effects = [BrowserEffectEmitter.SurfaceAcquired(snapshot, revision, acquired.Mode, acquired.FromTabId)];
+        }
+        return new(revision, stateKey, evidence, candidates, effects);
+    }
+
+    private (string Evidence, string StateKey) BuildEvidence(BrowserSnapshot snapshot)
+    {
         var evidence = JsonSerializer.Serialize(new
         {
             original_goal = _goal.OriginalUtterance,
@@ -134,8 +154,7 @@ public sealed class BrowserSurface : IInteractionSurface
                 element.Context, element.Editable, element.Enabled, element.Geometry.InViewport
             })
         });
-        var stateKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(evidence)));
-        return new(revision, stateKey, evidence, candidates);
+        return (evidence, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(evidence))));
     }
 
     public async ValueTask<InteractionActionResult> ExecuteAsync(
@@ -143,6 +162,7 @@ public sealed class BrowserSurface : IInteractionSurface
         CancellationToken cancellationToken = default)
     {
         _actionSnapshot = null;
+        _actionEvidence = null;
         if (!_snapshots.TryGetValue(observation.Revision, out var snapshot))
             return InteractionActionResult.Fail(InteractionResultStatus.StaleTarget, "The observation revision is stale.");
         if (!observation.Candidates.SelectMany(static candidate => candidate.Actions).Any(offered =>
@@ -179,7 +199,8 @@ public sealed class BrowserSurface : IInteractionSurface
                 actionTimer.Elapsed.TotalMilliseconds);
             _logger?.LogInformation("Browser stage=action_transport operation={Operation} elapsed_ms={ElapsedMs:F0}",
                 protocolAction, actionTimer.Elapsed.TotalMilliseconds);
-            if (next.TabId != snapshot.TabId)
+            var adopted = next.TabId != snapshot.TabId;
+            if (adopted)
             {
                 if (action.Kind != InteractionActionKind.Activate
                     || next.AdoptedFromTabId != snapshot.TabId
@@ -187,6 +208,7 @@ public sealed class BrowserSurface : IInteractionSurface
                     throw new ChromeCompanionException("TAB_TOPOLOGY_AMBIGUOUS",
                         "The action changed tabs without a verified task-surface transition.");
                 _tabId = next.TabId;
+                _pendingAcquisition = ("adopted", snapshot.TabId);
                 _logger?.LogInformation("Browser adopted task tab old={OldTab} new={NewTab}",
                     snapshot.TabId, next.TabId);
             }
@@ -195,7 +217,11 @@ public sealed class BrowserSurface : IInteractionSurface
             _actionSnapshot = next;
             _logger?.LogInformation("Browser action operation={Operation} ref={Ref} outcome=success origin={Origin}",
                 protocolAction, action.TargetId, LogOrigin(next.Url));
-            return InteractionActionResult.Ok("The companion executed one bounded action.");
+            var (nextEvidence, nextKey) = BuildEvidence(next);
+            _actionEvidence = (next, nextEvidence, nextKey);
+            var effects = BrowserEffectEmitter.ForSuccess(action, protocolAction, observation.Revision,
+                snapshot, next, !StringComparer.Ordinal.Equals(nextKey, observation.StateKey), adopted);
+            return InteractionActionResult.Ok("The companion executed one bounded action.", effects);
         }
         catch (ChromeCompanionException ex)
         {
@@ -216,7 +242,8 @@ public sealed class BrowserSurface : IInteractionSurface
                 "NO_HISTORY" or "NAVIGATION_NOT_OBSERVED" => InteractionResultStatus.NoEffect,
                 _ => InteractionResultStatus.PlatformFailure
             };
-            return InteractionActionResult.Fail(status, ex.Message);
+            return InteractionActionResult.Fail(status, ex.Message,
+                status == InteractionResultStatus.NoEffect ? BrowserEffectEmitter.ForNoEffectFailure(ex.Code) : null);
         }
     }
 

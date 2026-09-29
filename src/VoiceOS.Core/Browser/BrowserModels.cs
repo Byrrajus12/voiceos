@@ -89,7 +89,18 @@ public sealed record BrowserSnapshot(
     [property: JsonPropertyName("viewport")] BrowserViewport Viewport,
     [property: JsonPropertyName("elements")] IReadOnlyList<BrowserElement> Elements,
     [property: JsonPropertyName("canGoBack")] bool CanGoBack = false,
-    [property: JsonPropertyName("adoptedFromTabId")] int? AdoptedFromTabId = null);
+    [property: JsonPropertyName("adoptedFromTabId")] int? AdoptedFromTabId = null,
+    [property: JsonIgnore] BrowserActionSignals? Signals = null);
+
+/// <summary>
+/// Navigation signal the companion reported alongside an ACT snapshot (<c>timings.signal</c>:
+/// none | cross_document | same_document | new_tab). "none" is a meaningful negative only for
+/// CLICK and BACK; text and scroll actions have no navigation watcher and always report it.
+/// </summary>
+public sealed record BrowserActionSignals(string Navigation, string? SettleReason = null)
+{
+    public static bool IsMeaningfulFor(string protocolAction) => protocolAction is "CLICK" or "BACK";
+}
 
 public sealed record BrowserActionRequest(
     int TabId, string SessionId, string Revision, string Action,

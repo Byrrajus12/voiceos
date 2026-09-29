@@ -101,8 +101,17 @@ public sealed class ChromeCompanionTransport : IChromeCompanionTransport, IDispo
         }
         if (!result.TryGetProperty("snapshot", out var snapshot))
             throw new InvalidDataException("Chrome companion response omitted result.snapshot.");
-        return snapshot.Deserialize<BrowserSnapshot>(JsonOptions)
+        var parsed = snapshot.Deserialize<BrowserSnapshot>(JsonOptions)
             ?? throw new InvalidDataException("Chrome companion returned an invalid snapshot.");
+        return command == "ACT" ? parsed with { Signals = ReadSignals(result) } : parsed;
+    }
+
+    internal static BrowserActionSignals? ReadSignals(JsonElement result)
+    {
+        if (!result.TryGetProperty("timings", out var timings) || timings.ValueKind != JsonValueKind.Object
+            || OptionalString(timings, "signal") is not { } signal)
+            return null;
+        return new(signal, OptionalString(timings, "settleReason"));
     }
 
     private static string FormatTimingValue(JsonElement value) => value.ValueKind switch
