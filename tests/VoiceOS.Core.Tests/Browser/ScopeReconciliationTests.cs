@@ -140,6 +140,20 @@ public sealed class ScopeReconciliationTests
         Assert.True(scope.Browser?.TabClaimRefuted);
     }
 
+    [Theory]
+    [InlineData(.46, true)] // Recorded established dependency survives a .35 coarse route.
+    [InlineData(.40, false)]
+    [InlineData(.31, false)] // Latest isolated live replay: dependency is not established.
+    public async Task RefutedFallbackPreservesDependencyConfidenceBoundary(double confidence, bool expectedBrowser)
+    {
+        var gateway = new Gateway { Dependency = "RequiresCurrentSurface", NamedTab = true,
+            Shape = "SurfaceOnly", EndState = "SurfaceReady", DependencyConfidence = confidence };
+        var scope = await new ScopeResolver().ResolveAsync("Open the 2021 one", await Route(gateway),
+            Context(), new TypeSafeCommandRouter(gateway));
+        Assert.Equal(expectedBrowser, scope.Kind == ExecutionScopeKind.Browser);
+        if (expectedBrowser) Assert.True(scope.Browser!.TabClaimRefuted);
+    }
+
     [Fact]
     public async Task SafeExecutableDirectOfferBlocksFreshBrowserRecoveryAndIsReadOnce()
     {
@@ -194,18 +208,24 @@ public sealed class ScopeReconciliationTests
         Assert.Equal("service-app", scope.Native?.AppCandidateId);
     }
 
-    [Fact]
-    public async Task PickerReceivesSemanticsAndSelectsPageForObservationDespiteUncertainDependency()
+    [Theory]
+    [InlineData(.40)]
+    [InlineData(.98)]
+    public async Task PickerReceivesSemanticsAndSelectsPageForObservationDespiteUncertainDependency(double routeConfidence)
     {
-        var gateway = new Gateway { CoarseRoute = "COMPUTER_USE", RouteConfidence = .40,
+        var gateway = new Gateway { CoarseRoute = "COMPUTER_USE", RouteConfidence = routeConfidence,
             Dependency = "Uncertain", Preference = "Browser", Shape = "SurfaceOnly", EndState = "ResourceOpened",
             Pick = "ActiveBrowserTab" };
         var router = new TypeSafeCommandRouter(gateway);
         var route = await router.RouteAsync("Open the official site");
-        var scope = await new ScopeResolver().ResolveAsync("Open the official site", route, Context(), router);
+        var context = Context();
+        context = context with { FrontDoor = FrontDoorContextBuilder.Build("Open the official site", context, null, DateTimeOffset.UtcNow) };
+        var scope = await new ScopeResolver().ResolveAsync("Open the official site", route, context, router);
         Assert.Equal(BrowserScopeKind.ActiveTab, scope.Browser?.Kind);
         Assert.False(scope.Browser!.IsSurfaceOnly);
         var semantics = gateway.PickerState!.Value.GetProperty("semantics");
+        Assert.Equal(route.Route.ToString(), gateway.PickerState.Value.GetProperty("preliminaryRoute").GetString());
+        Assert.Equal(route.Reason.ToString(), gateway.PickerState.Value.GetProperty("routeReason").GetString());
         Assert.True(semantics.GetProperty("IntentActionable").GetBoolean());
         Assert.Equal("Uncertain", semantics.GetProperty("contextDependency").GetString());
         Assert.Equal("Browser", semantics.GetProperty("surfacePreference").GetString());
@@ -222,6 +242,7 @@ public sealed class ScopeReconciliationTests
             Media = "None", Return = "None", Relation = "NewTask", TabAnswer = "NONE", Pick = "Clarify";
         public bool NamedTab;
         public double RouteConfidence = .35;
+        public double DependencyConfidence = .98;
         public JsonElement? PickerState;
         public string? PickerInstruction;
         public Task<IReadOnlyDictionary<string, JevAnswer>> AskAsync(object state,
@@ -242,7 +263,7 @@ public sealed class ScopeReconciliationTests
                     { ["COMPUTER_USE"] = .49, ["CLARIFY"] = .38, ["DIRECT_CAPABILITY"] = .13 }, RouteConfidence),
                 ["intent_completeness"] = Head(Complete), ["destination"] = Head(Destination),
                 ["tab_disposition"] = Head(NamedTab ? "ExistingNamedTab" : "Unspecified"),
-                ["context_dependency"] = Head(Dependency), ["surface_preference"] = Head(Preference),
+                ["context_dependency"] = Head(Dependency, DependencyConfidence), ["surface_preference"] = Head(Preference),
                 ["requested_entity"] = Head(Entity), ["goal_shape"] = Head(Shape), ["end_state"] = Head(EndState),
                 ["task_relation"] = Head(Relation), ["media_request_kind"] = Head(Media), ["return_target"] = Head(Return)
             });

@@ -306,6 +306,9 @@ public sealed class ScopeResolver
         if (route.Route == CommandRoute.ComputerUse
             && (route.ContextDependency == ContextDependency.SelfContained
                 || route.TaskRelation == TaskRelation.NewTask)
+            // An independent task can still select content from the visible page. When
+            // dependency is unresolved, the grounded picker must settle placement first.
+            && !(grounded && route.ContextDependency == ContextDependency.Uncertain)
             && !unnamedContentProvider)
             return Browser(new(BrowserScopeKind.NewTaskTab));
         // Only complete actions reach this point. Context can repair a preliminary route.

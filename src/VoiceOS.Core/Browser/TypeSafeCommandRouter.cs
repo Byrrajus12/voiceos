@@ -118,11 +118,11 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
                         ["RequiresRecent"] = "The requested object or change cannot be identified without the recent task; a stale frame requires clarification.",
                         ["Uncertain"] = "Relation cannot be established safely." }),
                 ["context_dependency"] = new("choice",
-                    "Does this goal depend on information, controls, ordering, or items visible on the current surface right now? Classify current-surface dependency only; do not choose a tab, app, or execution surface. A described but unnamed target can depend on the visible page even when the desired outcome is to open a surface. Uncertainty about which visible target matches is a later binding question, not uncertainty about whether the page supplies the reference. A visible target can require the current surface even when the utterance does not explicitly name the page or tab. TaskRelation separately classifies continuity with earlier VoiceOS work. Explicit tab disposition and destination are decided by separate heads." + Grounded("context.foreground and context.browser.active_tab describe what is visible now. Content, results, links or controls that plausibly belong to that visible page make the request RequiresCurrentSurface even when the page is not named. A disconnected companion provides no usable current browser surface."),
+                    "Classify whether the complete request plausibly addresses content or controls on the currently visible surface; do not choose a tab, app, or execution surface. TaskRelation separately classifies continuity with earlier VoiceOS work. A target described by a property or relative identity can require this page for observation even though the matching item has not been identified. Decide only where the missing reference comes from, not which target matches or whether the task will succeed. A fully specified fresh lookup or destination is SelfContained. Task independence and a surface-opening outcome do not establish target independence." + Grounded("context.foreground and context.browser.active_tab describe the visible surface. If that page plausibly supplies a described target, choose RequiresCurrentSurface. You do not need DOM contents or a proven match to establish dependency for observation. An unrelated page cannot supply a self-contained task's target."),
                     new Dictionary<string, string>
                     {
                         ["SelfContained"] = "The utterance contains enough information to understand the goal without relying on the currently visible surface, including a specific search or destination.",
-                        ["RequiresCurrentSurface"] = "The target or action depends on information, controls, ordering, or items visible on the current surface right now.",
+                        ["RequiresCurrentSurface"] = "The complete action addresses a target supplied or disambiguated by the visible surface; inspect that surface to bind the target later.",
                         ["Uncertain"] = "Insufficient confidence to classify current-surface dependency."
                     })
             }, cancellationToken).ConfigureAwait(false);
@@ -255,10 +255,10 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
         {
             ContextualSurface.ActiveBrowserTab => "Use when the complete request plausibly addresses content or controls on the visible page. Select the page for observation; you do not need to identify or prove the requested target from metadata. The browser executor binds the target and proves success later. Mere technical ability to perform an unrelated fresh task is insufficient.",
             ContextualSurface.RecentOwnedBrowserTab => "Reuse this previously owned VoiceOS task tab only when its metadata makes the action belong there.",
-            ContextualSurface.NewBrowserTaskTab => "Preserve unrelated user work and start a separate VoiceOS task tab for a fresh browser task.",
+            ContextualSurface.NewBrowserTaskTab => "Start a separate task tab when the utterance supplies an independent destination or information lookup. TaskRelation NewTask alone is insufficient: a new goal can still refer to content on the visible page.",
             ContextualSurface.ForegroundNativeWindow => "The complete action concerns controls inside the foreground native app; representation only.",
             ContextualSurface.DirectCapability => "Run the native action now: " + context.SafeDirectOffer?.Summary,
-            _ => "Context does not safely identify an execution surface."
+            _ => "No offered surface is safe even for observation: the goal is incomplete, unsupported, conflicting, or depends on an unresolved reference to another surface. Uncertainty about which item on the visible page matches does not by itself require this choice."
         });
         var active = context.BrowserTabs.FirstOrDefault(t => t.Active);
         var owned = context.FrontDoor is null ? context.BrowserTabs.Where(t => t.Provenance == BrowserTabProvenance.VoiceOs
@@ -274,13 +274,13 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
         };
         object pickerState = context.FrontDoor is null ? new
         {
-            utterance, intent = intent.Route.ToString(), intent.MediaRequestKind, semantics,
+            utterance, preliminaryRoute = intent.Route.ToString(), routeReason = intent.Reason.ToString(), intent.MediaRequestKind, semantics,
             foreground = context.ForegroundWindow is { } legacyWindow ? new { legacyWindow.ProcessName, legacyWindow.Title } : null,
             activeTab = active is null ? null : new { origin = active.Origin?.AbsoluteUri, active.Title },
             recentOwnedTab = owned is null ? null : new { origin = owned.Origin?.AbsoluteUri, owned.Title }
         } : new
         {
-            utterance, intent = intent.Route.ToString(), intent.MediaRequestKind, semantics,
+            utterance, preliminaryRoute = intent.Route.ToString(), routeReason = intent.Reason.ToString(), intent.MediaRequestKind, semantics,
             foreground = context.ForegroundWindow is { } w ? new { w.ProcessName, w.Title } : null,
             activeTab = active is null ? null : new { origin = active.Origin?.AbsoluteUri, active.Title },
             recentOwnedTab = owned is null ? null : new { origin = owned.Origin?.AbsoluteUri, owned.Title },
