@@ -56,6 +56,7 @@ public sealed class OpenRouterBrowserGoalNormalizer(HttpClient http, string? api
         string content;
         try
         {
+            using var modelCall = Activation.LatencyTrace.Current?.BeginModelCall("normalization");
             using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
                 throw new InfrastructureUnavailableException(UnavailableReason.BrowserGoalService, "Browser help is unavailable right now.");

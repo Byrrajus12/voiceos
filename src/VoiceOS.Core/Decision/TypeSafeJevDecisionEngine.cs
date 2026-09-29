@@ -106,6 +106,8 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         using var req = new HttpRequestMessage(HttpMethod.Post, Endpoint);
         req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
         req.Content = JsonContent.Create(request, options: JsonOptions);
+        using var modelCall = Activation.LatencyTrace.Current?.BeginModelCall(
+            request.Questions.ContainsKey("is_compound") ? "direct_base" : "direct_compound");
 
         HttpResponseMessage resp;
         try

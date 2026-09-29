@@ -71,6 +71,12 @@ public sealed class ScopeResolver
         CancellationToken cancellationToken = default,
         Func<CancellationToken, ValueTask<DirectOffer?>>? directOffer = null, bool grounded = true)
     {
+        static async ValueTask<T> Timed<T>(string name, Func<ValueTask<T>> call)
+        {
+            var timer = Stopwatch.StartNew();
+            try { return await call().ConfigureAwait(false); }
+            finally { LatencyTrace.Current?.Record(name, timer.Elapsed.TotalMilliseconds); }
+        }
         if (route.Reason == RoutingReason.IncompleteIntent)
             return new(ExecutionScopeKind.Clarify, Detail: route.Detail);
         if (route.Route == CommandRoute.TextTransform)
@@ -135,7 +141,7 @@ public sealed class ScopeResolver
             if (matches.Length == 0 && route.SurfacePreference != SurfacePreference.Native
                 && contextual is not null && context.InstalledApps is { Count: > 0 } candidates)
             {
-                var selectedAppId = await contextual.SelectInstalledAppAsync(utterance, candidates, cancellationToken)
+                var selectedAppId = await Timed("scope_app", () => contextual.SelectInstalledAppAsync(utterance, candidates, cancellationToken))
                     .ConfigureAwait(false);
                 matches = candidates.Where(app => app.Id == selectedAppId).Take(2).ToArray();
             }
@@ -167,7 +173,7 @@ public sealed class ScopeResolver
         {
             // ExistingNamedTab is a semantic claim; the real tab inventory settles it.
             var selection = contextual is null ? NamedTabSelection.Unavailable("no_named_tab_picker")
-                : await contextual.SelectNamedTabAsync(utterance, context.BrowserTabs, cancellationToken)
+                : await Timed("scope_named_tab", () => contextual.SelectNamedTabAsync(utterance, context.BrowserTabs, cancellationToken))
                     .ConfigureAwait(false);
             var focusOnly = route.EndState == SemanticEndState.SurfaceReady && route.GoalShape == GoalShape.SurfaceOnly;
             switch (selection.Kind)
@@ -247,7 +253,7 @@ public sealed class ScopeResolver
             && route.TabDisposition == TabDisposition.Unspecified && nativeInferable
             && contextual is not null && context.InstalledApps is { Count: > 0 } apps)
         {
-            var appId = await contextual.SelectInstalledAppAsync(utterance, apps, cancellationToken)
+            var appId = await Timed("scope_app", () => contextual.SelectInstalledAppAsync(utterance, apps, cancellationToken))
                 .ConfigureAwait(false);
             var app = apps.SingleOrDefault(x => x.Id == appId);
             if (app is not null)
@@ -295,7 +301,7 @@ public sealed class ScopeResolver
         if (nativeInferable && context.ForegroundWindow is { Hwnd: not 0 } foreground
             && !foreground.ProcessName.Equals("chrome", StringComparison.OrdinalIgnoreCase))
             offered.Add(ContextualSurface.ForegroundNativeWindow);
-        var selected = await contextual.SelectAsync(utterance, route, context, offered, cancellationToken)
+        var selected = await Timed("scope_surface", () => contextual.SelectAsync(utterance, route, context, offered, cancellationToken))
             .ConfigureAwait(false);
         if (!offered.Contains(selected)) selected = ContextualSurface.Clarify;
         return selected switch

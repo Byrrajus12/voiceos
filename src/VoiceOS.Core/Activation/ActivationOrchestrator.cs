@@ -447,6 +447,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
     private void CompleteActivation(ActivationRun run)
     {
         run.CompletedAt = DateTimeOffset.UtcNow;
+        run.CompletedPostSttMs = run.Trace?.ElapsedMs;
         if (run.Trace is { } trace)
             _logger.LogInformation("Activation timings activation_id={ActivationId} lane={Lane} outcome={Outcome} {Timings}",
                 run.ActivationId, run.Lane, run.Outcome, trace.Format());
@@ -500,6 +501,11 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         {
             var verdict = FrontDoorArbiter.Evaluate(route, direct, collected.Snapshot.FrontDoor!, _catalog,
                 decisionState.OpenWindows, nativeFallback, offer);
+            var probabilities = route.RawAnswers?.GetValueOrDefault("route");
+            double? P(string choice) => probabilities?.Probabilities.GetValueOrDefault(choice);
+            run.FrontDoorEvaluations.Add(new(offer ? "direct_offer" : nativeFallback ? "native_fallback" : "rescue",
+                verdict.Kind, verdict.Reasons, direct?.Plan.Action.ToString(), probabilities?.HasDistribution == true,
+                P("DIRECT_CAPABILITY"), P("COMPUTER_USE"), P("TEXT_TRANSFORM")));
             run.FrontDoor = offer && verdict.Kind == FrontDoorVerdictKind.RescueDirect
                 ? verdict with { Kind = FrontDoorVerdictKind.UseRoute, Reasons = ["safe_direct_offered"] } : verdict;
             _logger.LogInformation("Front door verdict={Verdict} reasons=[{Reasons}] direct_action={Action} route={Route} distribution={Distribution}",
@@ -538,6 +544,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !_shutdown.IsCancellationRequested)
         {
+            trace.Record("route", routeTimer.Elapsed.TotalMilliseconds);
+            trace.Record("front_door", frontDoorTimer.Elapsed.TotalMilliseconds);
             _logger.LogError(ex, "Command routing failed");
             PublishUnavailable(run, UnavailableReason.IntentService, ActivityMessage.ForUnavailable(UnavailableReason.IntentService));
             return;
@@ -545,6 +553,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         routeTimer.Stop();
         trace.Record("route", routeTimer.Elapsed.TotalMilliseconds);
         run.InitialRoute = run.Route = route;
+        run.FrontDoor = new(FrontDoorVerdictKind.UseRoute, [_config.DirectRescue ? "route_as_is" : "rescue_disabled"]);
         if (_config.DirectRescue && FrontDoorArbiter.IsEligible(route))
         {
             var direct = await GetDirect().ConfigureAwait(false);
@@ -589,6 +598,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !_shutdown.IsCancellationRequested)
         {
+            trace.Record("scope", scopeTimer.Elapsed.TotalMilliseconds);
+            trace.Record("front_door", frontDoorTimer.Elapsed.TotalMilliseconds);
             _logger.LogError(ex, "Scope selection service failed");
             PublishUnavailable(run, UnavailableReason.IntentService, ActivityMessage.ForUnavailable(UnavailableReason.IntentService));
             return;
@@ -678,6 +689,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                     goto directExecution;
                 }
             }
+            trace.Replace("front_door", frontDoorTimer.Elapsed.TotalMilliseconds);
             run.Outcome = "Unsupported";
             PublishSnapshot(new(ApplicationInteractionPhase.Failed, kind,
                 transcript, "Native UI interaction is not enabled yet."));
@@ -698,6 +710,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         }
 
     directExecution:
+        trace.Replace("front_door", frontDoorTimer.Elapsed.TotalMilliseconds);
         PublishSnapshot(new(ApplicationInteractionPhase.Observing, kind,
             transcript, "Collecting direct capabilities"));
         if (_decisionEngine is not null || route.MediaOperation is not null)

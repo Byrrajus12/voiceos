@@ -44,6 +44,7 @@ public sealed record EvalSummary(
     IReadOnlyDictionary<string, Percentiles> PerStageMs,
     IReadOnlyList<ScenarioReliability> Reliability)
 {
+    public FrontDoorSummary? FrontDoor { get; init; }
     public int InfrastructureUnavailable => ClassificationCounts.GetValueOrDefault(Classification.InfrastructureUnavailable);
     public bool ComparisonValid => InfrastructureUnavailable <= 3;
 }
@@ -92,7 +93,7 @@ public static class EvalAggregator
         return new EvalSummary(attempts, successes, successRate, perFamily, classificationCounts, classificationRates,
             RateOf(Classification.FalseSuccess), RateOf(Classification.UnnecessaryClarify),
             RateOf(Classification.WrongRoute), RateOf(Classification.WrongScope), RateOf(Classification.WrongTarget),
-            efficiency, totalPostStt, firstAction, perStage, reliability);
+            efficiency, totalPostStt, firstAction, perStage, reliability) { FrontDoor = FrontDoorMetrics.Summarize(counted) };
     }
 
     private static double Rate(int numerator, int denominator) => denominator == 0 ? 0 : (double)numerator / denominator;

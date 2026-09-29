@@ -6,6 +6,24 @@ namespace VoiceOS.Core.Tests.Activation;
 public sealed class LatencyTraceTests
 {
     [Fact]
+    public async Task ConcurrentCallsAndUnusedHeadsRemainVisibleAfterTerminalTiming()
+    {
+        var trace = LatencyTrace.Begin("accounting");
+        using (trace.BeginModelCall("route"))
+        {
+            await Task.Run(() => {
+                using var direct = trace.BeginModelCall("direct_base");
+                trace.RecordHead(new("direct", "action_kind", "CLOSE_WINDOW", .9, "NONE", .1, .8, .9));
+            });
+        }
+        Assert.Equal(2, trace.ModelCalls.Count);
+        Assert.Single(trace.Heads);
+        trace.Record("front_door", 1);
+        trace.Replace("front_door", 2);
+        Assert.Equal(2, Assert.Single(trace.Stages).ElapsedMs);
+    }
+
+    [Fact]
     public async Task AmbientTraceFlowsIntoAwaitedCalleesAndStaysLocalToItsFlow()
     {
         LatencyTrace? observedElsewhere = null;

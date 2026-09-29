@@ -54,6 +54,12 @@ public sealed class LiveScenarioRunner
         // see the same physical-pixel coordinates as a real voice activation would.
         System.Windows.Forms.Application.SetHighDpiMode(System.Windows.Forms.HighDpiMode.PerMonitorV2);
         var product = VoiceOS.VoiceOSProduct.Build(loggerFactory, includeSpeech: false);
+        File.WriteAllText(Path.Combine(runDir, "run.json"), JsonSerializer.Serialize(new {
+            RunId = runId, StartedAt = DateTimeOffset.UtcNow,
+            product.Config.FrontDoorGrounding, product.Config.SpeculativeDirectDecision, product.Config.DirectRescue,
+            options.Repeat, ScenarioIds = selected.Select(s => s.Id).ToArray(),
+            AssemblyVersion = typeof(VoiceOS.VoiceOSProduct).Assembly.ManifestModule.ModuleVersionId
+        }, JsonOptions));
         try
         {
             var results = new List<ScenarioResult>();
@@ -165,6 +171,9 @@ public sealed class LiveScenarioRunner
                 }
                 else
                 {
+                    // Eval observes unused work for accounting, after the product has completed.
+                    // CompletedPostSttMs preserves product latency; this does not mark the result used.
+                    if (activationRun.SpeculativeTask is { } speculative) await speculative.ConfigureAwait(false);
                     turn = RunMapper.Map(i, turnSpec.Transcript, activationRun, turnInitial, turnFinal);
                     if (timedOut) turn = turn with { OutcomeClass = OutcomeClass.Timeout };
                 }
@@ -428,6 +437,14 @@ public sealed class LiveScenarioRunner
             Console.WriteLine($"  {classification}: {count}");
         Console.WriteLine($"Latency (post-STT ms) p50={summary.TotalPostSttMs.P50:F0} p90={summary.TotalPostSttMs.P90:F0} p95={summary.TotalPostSttMs.P95:F0}");
         Console.WriteLine($"Latency (first action ms) p50={summary.FirstActionMs.P50:F0} p90={summary.FirstActionMs.P90:F0} p95={summary.FirstActionMs.P95:F0}");
+        if (summary.FrontDoor is { } f)
+        {
+            Console.WriteLine($"PreExecUnnecessaryClarify={f.PreExecUnnecessaryClarify} PostActionUnnecessaryClarify={f.PostActionUnnecessaryClarify}");
+            Console.WriteLine($"Rescue fired={f.RescueFired} passed={f.RescuePassed} contextual={f.ContextualDirectChoices} unsafe_browser={f.UnsafeBrowserRescues}");
+            Console.WriteLine($"Speculative started={f.SpeculativeStarted} used={f.SpeculativeUsed} unused={f.SpeculativeUnused} waste={f.SpeculativeWastePercent:F1}%");
+            foreach (var (lane, metrics) in f.ByLane)
+                Console.WriteLine($"{lane}: front_door p50={metrics.FrontDoorMs.P50:F0} p90={metrics.FrontDoorMs.P90:F0} calls={metrics.MeanCalls:F2} hops={metrics.MeanSequentialHops:F2}");
+        }
         Console.WriteLine($"Output: {runDir}");
     }
 

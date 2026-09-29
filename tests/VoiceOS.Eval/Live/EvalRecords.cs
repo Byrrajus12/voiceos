@@ -1,4 +1,5 @@
 using VoiceOS.Core.Browser;
+using VoiceOS.Core.Activation;
 using VoiceOS.Core.Decision;
 using VoiceOS.Core.Interaction;
 
@@ -68,11 +69,16 @@ public sealed record LatencyInfo(double TotalPostSttMs, double? FirstActionMs,
     IReadOnlyList<LatencyStageInfo> Stages, IReadOnlyDictionary<string, double> StageTotals,
     IReadOnlyDictionary<string, int> StageCounts);
 
-/// <summary>modelStages counts trace stages named route/direct_decision/normalization/browser_decision/
-/// text_value/completion_confirmation. It is a lower bound of model calls: router and scope
-/// sub-calls are not individually traced.</summary>
+/// <summary>Actual provider calls when instrumented; historical records retain the stage lower bound.</summary>
 public sealed record CountInfo(int Actions, int BrowserDecisions, int DirectSteps, int TabsCreated,
-    int ModelStages, int Clarifications);
+    int ModelStages, int Clarifications)
+{
+    public int? SequentialModelHops { get; init; }
+}
+
+public sealed record FrontDoorInfo(string Verdict, IReadOnlyList<string> Reasons,
+    IReadOnlyList<FrontDoorEvaluation> Evaluations, bool SpeculativeStarted, bool SpeculativeUsed,
+    double? SpeculativeDurationMs);
 
 public enum OutcomeClass { Complete, Clarify, Unsupported, Failed, Timeout, Unavailable }
 
@@ -86,6 +92,9 @@ public sealed record TurnRecord(
     /// <summary>Failed advisory checks (efficiency budgets, outcome/scope preference) of a turn whose
     /// correctness passed; recorded separately so they never change the classification.</summary>
     public IReadOnlyList<string> EfficiencyMisses { get; init; } = [];
+    public FrontDoorInfo? FrontDoor { get; init; }
+    public bool BrowserExpected { get; init; }
+    public IReadOnlyList<LatencyStageInfo> ModelCalls { get; init; } = [];
     public IReadOnlyList<JevDiagnostics.SummaryRecord> Heads { get; init; } = [];
 }
 

@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Globalization;
+using VoiceOS.Core.Decision;
 
 namespace VoiceOS.Core.Activation;
 
@@ -17,6 +18,8 @@ public sealed class LatencyTrace
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly object _lock = new();
     private readonly List<LatencyStage> _stages = [];
+    private readonly List<LatencyStage> _modelCalls = [];
+    private readonly List<JevDiagnostics.SummaryRecord> _heads = [];
     private double? _firstExternalActionMs;
 
     public LatencyTrace(string activationId) => ActivationId = activationId;
@@ -29,6 +32,21 @@ public sealed class LatencyTrace
     public IReadOnlyList<LatencyStage> Stages
     {
         get { lock (_lock) return _stages.ToArray(); }
+    }
+
+    public IReadOnlyList<LatencyStage> ModelCalls { get { lock (_lock) return _modelCalls.ToArray(); } }
+    public IReadOnlyList<JevDiagnostics.SummaryRecord> Heads { get { lock (_lock) return _heads.ToArray(); } }
+    public void RecordHead(JevDiagnostics.SummaryRecord head) { lock (_lock) _heads.Add(head); }
+
+    /// <summary>Times one actual provider request, including failed attempts. Separate from pipeline stages.</summary>
+    public IDisposable BeginModelCall(string name) => new ModelCall(this, name, ElapsedMs);
+    private sealed class ModelCall(LatencyTrace trace, string name, double start) : IDisposable
+    {
+        public void Dispose()
+        {
+            var elapsed = trace.ElapsedMs - start;
+            lock (trace._lock) trace._modelCalls.Add(new(name, start, elapsed));
+        }
     }
 
     /// <summary>Makes this trace current for the calling async flow and its callees.</summary>
@@ -44,6 +62,12 @@ public sealed class LatencyTrace
     {
         var end = ElapsedMs;
         lock (_lock) _stages.Add(new(stage, Math.Max(0, end - elapsedMs), elapsedMs));
+    }
+
+    public void Replace(string stage, double elapsedMs)
+    {
+        lock (_lock) _stages.RemoveAll(s => s.Name == stage);
+        Record(stage, elapsedMs);
     }
 
     /// <summary>Marks the first dispatch of an externally visible side effect.</summary>

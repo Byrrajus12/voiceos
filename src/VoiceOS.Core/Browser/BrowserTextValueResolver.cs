@@ -127,6 +127,7 @@ public sealed class OpenRouterBrowserTextValueResolver(HttpClient http, string? 
         });
         try
         {
+            using var modelCall = Activation.LatencyTrace.Current?.BeginModelCall("text_value");
             using var response = await http.SendAsync(httpRequest, cancellationToken).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode) return null;
             using var body = await JsonDocument.ParseAsync(

@@ -7,6 +7,9 @@ public static class ScenarioEvaluator
 {
     public static TurnRecord EvaluateTurn(TurnRecord turn, Expectation? expect)
     {
+        turn = turn with { BrowserExpected = expect?.Route?.Contains(VoiceOS.Core.Browser.CommandRoute.ComputerUse) == true
+            || expect?.Scope?.Any(s => s is ScopeExpectation.ActiveTab or ScopeExpectation.ExistingNamedTab
+                or ScopeExpectation.NewTaskTab or ScopeExpectation.RecentOwnedTaskTab) == true };
         var expectedOutcome = expect?.PrimaryOutcome ?? ExpectedOutcome.Complete;
         var accepted = expect?.AllAcceptedOutcomes ?? [expectedOutcome];
         var checks = new List<CheckResult>();

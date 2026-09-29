@@ -41,10 +41,10 @@ public sealed class ActivationRun
     public int ActionCount { get; internal set; }
 
     public CommandRouteDecision? InitialRoute { get; internal set; }
-    public IReadOnlyList<JevDiagnostics.SummaryRecord> RouteHeads =>
+    public IReadOnlyList<JevDiagnostics.SummaryRecord> RouteHeads => Trace is { Heads.Count: > 0 } trace ? trace.Heads :
         (InitialRoute?.RawAnswers ?? new Dictionary<string, JevAnswer>())
             .Select(x => JevDiagnostics.Record("route", x.Key, x.Value))
-            .Concat((Decision?.RawAnswers ?? new Dictionary<string, JevAnswer>())
+            .Concat(((SpeculativeDecision ?? Decision)?.RawAnswers ?? new Dictionary<string, JevAnswer>())
                 .Select(x => JevDiagnostics.Record("direct", x.Key, x.Value))).ToArray();
     /// <summary>The route after any direct-to-browser reroute.</summary>
     public CommandRouteDecision? Route { get; internal set; }
@@ -59,6 +59,8 @@ public sealed class ActivationRun
     public bool SpeculativeDirectUsed { get; internal set; }
     public double? SpeculativeDirectMs { get; internal set; }
     public FrontDoorVerdict? FrontDoor { get; internal set; }
+    public List<FrontDoorEvaluation> FrontDoorEvaluations { get; } = [];
+    public double? CompletedPostSttMs { get; internal set; }
     public VoiceProgram? Program { get; internal set; }
     public ProgramResult? ProgramResult { get; internal set; }
     public DateTimeOffset? JevStart { get; internal set; }
@@ -99,3 +101,6 @@ public sealed class ActivationRun
         lock (_lock) _browserActivities.Add(activity);
     }
 }
+
+public sealed record FrontDoorEvaluation(string Stage, FrontDoorVerdictKind Kind, IReadOnlyList<string> Reasons,
+    string? DirectAction, bool DistributionPresent, double? DirectP, double? BrowserP, double? TextP);

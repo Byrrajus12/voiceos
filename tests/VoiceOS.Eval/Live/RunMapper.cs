@@ -10,7 +10,7 @@ namespace VoiceOS.Eval.Live;
 public static class RunMapper
 {
     private static readonly HashSet<string> ModelStageNames = new(StringComparer.Ordinal)
-        { "route", "direct_decision", "normalization", "browser_decision", "text_value", "completion_confirmation" };
+        { "route", "direct_decision", "normalization", "browser_decision", "text_value", "completion_confirmation", "scope_surface", "scope_named_tab", "scope_app", "direct_decision_speculative" };
 
     public static TurnRecord Map(int index, string transcript, ActivationRun run, StateSnapshot initial, StateSnapshot final)
     {
@@ -18,22 +18,32 @@ public static class RunMapper
         var outcomeClass = Classify(run, terminal);
         var stages = run.Trace?.Stages ?? [];
         var latency = new LatencyInfo(
-            run.Trace?.ElapsedMs ?? 0, run.Trace?.FirstExternalActionMs,
+            run.CompletedPostSttMs ?? run.Trace?.ElapsedMs ?? 0, run.Trace?.FirstExternalActionMs,
             stages.Select(s => new LatencyStageInfo(s.Name, s.StartMs, s.ElapsedMs)).ToArray(),
             stages.GroupBy(s => s.Name).ToDictionary(g => g.Key, g => g.Sum(s => s.ElapsedMs)),
             stages.GroupBy(s => s.Name).ToDictionary(g => g.Key, g => g.Count()));
 
+        var calls = run.Trace?.ModelCalls ?? [];
         var counts = new CountInfo(
             run.ActionCount, run.BrowserOutcome?.Decisions ?? 0,
             run.ProgramResult?.StepResults.Count ?? 0,
             CountNewTabs(initial, final),
-            stages.Count(s => ModelStageNames.Contains(s.Name)),
-            terminal?.Phase == ApplicationInteractionPhase.NeedsChoice ? 1 : 0);
+            calls.Count > 0 ? calls.Count : stages.Count(s => ModelStageNames.Contains(s.Name)),
+            terminal?.Phase == ApplicationInteractionPhase.NeedsChoice ? 1 : 0) {
+                SequentialModelHops = calls.Count > 0
+                    ? calls.Count(c => run.SpeculativeTask is null || c.Name is not ("direct_base" or "direct_compound"))
+                    : stages.Count(s => ModelStageNames.Contains(s.Name) && s.Name != "direct_decision_speculative") };
 
         return new TurnRecord(index, transcript, run.ActivationId, run.PostSttStart ?? run.StartedAt, run.CompletedAt,
             run.Lane, run.Outcome, outcomeClass, terminal?.Phase.ToString(), terminal?.Status, run.Failure?.Message,
             MapRoute(run.InitialRoute), MapRoute(run.Route), run.ReroutedFromDirect, MapScope(run.Scope),
-            MapExecution(run), latency, counts, initial, final, [], Classification.HarnessError) { Heads = run.RouteHeads };
+            MapExecution(run), latency, counts, initial, final, [], Classification.HarnessError) {
+                Heads = run.RouteHeads,
+                ModelCalls = calls.Select(c => new LatencyStageInfo(c.Name, c.StartMs, c.ElapsedMs)).ToArray(),
+                FrontDoor = new(run.FrontDoor?.Kind.ToString() ?? "UseRoute", run.FrontDoor?.Reasons ?? [],
+                    run.FrontDoorEvaluations.ToArray(), run.SpeculativeTask is not null,
+                    run.SpeculativeDirectUsed, run.SpeculativeDirectMs)
+            };
     }
 
     private static OutcomeClass Classify(ActivationRun run, ApplicationInteractionSnapshot? terminal)
