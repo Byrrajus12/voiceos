@@ -29,6 +29,9 @@ public static class FrontDoorMetrics
             && t.Counts.Actions == 0 && t.Execution.Browser is null;
         static bool Fired(TurnRecord t) => t.FrontDoor?.Verdict is "RescueDirect" or "ContextualDirect";
         static bool Passed(TurnRecord t) => ScenarioResult.SuccessSet.Contains(t.Classification);
+        // Older exports did not mark scenarios expressed only through a browser end-state check.
+        static bool BrowserExpected(TurnRecord t) => t.BrowserExpected
+            || t.Checks.Any(c => c.Name.StartsWith("final.activeTab", StringComparison.Ordinal));
         static string[] Refusals(TurnRecord t) => (t.FrontDoor?.Evaluations ?? [])
             .Where(e => e.Kind == VoiceOS.Core.Activation.FrontDoorVerdictKind.UseRoute)
             .SelectMany(e => e.Reasons).Distinct().ToArray();
@@ -50,7 +53,7 @@ public static class FrontDoorMetrics
         return new(turns.Count(Pre), turns.Count(t => t.Classification == Classification.UnnecessaryClarify && !Pre(t)),
             turns.Count(Fired), turns.Count(t => Fired(t) && Passed(t)),
             turns.Count(t => t.FrontDoor?.Verdict == "ContextualDirect"),
-            turns.Count(t => Fired(t) && t.BrowserExpected && t.Classification is Classification.WrongRoute
+            turns.Count(t => Fired(t) && BrowserExpected(t) && t.Classification is Classification.WrongRoute
                 or Classification.WrongAction or Classification.FalseSuccess),
             turns.SelectMany(Refusals).GroupBy(x => x).ToDictionary(g => g.Key, g => g.Count()),
             speculative.Length, speculative.Length - unused, unused,
@@ -62,7 +65,7 @@ public static class FrontDoorMetrics
             rows.Where(x => Pre(x.Turn)).Select(x => new ClarifyDiagnostic(x.Result.ScenarioId, x.Result.Attempt,
                 x.Turn.Transcript, x.Turn.InitialRoute?.Reason.ToString(), x.Turn.Scope?.Detail, Refusals(x.Turn))).ToArray(),
             rows.Where(x => Fired(x.Turn)).Select(x => new RescueDiagnostic(x.Result.ScenarioId, x.Result.Attempt,
-                x.Turn.Transcript, x.Turn.FrontDoor!.Verdict, x.Turn.Classification, x.Turn.BrowserExpected,
+                x.Turn.Transcript, x.Turn.FrontDoor!.Verdict, x.Turn.Classification, BrowserExpected(x.Turn),
                 x.Turn.Execution.ProgramSteps)).ToArray());
     }
 

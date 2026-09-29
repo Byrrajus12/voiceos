@@ -9,7 +9,9 @@ public static class ScenarioEvaluator
     {
         turn = turn with { BrowserExpected = expect?.Route?.Contains(VoiceOS.Core.Browser.CommandRoute.ComputerUse) == true
             || expect?.Scope?.Any(s => s is ScopeExpectation.ActiveTab or ScopeExpectation.ExistingNamedTab
-                or ScopeExpectation.NewTaskTab or ScopeExpectation.RecentOwnedTaskTab) == true };
+                or ScopeExpectation.NewTaskTab or ScopeExpectation.RecentOwnedTaskTab) == true
+            || expect?.Final is { } final && (final.ActiveTabOriginContains
+                ?? final.ActiveTabUrlContains ?? final.ActiveTabTitleContains) is not null };
         var expectedOutcome = expect?.PrimaryOutcome ?? ExpectedOutcome.Complete;
         var accepted = expect?.AllAcceptedOutcomes ?? [expectedOutcome];
         var checks = new List<CheckResult>();

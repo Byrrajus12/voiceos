@@ -68,4 +68,18 @@ public sealed class FrontDoorMetricsTests
         Assert.Equal(.95, head.FailedMeanP);
         Assert.Equal(new CalibrationBucket(9, 2, 1), Assert.Single(head.Reliability));
     }
+
+    [Fact]
+    public void BrowserEndStateExpectationCannotHideAFailedRescueInOlderExports()
+    {
+        var turn = TestHelpers.Turn(OutcomeClass.Complete) with { Classification = Classification.FalseSuccess,
+            FrontDoor = new("RescueDirect", [], [], true, true, 100),
+            Checks = [new("final.activeTabOriginContains", CheckCategory.EndState, false, "open.spotify.com", "wikipedia.org")] };
+        var summary = FrontDoorMetrics.Summarize([Result("browser-end-state", turn)]);
+        Assert.Equal(1, summary.UnsafeBrowserRescues);
+        Assert.True(Assert.Single(summary.Rescues).BrowserExpected);
+        var evaluated = ScenarioEvaluator.EvaluateTurn(turn, new Expectation(
+            Final: new(ActiveTabOriginContains: "open.spotify.com")));
+        Assert.True(evaluated.BrowserExpected);
+    }
 }
