@@ -598,6 +598,40 @@ public sealed class BrowserSemanticTests
         "Open Sharp Objects", "Sharp Objects", "book", "Goodreads", "https://www.goodreads.com/",
         [], "Sharp Objects book page open", [], SemanticEndState.ResourceOpened);
 
+    [Theory]
+    [InlineData(RoutingReason.LowConfidence, false)]
+    [InlineData(RoutingReason.AmbiguousIntent, false)]
+    [InlineData(RoutingReason.LowConfidence, true)]
+    public async Task PreliminaryClarifyRefutedPageEntryStillRequiresMatchingAction(RoutingReason reason, bool missingTarget)
+    {
+        const string utterance = "Open the cobalt entry";
+        var route = new CommandRouteDecision(CommandRoute.Clarify, .35, Reason: reason,
+            MediaRequestKind: MediaRequestKind.None, TabDisposition: TabDisposition.ExistingNamedTab,
+            ContextDependency: ContextDependency.RequiresCurrentSurface,
+            EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly)
+            { IntentActionable = true, CoarseBrowserCandidate = true, ReturnTarget = ReturnTarget.None };
+        var foreground = new VoiceOS.Core.Candidates.WindowCandidate("chrome", "chrome", "Results", true, 42);
+        var scope = await new ScopeResolver().ResolveAsync(utterance, route,
+            new(foreground, [foreground], true,
+                [new(42, 1, true, "https://www.goodreads.com/list", "Books", BrowserTabProvenance.User)]),
+            new RefutingPicker());
+        Assert.True(scope.Browser!.TabClaimRefuted);
+        var transport = new ClickPageTransport();
+        var normalizer = new FakeNormalizer { Result = SharpObjectsGoal with {
+            Entity = "cobalt entry", EndState = SemanticEndState.SurfaceReady } };
+        var service = new BrowserInteractionService(transport,
+            new FakeGateway((_, _) => missingTarget
+                ? Answers(("operation", Choice("CLICK", .99)), ("click_target", Choice("NONE", .99)), ("goal_achieved", Noul(.01)))
+                : Answers(("operation", Choice("DONE", .99)), ("goal_achieved", Noul(.99)))),
+            normalizer, foregroundVerifier: _ => true);
+        var result = await service.RunAsync(utterance, scope: scope.Browser);
+        Assert.NotEqual(InteractionCompletionState.Complete, result.Completion);
+        Assert.Equal(0, result.Actions);
+        Assert.Equal(0, transport.Opens);
+        Assert.Equal(new[] { 42 }, transport.SelectedTabs);
+        Assert.Equal(1, normalizer.Calls);
+    }
+
     private sealed class RefutingPicker : IContextualScopeDecisionSource
     {
         public ValueTask<NamedTabSelection> SelectNamedTabAsync(string utterance, IReadOnlyList<BrowserTabInfo> tabs,

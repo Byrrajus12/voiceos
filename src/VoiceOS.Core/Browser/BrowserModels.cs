@@ -36,6 +36,12 @@ public sealed record CommandRouteDecision(CommandRoute Route, double Confidence,
 {
     public IReadOnlyDictionary<string, JevAnswer>? RawAnswers { get; init; }
     public bool TaskRelationEstablished { get; init; }
+    public bool IntentActionable { get; init; }
+    /// <summary>The coarse head proposed browser execution before its confidence gate.
+    /// This is corroboration only, never sufficient to select a surface.</summary>
+    public bool CoarseBrowserCandidate { get; init; }
+    public bool CoarseNonBrowserCandidate { get; init; }
+    public ReturnTarget ReturnTarget { get; init; } = ReturnTarget.Uncertain;
     /// <summary>A specific non-browser app, service, or site was requested. A generic browser
     /// host (e.g. Chrome itself) cannot satisfy it.</summary>
     public bool RequestsNamedEntity => RequestedEntity == RequestedEntityKind.NamedEntity

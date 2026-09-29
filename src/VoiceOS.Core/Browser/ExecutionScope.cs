@@ -93,6 +93,23 @@ public sealed class ScopeResolver
         var activeTabs = context.BrowserConnected
             ? context.BrowserTabs.Where(t => t.Active && t.Origin is not null).Take(2).ToArray() : [];
         BrowserTabInfo? active = activeTabs.Length == 1 ? activeTabs[0] : null;
+        // Reconcile only preliminary route uncertainty, with affirmative executable browser
+        // semantics. Neither independent task relation nor a foreground page is enough.
+        var uncertainBrowser = grounded && route.Route == CommandRoute.Clarify
+            && route.Reason is RoutingReason.LowConfidence or RoutingReason.AmbiguousIntent
+            && route.IntentActionable && route.SurfacePreference != SurfacePreference.Native
+            && !route.CoarseNonBrowserCandidate
+            && route.MediaRequestKind == MediaRequestKind.None && route.ReturnTarget == ReturnTarget.None
+            && route.GoalShape != GoalShape.Uncertain
+            && (route.CoarseBrowserCandidate || route.SurfacePreference == SurfacePreference.Browser);
+        DirectOffer? reconciliationOffer = null;
+        var reconciliationOfferRead = false;
+        if (uncertainBrowser && directOffer is not null)
+        {
+            reconciliationOffer = await directOffer(cancellationToken).ConfigureAwait(false);
+            reconciliationOfferRead = true;
+            uncertainBrowser = reconciliationOffer is null;
+        }
         BrowserExecutionScope Select(BrowserTabInfo tab, BrowserScopeKind kind, bool explicitSelection = false,
             bool focusOnly = false) => new(kind, tab.TabId, tab.Url, tab.SessionId,
                 ExplicitSelection: explicitSelection, FocusOnly: focusOnly,
@@ -192,7 +209,7 @@ public sealed class ScopeResolver
                     // The claim is refuted. Only a request that itself requires the visible surface,
                     // with Chrome visibly in front and one identifiable active tab, runs there; it
                     // never completes merely by being on that page.
-                    if (route.Route == CommandRoute.ComputerUse
+                    if ((route.Route == CommandRoute.ComputerUse || uncertainBrowser)
                         && route.ContextDependency == ContextDependency.RequiresCurrentSurface
                         && route.SurfacePreference != SurfacePreference.Native
                         && chromeForeground && active is not null)
@@ -211,7 +228,11 @@ public sealed class ScopeResolver
         // view. The destination keeps precedence only when it is corroborated as the task's
         // surface (a literal URL, an explicit web-surface preference, or a goal that is solely
         // acquiring that surface), or when no current browser surface is in view.
-        if (route.Route == CommandRoute.ComputerUse
+        if (uncertainBrowser && route.ContextDependency == ContextDependency.RequiresCurrentSurface
+            && (!chromeForeground || active is null))
+            return new(ExecutionScopeKind.Clarify,
+                Detail: "The required current browser surface is unavailable or ambiguous.");
+        if ((route.Route == CommandRoute.ComputerUse || uncertainBrowser && chromeForeground)
             && (route.TabDisposition == TabDisposition.Unspecified || weakNamedTab)
             && route.SurfacePreference != SurfacePreference.Native
             && route.ContextDependency == ContextDependency.RequiresCurrentSurface)
@@ -249,6 +270,18 @@ public sealed class ScopeResolver
             && !(grounded && chromeForeground && active is not null))
             return new(ExecutionScopeKind.Clarify,
                 Detail: "The request depends on prior VoiceOS work without a safe current surface or destination.");
+        // An independent browser goal needs either explicit acquisition of a named web
+        // representation or corroborated browser results. A generic bounded/native/text goal
+        // cannot use this path, and an executable safe direct offer retains precedence.
+        if (uncertainBrowser && context.BrowserConnected
+            && route.TabDisposition == TabDisposition.Unspecified
+            && route.ContextDependency == ContextDependency.SelfContained
+            && route.TaskRelationEstablished && route.TaskRelation == TaskRelation.NewTask
+            && (route.SurfacePreference == SurfacePreference.Browser && route.RequestsNamedEntity
+                    && route.GoalShape == GoalShape.SurfaceOnly && route.EndState == SemanticEndState.SurfaceReady
+                || route.CoarseBrowserCandidate && route.GoalShape == GoalShape.ActionOnSurface
+                    && route.EndState == SemanticEndState.ResultsVisible))
+            return Browser(new(BrowserScopeKind.NewTaskTab));
         if (route.SurfacePreference != SurfacePreference.Browser
             && route.TabDisposition == TabDisposition.Unspecified && nativeInferable
             && contextual is not null && context.InstalledApps is { Count: > 0 } apps)
@@ -279,7 +312,8 @@ public sealed class ScopeResolver
         if (contextual is null)
             return new(ExecutionScopeKind.Clarify, Detail: "The execution surface is ambiguous.");
         var offered = new List<ContextualSurface> { ContextualSurface.Clarify };
-        var safeDirect = directOffer is null ? null : await directOffer(cancellationToken).ConfigureAwait(false);
+        var safeDirect = reconciliationOfferRead ? reconciliationOffer
+            : directOffer is null ? null : await directOffer(cancellationToken).ConfigureAwait(false);
         if (safeDirect is not null)
         {
             offered.Add(ContextualSurface.DirectCapability);

@@ -144,6 +144,15 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
         CommandRouteDecision WithScope(CommandRouteDecision value) => value with
         {
             RawAnswers = answers,
+            IntentActionable = answers.TryGetValue("intent_completeness", out var complete)
+                && complete.QuestionType == "choice" && complete.Confidence >= confidenceThreshold
+                && complete.SelectedChoice == "Actionable",
+            CoarseBrowserCandidate = answers.TryGetValue("route", out var coarse)
+                && coarse.QuestionType == "choice" && coarse.SelectedChoice == "COMPUTER_USE",
+            CoarseNonBrowserCandidate = answers.TryGetValue("route", out var alternative)
+                && alternative.QuestionType == "choice"
+                && alternative.SelectedChoice is "DIRECT_CAPABILITY" or "NATIVE_INTERACTION" or "TEXT_TRANSFORM",
+            ReturnTarget = ChoiceEnum<ReturnTarget>(answers, "return_target", confidenceThreshold),
             TaskRelationEstablished = answers.TryGetValue("task_relation", out var relation)
                 && relation.QuestionType == "choice" && relation.Confidence >= confidenceThreshold
                 && Enum.TryParse<TaskRelation>(relation.SelectedChoice, out var taskRelation)
@@ -244,7 +253,7 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
     {
         var criteria = offered.Distinct().ToDictionary(x => x.ToString(), x => x switch
         {
-            ContextualSurface.ActiveBrowserTab => "Use only when the user semantically addresses this current page or strong task context makes it the intended surface, such as a request naming no destination whose content this active service itself provides. Mere technical ability to perform the action is insufficient.",
+            ContextualSurface.ActiveBrowserTab => "Use when the complete request plausibly addresses content or controls on the visible page. Select the page for observation; you do not need to identify or prove the requested target from metadata. The browser executor binds the target and proves success later. Mere technical ability to perform an unrelated fresh task is insufficient.",
             ContextualSurface.RecentOwnedBrowserTab => "Reuse this previously owned VoiceOS task tab only when its metadata makes the action belong there.",
             ContextualSurface.NewBrowserTaskTab => "Preserve unrelated user work and start a separate VoiceOS task tab for a fresh browser task.",
             ContextualSurface.ForegroundNativeWindow => "The complete action concerns controls inside the foreground native app; representation only.",
@@ -255,15 +264,23 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
         var owned = context.FrontDoor is null ? context.BrowserTabs.Where(t => t.Provenance == BrowserTabProvenance.VoiceOs
                 && t.LastUsedSequence is not null).OrderByDescending(t => t.LastUsedSequence).FirstOrDefault()
             : context.RecentTask is { } frame ? context.BrowserTabs.FirstOrDefault(t => t.TabId == frame.TabId) : null;
+        var semantics = new
+        {
+            intent.IntentActionable, contextDependency = intent.ContextDependency.ToString(),
+            surfacePreference = intent.SurfacePreference.ToString(), taskRelation = intent.TaskRelation.ToString(),
+            intent.TaskRelationEstablished, goalShape = intent.GoalShape.ToString(),
+            endState = intent.EndState.ToString(), requestedEntity = intent.RequestedEntity.ToString(),
+            returnTarget = intent.ReturnTarget.ToString()
+        };
         object pickerState = context.FrontDoor is null ? new
         {
-            utterance, intent = intent.Route.ToString(), intent.MediaRequestKind,
+            utterance, intent = intent.Route.ToString(), intent.MediaRequestKind, semantics,
             foreground = context.ForegroundWindow is { } legacyWindow ? new { legacyWindow.ProcessName, legacyWindow.Title } : null,
             activeTab = active is null ? null : new { origin = active.Origin?.AbsoluteUri, active.Title },
             recentOwnedTab = owned is null ? null : new { origin = owned.Origin?.AbsoluteUri, owned.Title }
         } : new
         {
-            utterance, intent = intent.Route.ToString(), intent.MediaRequestKind,
+            utterance, intent = intent.Route.ToString(), intent.MediaRequestKind, semantics,
             foreground = context.ForegroundWindow is { } w ? new { w.ProcessName, w.Title } : null,
             activeTab = active is null ? null : new { origin = active.Origin?.AbsoluteUri, active.Title },
             recentOwnedTab = owned is null ? null : new { origin = owned.Origin?.AbsoluteUri, owned.Title },
@@ -271,7 +288,7 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
         };
         var result = await gateway.AskAsync(pickerState, new Dictionary<string, JevQuestionDto>
         {
-            ["surface"] = new("choice", "Choose only one offered execution surface from metadata. Do not infer an action for a bare entity. No DOM or page actions are available here.", criteria)
+            ["surface"] = new("choice", "Choose only one offered execution surface from metadata and established semantics. A preliminary Clarify route can reflect coarse confidence uncertainty; it does not erase established semantic heads. Current-page entry is for observation, not target binding or completion. NewTask describes task independence and can still require the visible page. Self-contained fresh browser goals belong in a new task tab. Do not infer an action for a bare entity. No DOM or page actions are available here.", criteria)
         }, cancellationToken).ConfigureAwait(false);
         foreach (var head in result)
             JevDiagnostics.Log(logger, "Contextual surface", head.Key, head.Value);
