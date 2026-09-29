@@ -9,7 +9,7 @@ public enum PreconditionKind { CompanionConnected, AppInstalled, ForegroundProce
 public sealed record Precondition(PreconditionKind Kind, int WaitSeconds = 40, string? App = null,
     string? Process = null, int Min = 0, string? Contains = null, int Count = 0);
 
-public enum SetupStepKind { StartProcess, FocusWindow, Wait, CloseNewTabs }
+public enum SetupStepKind { StartProcess, FocusWindow, Wait, CloseNewTabs, CloseFixtureTab }
 
 public sealed record SetupStep(SetupStepKind Kind, string? File = null, string? Args = null,
     string? Process = null, int Ms = 0);

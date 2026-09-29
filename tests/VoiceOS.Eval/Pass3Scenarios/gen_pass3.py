@@ -59,11 +59,13 @@ def scenario(id_, name, tags, turns, setup=None, pre=None, timeout=90, cleanup=N
          "timeoutSeconds": timeout, "turns": turns}
     if setup:
         s["setup"] = setup
-    s["cleanup"] = cleanup if cleanup is not None else [{"kind": "closeNewTabs"}]
+    fixture = any(SITE in json.dumps(x) for x in (setup or [])) or any("before" in t for t in turns)
+    s["cleanup"] = cleanup if cleanup is not None else ([{"kind": "closeNewTabs"}] + ([{"kind": "focusWindow", "process": "chrome"}] + [{"kind": "closeFixtureTab"}] * 6 if fixture else []))
     return s
 
 
 CLOSE_NEW = [{"kind": "closeNewTabs"}]
+CLOSE_FIX = [{"kind": "focusWindow", "process": "chrome"}] + [{"kind": "closeFixtureTab"}] * 12
 SHOP = [{"kind": "startProcess", "file": "chrome.exe", "args": f"{SITE}/shop"}, {"kind": "wait", "ms": 2500}, {"kind": "focusWindow", "process": "chrome"}]
 FOCUS_CHROME = [{"kind": "focusWindow", "process": "chrome"}]
 NOTE = {"process": "notepad"}
@@ -88,8 +90,8 @@ out = [
     ], setup=page_setup("/shop"), pre=page_pre()),
     scenario("p3.bring-page-back", "Bring an earlier page back after opening another tab", ["browser", "fixture", "return"], [
         turn("Open the API reference.", url="docs/api"),
-        turn(f"Open {SITE}/news in a new tab.", url="/news"),
-        turn("Bring that API reference page back up.", url="docs/api", new_tabs={"max": 0}),
+        turn("Show me the Ember Camp Stove.", url="shop/p/ember-camp-stove", before=SHOP),
+        turn("Bring that API reference page back up.", url="docs/api"),
     ], setup=page_setup("/docs"), pre=page_pre()),
     scenario("p3.stale-closed-tab", "Reference to a page whose tab was closed", ["browser", "fixture", "stale"], [
         turn(f"Open {SITE}/docs/faq in a new tab.", url="docs/faq"),
@@ -152,6 +154,9 @@ out = [
         turn("Open the pathlib one again.", url="pathlib"),
     ]),
 ]
+
+out.append(scenario("p3.tab-cleanup", "Housekeeping: close leftover fixture tabs", ["housekeeping"], [
+    turn("Open Chrome.", settle=500, outcome="Complete", accepted=["Complete", "Clarify"])], pre=[], cleanup=CLOSE_FIX))
 
 path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pass3.json")
 json.dump(out, open(path, "w", encoding="utf-8"), indent=1)

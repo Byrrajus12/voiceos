@@ -90,6 +90,35 @@ public sealed class ReferentResolverTests
     }
 
     [Fact]
+    public async Task Other_WithWeakPick_ResolvesFromTheEstablishedPairAlone()
+    {
+        var result = await ReferentResolver.ResolveAsync("the other one", Two(1),
+            new Chooser(_ => new(ReferentChoiceKind.Ambiguous, null, ReferenceRelation.Alternative)));
+        Assert.Equal("Dune (2021)", result.Candidate!.Referent.Label);
+        Assert.Equal("contrast_pair", result.Reason);
+    }
+
+    [Fact]
+    public async Task WeakPickWithoutAnAlternativeRelation_StaysAmbiguous()
+    {
+        var result = await ReferentResolver.ResolveAsync("that one", Two(1),
+            new Chooser(_ => new(ReferentChoiceKind.Ambiguous, null, ReferenceRelation.Same)));
+        Assert.Equal(ReferentResolutionKind.Ambiguous, result.Kind);
+    }
+
+    [Fact]
+    public async Task Other_WithThreeInTheSet_IsNotDecidedByThePairRule()
+    {
+        var three = ReferentResolver.BuildCandidates([
+            Seq(ReferentStoreTests.Page(1, "https://imdb.test/a", "A"), 1),
+            Seq(ReferentStoreTests.Page(2, "https://imdb.test/b", "B"), 2),
+            Seq(ReferentStoreTests.Page(3, "https://imdb.test/c", "C"), 3)], Active(1, "https://imdb.test/a"));
+        var result = await ReferentResolver.ResolveAsync("the other one", three,
+            new Chooser(_ => new(ReferentChoiceKind.Ambiguous, null, ReferenceRelation.Alternative)));
+        Assert.Equal(ReferentResolutionKind.Ambiguous, result.Kind);
+    }
+
+    [Fact]
     public async Task Other_NeverDenotesTheThingInView()
     {
         var chooser = new Chooser(c => new(ReferentChoiceKind.Selected, c.Single(x => x.Current).Id, ReferenceRelation.Alternative));

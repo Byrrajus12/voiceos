@@ -196,7 +196,13 @@ public sealed class ScopeResolver
         // references that need it; otherwise a validated referent grounds the reference before any
         // wording-based inference. No usable referent falls through to the existing behavior unchanged.
         if (context.Referents is { Count: > 0 } referents && contextual is not null
-            && (route.Route == CommandRoute.ComputerUse || uncertainBrowser)
+            && (route.Route == CommandRoute.ComputerUse || uncertainBrowser
+                // A reference back to earlier work is often too thin for the coarse route to commit; a validated
+                // referent is grounded evidence, so a non-native, actionable Clarify route may still use it.
+                || route.ReferencesEarlier && route.Route == CommandRoute.Clarify
+                    && route.Reason is RoutingReason.LowConfidence or RoutingReason.AmbiguousIntent
+                    && route.IntentActionable && !route.CoarseNonBrowserCandidate
+                    && route.MediaRequestKind is MediaRequestKind.None or MediaRequestKind.Uncertain)
             && (route.ReferencesEarlier
                 || route.TaskRelationEstablished && route.TaskRelation is TaskRelation.ContinueRecent or TaskRelation.RequiresRecent)
             && route.TabDisposition == TabDisposition.Unspecified && route.ExplicitUrl is null
@@ -209,7 +215,16 @@ public sealed class ScopeResolver
             var candidates = ReferentResolver.BuildCandidates(referents, active);
             var resolution = await Timed("scope_referent", () => ReferentResolver.ResolveAsync(utterance, candidates,
                 contextual, cancellationToken)).ConfigureAwait(false);
-            var focusOnlyReferent = route.EndState == SemanticEndState.SurfaceReady && route.GoalShape == GoalShape.SurfaceOnly;
+            // Acquiring the referent is the whole goal unless the router saw a further action on it.
+            var focusOnlyReferent = route.GoalShape != GoalShape.ActionOnSurface;
+            ExecutionScopeDecision ReferentSurface(BrowserExecutionScope scope)
+            {
+                var decision = Browser(scope);
+                return focusOnlyReferent
+                    ? decision with { Browser = decision.Browser! with { EndState = SemanticEndState.SurfaceReady,
+                        GoalShape = GoalShape.SurfaceOnly, FocusOnly = scope.TabId is not null } }
+                    : decision;
+            }
             switch (resolution.Kind)
             {
                 case ReferentResolutionKind.Ambiguous:
@@ -219,10 +234,10 @@ public sealed class ScopeResolver
                     if (pageTab is null) break;
                     var kind = chromeForeground && active?.TabId == pageTab.TabId
                         ? BrowserScopeKind.ActiveTab : BrowserScopeKind.ExistingNamedTab;
-                    return Browser(Select(pageTab, kind, true, focusOnlyReferent) with { ReferentResolved = true });
+                    return ReferentSurface(Select(pageTab, kind, true, focusOnlyReferent) with { ReferentResolved = true });
                 case ReferentResolutionKind.Selected when resolution.Candidate!.Referent is { Kind: ReferentKind.Item } item
                     && Uri.TryCreate(item.Href, UriKind.Absolute, out var itemUri):
-                    return Browser(new(BrowserScopeKind.NewTaskTab, Destination: itemUri) { ReferentResolved = true });
+                    return ReferentSurface(new(BrowserScopeKind.NewTaskTab, Destination: itemUri) { ReferentResolved = true });
             }
         }
         if (route.TabDisposition == TabDisposition.NewTab)

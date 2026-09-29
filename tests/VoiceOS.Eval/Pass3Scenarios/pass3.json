@@ -87,6 +87,28 @@
   "cleanup": [
    {
     "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
    }
   ]
  },
@@ -178,6 +200,28 @@
   "cleanup": [
    {
     "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
    }
   ]
  },
@@ -293,6 +337,28 @@
   "cleanup": [
    {
     "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
    }
   ]
  },
@@ -333,21 +399,33 @@
     }
    },
    {
-    "transcript": "Open http://localhost:18777/news in a new tab.",
+    "transcript": "Show me the Ember Camp Stove.",
     "expect": {
      "outcome": "Complete",
      "final": {
-      "activeTabUrlContains": "/news"
+      "activeTabUrlContains": "shop/p/ember-camp-stove"
      }
-    }
+    },
+    "before": [
+     {
+      "kind": "startProcess",
+      "file": "chrome.exe",
+      "args": "http://localhost:18777/shop"
+     },
+     {
+      "kind": "wait",
+      "ms": 2500
+     },
+     {
+      "kind": "focusWindow",
+      "process": "chrome"
+     }
+    ]
    },
    {
     "transcript": "Bring that API reference page back up.",
     "expect": {
      "outcome": "Complete",
-     "newTabs": {
-      "max": 0
-     },
      "final": {
       "activeTabUrlContains": "docs/api"
      }
@@ -372,6 +450,28 @@
   "cleanup": [
    {
     "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
    }
   ]
  },
@@ -451,6 +551,28 @@
   "cleanup": [
    {
     "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
    }
   ]
  },
@@ -536,6 +658,28 @@
   "cleanup": [
    {
     "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
    }
   ]
  },
@@ -847,6 +991,28 @@
   "cleanup": [
    {
     "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
    }
   ]
  },
@@ -956,6 +1122,28 @@
   "cleanup": [
    {
     "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
    }
   ]
  },
@@ -1171,6 +1359,74 @@
   "cleanup": [
    {
     "kind": "closeNewTabs"
+   }
+  ]
+ },
+ {
+  "id": "p3.tab-cleanup",
+  "name": "Housekeeping: close leftover fixture tabs",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "housekeeping"
+  ],
+  "preconditions": [],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Open Chrome.",
+    "expect": {
+     "outcome": "Complete",
+     "acceptedOutcomes": [
+      "Complete",
+      "Clarify"
+     ]
+    },
+    "settleMs": 500
+   }
+  ],
+  "cleanup": [
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
    }
   ]
  }

@@ -129,10 +129,10 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
         // Only asked when VoiceOS actually holds earlier pages or items; it rides in the same request.
         if (earlierReferentsAvailable)
             heads["earlier_reference"] = new("choice",
-                "Independently decide whether the utterance refers back to a specific page, article, product, or result that was opened or used earlier in this session, by a pronoun, by again, by the other one, the previous one, or the first one, or by describing it; rather than naming something new or addressing what is on screen right now. Do not choose which page.",
+                "Independently decide whether the request can only be understood by reference to something opened or used earlier in this session: it uses a pronoun, again, the other one, the previous one, the first one, that page, or an incomplete description of something already opened. A request that fully names or describes its own target is NotEarlier even if that target happened to be opened before, and so is a request about what is on screen right now. Do not choose which page.",
                 new Dictionary<string, string>
                 {
-                    ["Earlier"] = "The request denotes something opened or used earlier, not something newly named and not the content currently on screen.",
+                    ["Earlier"] = "The request depends on earlier work to identify its target and does not name a complete target itself.",
                     ["NotEarlier"] = "The request names something new, or addresses the visible surface, or does not refer back."
                 });
         var answers = await gateway.AskAsync(state, heads, cancellationToken).ConfigureAwait(false);
@@ -427,20 +427,21 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
         var threshold = Math.Max(confidenceThreshold, .7);
         if (!answers.TryGetValue("referent", out var pick) || pick.QuestionType != "choice" || pick.SelectedChoice is null)
             return new(ReferentChoiceKind.Unavailable);
-        if (pick.Confidence < confidenceThreshold) return new(ReferentChoiceKind.Unavailable);
         var relation = answers.TryGetValue("relation", out var rel) && rel.QuestionType == "choice" && rel.Confidence >= confidenceThreshold
             ? rel.SelectedChoice switch
             {
                 "SAME" => ReferenceRelation.Same, "ALTERNATIVE" => ReferenceRelation.Alternative,
                 "PREVIOUS" => ReferenceRelation.Previous, "PROPERTY" => ReferenceRelation.Property, _ => ReferenceRelation.None
             } : ReferenceRelation.None;
+        // A pick too weak to use still carries the relation: the resolver may settle it from the established pair.
+        if (pick.Confidence < confidenceThreshold) return new(ReferentChoiceKind.Ambiguous, null, relation);
         logger?.LogInformation("Referent selected={Selection} confidence={Confidence:F2} relation={Relation}",
             pick.SelectedChoice, pick.Confidence, relation);
         if (pick.SelectedChoice == "NONE") return new(ReferentChoiceKind.None);
-        if (pick.SelectedChoice == "AMBIGUOUS") return new(ReferentChoiceKind.Ambiguous);
+        if (pick.SelectedChoice == "AMBIGUOUS") return new(ReferentChoiceKind.Ambiguous, null, relation);
         if (!ids.ContainsKey(pick.SelectedChoice)) return new(ReferentChoiceKind.Unavailable);
         // A weakly held pick is not a unique one.
-        if (pick.Confidence < threshold) return new(ReferentChoiceKind.Ambiguous);
+        if (pick.Confidence < threshold) return new(ReferentChoiceKind.Ambiguous, null, relation);
         return new(ReferentChoiceKind.Selected, pick.SelectedChoice, relation);
     }
 

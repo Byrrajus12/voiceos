@@ -177,6 +177,7 @@ public static class ScenarioLoader
             "focusWindow" => SetupStepKind.FocusWindow,
             "wait" => SetupStepKind.Wait,
             "closeNewTabs" => SetupStepKind.CloseNewTabs,
+            "closeFixtureTab" => SetupStepKind.CloseFixtureTab,
             _ => throw new ScenarioLoadException($"{fileName}: scenario '{id}': unknown setup step kind '{s.Kind}'")
         };
         return new SetupStep(kind, s.File, s.Args, s.Process, s.Ms ?? 0);

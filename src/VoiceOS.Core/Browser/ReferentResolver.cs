@@ -71,7 +71,15 @@ public static class ReferentResolver
         switch (choice.Kind)
         {
             case ReferentChoiceKind.None: return ReferentResolution.NoneFound("picker_none");
-            case ReferentChoiceKind.Ambiguous: return ReferentResolution.Ambiguous("picker_ambiguous");
+            case ReferentChoiceKind.Ambiguous:
+                // "The other one" among an established pair is determined by the pair itself: when exactly one
+                // member of a contrast group is not the thing in view, no further pick is needed.
+                if (choice.Relation is ReferenceRelation.Alternative or ReferenceRelation.Previous
+                    && candidates.Where(c => c.Group is not null).GroupBy(c => c.Group)
+                        .SingleOrDefault(g => g.Count() == 2 && g.Count(c => c.Current) == 1)
+                        is { } pair)
+                    return ReferentResolution.Selected(pair.Single(c => !c.Current), "contrast_pair");
+                return ReferentResolution.Ambiguous("picker_ambiguous");
             case ReferentChoiceKind.Unavailable: return ReferentResolution.Unavailable("picker_unavailable");
         }
         var picked = candidates.SingleOrDefault(c => c.Id == choice.CandidateId);

@@ -373,6 +373,18 @@ public sealed class LiveScenarioRunner
                         catch (Exception) { /* best-effort */ }
                     }
                     return new(step.Kind.ToString(), true, $"closed {owned.Length} tab(s)");
+                case SetupStepKind.CloseFixtureTab:
+                {
+                    // Closes the foreground Chrome tab only when it is a fixture-site tab this harness opened.
+                    if (!product.ChromeCompanion.IsConnected) return new(step.Kind.ToString(), true, "companion not connected");
+                    var listed = await product.ChromeCompanion.ListTabsAsync().ConfigureAwait(false);
+                    var active = listed.FirstOrDefault(t => t.Active && t.Url is { } u && u.StartsWith("http://localhost:18777/", StringComparison.Ordinal));
+                    if (active is null) return new(step.Kind.ToString(), true, "active tab is not a fixture tab; left alone");
+                    keybd_event(0x11, 0, 0, 0); keybd_event(0x57, 0, 0, 0);
+                    keybd_event(0x57, 0, 2, 0); keybd_event(0x11, 0, 2, 0);
+                    await Task.Delay(300).ConfigureAwait(false);
+                    return new(step.Kind.ToString(), true, "closed fixture tab");
+                }
                 default:
                     return new(step.Kind.ToString(), false, "unhandled setup step kind");
             }

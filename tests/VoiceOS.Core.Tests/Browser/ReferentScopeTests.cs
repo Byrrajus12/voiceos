@@ -176,4 +176,38 @@ public sealed class ReferentScopeTests
             Context(Chrome, [Tab(1, false), Tab(2, true)], DunePage(1, "Stove", 1)), chooser);
         Assert.Equal(0, chooser.ReferentCalls);
     }
+
+    [Theory]
+    [InlineData(GoalShape.Uncertain, true)]
+    [InlineData(GoalShape.SurfaceOnly, true)]
+    [InlineData(GoalShape.ActionOnSurface, false)]
+    public async Task ResolvedReferent_IsFocusOnly_UnlessTheRouterSawAnActionOnIt(GoalShape shape, bool focusOnly)
+    {
+        var chooser = new Chooser(new(ReferentChoiceKind.Selected, "first"));
+        var scope = await new ScopeResolver().ResolveAsync("now the other one",
+            Route(shape: shape, end: SemanticEndState.Unspecified) with { ReferencesEarlier = true },
+            Context(Chrome, [Tab(1, false, "Stove"), Tab(2, true, "Bag")], DunePage(1, "Stove", 5), DunePage(2, "Bag", 2)), chooser);
+        Assert.Equal(focusOnly, scope.Browser!.IsSurfaceOnly);
+        Assert.Equal(1, scope.Browser.TabId);
+    }
+
+    [Theory]
+    [InlineData(true, true, false, true)]
+    [InlineData(false, true, false, false)]   // not actionable
+    [InlineData(true, false, false, false)]   // router did not say earlier
+    [InlineData(true, true, true, false)]     // a direct/native/text candidate keeps its route
+    public async Task ThinClarifyRoute_UsesReferents_OnlyWhenEarlierAndNotNonBrowser(bool actionable, bool earlier, bool nonBrowser, bool consulted)
+    {
+        var chooser = new Chooser(new(ReferentChoiceKind.Selected, "first"));
+        var route = new CommandRouteDecision(CommandRoute.Clarify, .4, Reason: RoutingReason.AmbiguousIntent,
+            MediaRequestKind: MediaRequestKind.None) with
+        {
+            IntentActionable = actionable, ReferencesEarlier = earlier, CoarseNonBrowserCandidate = nonBrowser,
+            TaskRelationEstablished = true, TaskRelation = TaskRelation.NewTask
+        };
+        var scope = await new ScopeResolver().ResolveAsync("now the other one", route,
+            Context(Chrome, [Tab(1, false, "Stove"), Tab(2, true, "Bag")], DunePage(1, "Stove", 5), DunePage(2, "Bag", 2)), chooser);
+        Assert.Equal(consulted, chooser.ReferentCalls > 0);
+        if (consulted) Assert.Equal(1, scope.Browser!.TabId);
+    }
 }
