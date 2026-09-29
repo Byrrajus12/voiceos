@@ -36,6 +36,19 @@ public sealed class SetupCleanupTests
         Assert.Empty(plan.Windows);
     }
 
+    [Theory]
+    [InlineData(false, true, true)]
+    [InlineData(true, false, true)]
+    [InlineData(true, true, false)]
+    public void UnknownInventoryNeverMakesExistingUserTabsLookSetupCreated(bool beforeKnown, bool afterKnown, bool currentKnown)
+    {
+        var before = State() with { BrowserConnected = beforeKnown };
+        var after = State([Tab(1, "https://github.com/"), Tab(2, "https://www.nasa.gov/")])
+            with { BrowserConnected = afterKnown };
+        var current = after with { BrowserConnected = currentKnown };
+        Assert.Empty(SetupCleanup.Plan(NasaSetup, before, after, current).Tabs);
+    }
+
     [Fact]
     public void NeverClosesASetupTabThatIsAloneInItsWindow()
     {

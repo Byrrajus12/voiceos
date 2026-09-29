@@ -30,7 +30,8 @@ public static class SetupCleanup
         var started = StartedProcessNames(setup);
 
         var tabs = new List<SetupTabToClose>();
-        if (started.Any(BrowserProcesses.Contains))
+        if (started.Any(BrowserProcesses.Contains)
+            && beforeSetup.BrowserConnected && afterSetup.BrowserConnected && current.BrowserConnected)
         {
             var before = beforeSetup.Tabs.Select(t => t.TabId).ToHashSet();
             var created = afterSetup.Tabs.Where(t => !before.Contains(t.TabId) && t.Origin is not null)

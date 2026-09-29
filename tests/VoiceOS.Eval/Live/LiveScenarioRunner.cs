@@ -277,6 +277,9 @@ public sealed class LiveScenarioRunner
         if (selected is null) return $"tab {planned.TabId} already closed";
         if (!selected.Active || !string.Equals(foreground?.ProcessName, "chrome", StringComparison.OrdinalIgnoreCase))
             return $"tab {tab.TabId} left open: could not confirm it is the focused Chrome tab";
+        var remaining = await product.ChromeCompanion.ListTabsAsync().ConfigureAwait(false);
+        if (remaining.Count(t => t.WindowId == selected.WindowId) < 2)
+            return $"tab {tab.TabId} left open: it is now the only tab in its window";
         SendCtrlW();
         await Task.Delay(400).ConfigureAwait(false);
         return await Find().ConfigureAwait(false) is null
