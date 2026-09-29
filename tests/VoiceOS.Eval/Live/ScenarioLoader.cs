@@ -92,7 +92,8 @@ public static class ScenarioLoader
     {
         if (string.IsNullOrWhiteSpace(t.Transcript))
             throw new ScenarioLoadException($"{fileName}: scenario '{id}': turn missing 'transcript'");
-        return new Turn(t.Transcript, NormalizeExpectation(t.Expect, fileName, id), t.SettleMs ?? scenarioSettleMs);
+        return new Turn(t.Transcript, NormalizeExpectation(t.Expect, fileName, id), t.SettleMs ?? scenarioSettleMs,
+            t.Before?.Select(s => NormalizeSetupStep(s, fileName, id)).ToList());
     }
 
     private static Expectation? NormalizeExpectation(RawExpectation? e, string fileName, string id)
@@ -194,7 +195,7 @@ public static class ScenarioLoader
 
     private sealed record RawSetupStep(string? Kind, string? File, string? Args, string? Process, int? Ms);
 
-    private sealed record RawTurn(string? Transcript, RawExpectation? Expect, int? SettleMs);
+    private sealed record RawTurn(string? Transcript, RawExpectation? Expect, int? SettleMs, List<RawSetupStep>? Before = null);
 
     private sealed record RawExpectation(ExpectedOutcome? Outcome, List<CommandRoute>? Route,
         List<ScopeExpectation>? Scope, RawStringSet? DirectSteps, RawStringSet? BrowserOperations,

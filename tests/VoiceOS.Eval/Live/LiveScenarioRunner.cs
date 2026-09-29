@@ -152,7 +152,15 @@ public sealed class LiveScenarioRunner
             for (var i = 0; i < scenario.Turns.Count; i++)
             {
                 var turnSpec = scenario.Turns[i];
-                var turnInitial = i == 0 ? initialProbe : priorFinal;
+                if (turnSpec.Before is { Count: > 0 } before)
+                {
+                    foreach (var step in before)
+                        cleanupOutcomes.Add(await RunSetupStepAsync(product, step, isCleanup: true,
+                            initialProbe.Tabs.Select(static t => t.TabId).ToHashSet()).ConfigureAwait(false));
+                    await Task.Delay(600).ConfigureAwait(false);
+                    priorFinal = await probe.CaptureAsync().ConfigureAwait(false);
+                }
+                var turnInitial = i == 0 && turnSpec.Before is not { Count: > 0 } ? initialProbe : priorFinal;
                 var (activationRun, timedOut, stuck) = await RunTranscriptWithTimeoutAsync(
                     product, turnSpec.Transcript, scenario.TimeoutSeconds).ConfigureAwait(false);
                 if (stuck)

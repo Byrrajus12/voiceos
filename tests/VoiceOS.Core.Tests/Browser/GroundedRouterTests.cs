@@ -41,6 +41,17 @@ public sealed class GroundedRouterTests
         Assert.DoesNotContain("999", gateway.State);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task EarlierReferenceHead_IsAskedOnlyWhenReferentsExist_InTheSameRequest(bool referents)
+    {
+        var gateway = new CaptureGateway();
+        await new TypeSafeCommandRouter(gateway).RouteAsync("open that again", null, null, default, referents);
+        Assert.Equal(referents, gateway.Questions.ContainsKey("earlier_reference"));
+        Assert.True(gateway.Questions.ContainsKey("task_relation"));
+    }
+
     [Fact]
     public async Task GroundedRouter_NullContext_StateUnchanged()
     {

@@ -30,9 +30,9 @@ public sealed class ReferentWindowTests
         => new("key", new HttpClient(new FakeHttpHandler(json, HttpStatusCode.OK)), "jev-latest", 0.35, 0.40,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TypeSafeJevDecisionEngine>.Instance);
 
-    private static string Answers(string mode, string? window, string action = "CloseCurrentWindow", string extra = "")
+    private static string Answers(string mode, string? window, string action = "CloseCurrentWindow", string extra = "", double windowConfidence = 0.95)
     {
-        var target = window is null ? "" : $", \"target_window\": {{\"type\":\"choice\",\"choice\":\"{window}\",\"confidence\":0.95}}";
+        var target = window is null ? "" : $", \"target_window\": {{\"type\":\"choice\",\"choice\":\"{window}\",\"confidence\":{windowConfidence}}}";
         return "{ \"answers\": { \"is_command\": {\"type\":\"noul\",\"noul\":0.96}, \"is_compound\": {\"type\":\"noul\",\"noul\":0.02}, "
             + $"\"action_kind\": {{\"type\":\"choice\",\"choice\":\"{action}\",\"confidence\":0.97}}, "
             + $"\"window_target_mode\": {{\"type\":\"choice\",\"choice\":\"{mode}\",\"confidence\":0.95}}{target}{extra} }}, \"usage\": {{}} }}";
@@ -78,6 +78,21 @@ public sealed class ReferentWindowTests
         var result = await Engine(Answers("Referent", "w2")).DecideAsync(State("close it", ["w1", "w3"], Notes, Other, Paint));
         Assert.True(result.Plan.RequiresClarification);
         Assert.Null(result.Plan.WindowCandidateId);
+    }
+
+    [Fact]
+    public async Task WeakPickAmongSeveralReferentWindows_Clarifies_InsteadOfGuessing()
+    {
+        var result = await Engine(Answers("Referent", "w1", windowConfidence: 0.6)).DecideAsync(State("close the first one", ["w1", "w3"], Notes, Other, Paint));
+        Assert.True(result.Plan.RequiresClarification);
+        Assert.Null(result.Plan.WindowCandidateId);
+    }
+
+    [Fact]
+    public async Task FirmPickAmongSeveralReferentWindows_Acts()
+    {
+        var result = await Engine(Answers("Referent", "w3", windowConfidence: 0.85)).DecideAsync(State("close that one", ["w1", "w3"], Notes, Other, Paint));
+        Assert.Equal("w3", result.Plan.WindowCandidateId);
     }
 
     [Fact]

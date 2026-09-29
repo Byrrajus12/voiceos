@@ -154,4 +154,26 @@ public sealed class ReferentScopeTests
         Assert.NotEqual(9, scope.Browser?.TabId);
         Assert.Equal(ExecutionScopeKind.Clarify, scope.Kind);
     }
+
+    [Fact]
+    public async Task RouterSaysEarlier_EvenWhenNewTaskAndVisibleSurface_TheReferentsSettleIt()
+    {
+        var chooser = new Chooser(new(ReferentChoiceKind.Selected, "first"));
+        var route = Route(relation: TaskRelation.NewTask, dependency: ContextDependency.RequiresCurrentSurface) with { ReferencesEarlier = true };
+        var scope = await new ScopeResolver().ResolveAsync("now the other one", route,
+            Context(Chrome, [Tab(1, false, "Stove"), Tab(2, true, "Bag")], DunePage(1, "Stove", 5), DunePage(2, "Bag", 2)), chooser);
+        Assert.Equal(1, chooser.ReferentCalls);
+        Assert.Equal(1, scope.Browser!.TabId);
+        Assert.True(scope.Browser.ReferentResolved);
+    }
+
+    [Fact]
+    public async Task RouterSaysNotEarlier_WithNewTask_NeverConsultsReferents()
+    {
+        var chooser = new Chooser(new(ReferentChoiceKind.Selected, "first"));
+        var route = Route(relation: TaskRelation.NewTask, dependency: ContextDependency.RequiresCurrentSurface);
+        await new ScopeResolver().ResolveAsync("show me the tent", route,
+            Context(Chrome, [Tab(1, false), Tab(2, true)], DunePage(1, "Stove", 1)), chooser);
+        Assert.Equal(0, chooser.ReferentCalls);
+    }
 }

@@ -22,7 +22,7 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
 
     public async ValueTask<CommandRouteDecision> RouteAsync(
         string transcript, RecentTaskFrame? recentTask, FrontDoorContext? context,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, bool earlierReferentsAvailable = false)
     {
         var criteria = new Dictionary<string, string>
         {
@@ -37,8 +37,7 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
                 recentTask.SemanticGoal, recentTask.Completion, recentTask.LastUsed } }
             : new { utterance = transcript, context = context.ToJevState() };
         string Grounded(string text) => context is null ? "" : " " + text;
-        var answers = await gateway.AskAsync(state,
-            new Dictionary<string, JevQuestionDto>
+        var heads = new Dictionary<string, JevQuestionDto>
             {
                 ["route"] = new("choice",
                     "Route the whole utterance before anything executes. DIRECT_CAPABILITY is valid only when native capabilities cover every requested action; never execute merely a native prefix of a larger web task." + Grounded("Use context.named_matches and context.foreground: a named installed app or open window that is not a web service, operated with window/app verbs, is DIRECT_CAPABILITY. When installed-app and web-service matches coexist, retain the ambiguity rather than assuming either representation."),
@@ -126,7 +125,17 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
                         ["RequiresCurrentSurface"] = "The complete action addresses a target supplied or disambiguated by the visible surface; inspect that surface to bind the target later.",
                         ["Uncertain"] = "Insufficient confidence to classify current-surface dependency."
                     })
-            }, cancellationToken).ConfigureAwait(false);
+            };
+        // Only asked when VoiceOS actually holds earlier pages or items; it rides in the same request.
+        if (earlierReferentsAvailable)
+            heads["earlier_reference"] = new("choice",
+                "Independently decide whether the utterance refers back to a specific page, article, product, or result that was opened or used earlier in this session, by a pronoun, by again, by the other one, the previous one, or the first one, or by describing it; rather than naming something new or addressing what is on screen right now. Do not choose which page.",
+                new Dictionary<string, string>
+                {
+                    ["Earlier"] = "The request denotes something opened or used earlier, not something newly named and not the content currently on screen.",
+                    ["NotEarlier"] = "The request names something new, or addresses the visible surface, or does not refer back."
+                });
+        var answers = await gateway.AskAsync(state, heads, cancellationToken).ConfigureAwait(false);
 
         foreach (var head in answers)
             JevDiagnostics.Log(logger, "Command route head", head.Key, head.Value);
@@ -154,6 +163,9 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
                 && alternative.QuestionType == "choice"
                 && alternative.SelectedChoice is "DIRECT_CAPABILITY" or "NATIVE_INTERACTION" or "TEXT_TRANSFORM",
             ReturnTarget = ChoiceEnum<ReturnTarget>(answers, "return_target", confidenceThreshold),
+            ReferencesEarlier = answers.TryGetValue("earlier_reference", out var earlier)
+                && earlier.QuestionType == "choice" && earlier.Confidence >= Math.Max(confidenceThreshold, .6)
+                && earlier.SelectedChoice == "Earlier",
             TaskRelationEstablished = answers.TryGetValue("task_relation", out var relation)
                 && relation.QuestionType == "choice" && relation.Confidence >= confidenceThreshold
                 && Enum.TryParse<TaskRelation>(relation.SelectedChoice, out var taskRelation)

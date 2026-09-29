@@ -84,7 +84,9 @@ public sealed record Expectation(
         ? accepted.Prepend(PrimaryOutcome).Distinct().ToArray() : [PrimaryOutcome];
 }
 
-public sealed record Turn(string Transcript, Expectation? Expect = null, int SettleMs = 800);
+/// <summary>Before: setup-style steps run between turns (e.g. focusing a window, closing tabs the scenario opened).</summary>
+public sealed record Turn(string Transcript, Expectation? Expect = null, int SettleMs = 800,
+    IReadOnlyList<SetupStep>? Before = null);
 
 public sealed record Scenario(
     string Id, string Name, string Family, IReadOnlyList<string> Tags, ScenarioSafety Safety,

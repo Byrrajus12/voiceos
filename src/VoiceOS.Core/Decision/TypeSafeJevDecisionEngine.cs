@@ -331,6 +331,9 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         if (referentMode)
         {
             var known = state.ReferentWindowIds!;
+            // Acting on a coin flip between windows is worse than asking: a referent pick needs a firm answer
+            // whenever it is one of several.
+            if (known.Count > 1 && (winAnswer?.Confidence ?? 0) < ReferentPickFloor) windowCandidateId = null;
             if (windowCandidateId is null || !known.Contains(windowCandidateId))
             {
                 windowCandidateId = known.Count == 1 ? known[0] : null;
@@ -484,6 +487,16 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
     }
 
     internal const string ReferentMode = "Referent";
+    private const double ReferentPickFloor = 0.7;
+
+    /// <summary>Typed order of establishment, so "the first one" and "the last one" have something to be matched against.</summary>
+    private static string RecencyLabel(IReadOnlyList<string> mostRecentFirst, string id)
+    {
+        var index = mostRecentFirst.ToList().IndexOf(id);
+        if (mostRecentFirst.Count == 1) return "the only such window";
+        if (index == 0) return "newest";
+        return index == mostRecentFirst.Count - 1 ? "oldest" : $"#{index + 1} newest";
+    }
 
     private static Dictionary<string, string> WindowModeCriteria(bool referentOffered)
     {
@@ -538,7 +551,8 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         var appCandidates = AppChoices(state);
         var referentWindows = state.ReferentWindowIds ?? [];
         var windowCandidates = state.OpenWindows.ToDictionary(w => w.Id,
-            w => referentWindows.Contains(w.Id) ? $"{w.Title} (recently opened or used by VoiceOS)" : w.Title);
+            w => referentWindows.Contains(w.Id)
+                ? $"{w.Title} (recently opened or used by VoiceOS, {RecencyLabel(referentWindows, w.Id)})" : w.Title);
 
         var questions = new Dictionary<string, JevQuestionDto>
         {
@@ -651,7 +665,9 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         {
             questions["target_window"] = new JevQuestionDto(
                 "choice",
-                "Which open window is the target of the command?",
+                referentWindows.Count == 0
+                    ? "Which open window is the target of the command?"
+                    : "Which open window is the target of the command? Windows marked as recently opened or used by VoiceOS carry their order of use (newest, oldest); a reference back to earlier work denotes one of those, and a reference to the first or earliest one means the oldest.",
                 windowCandidates);
         }
 

@@ -197,10 +197,14 @@ public sealed class ScopeResolver
         // wording-based inference. No usable referent falls through to the existing behavior unchanged.
         if (context.Referents is { Count: > 0 } referents && contextual is not null
             && (route.Route == CommandRoute.ComputerUse || uncertainBrowser)
-            && route.TaskRelationEstablished && route.TaskRelation is TaskRelation.ContinueRecent or TaskRelation.RequiresRecent
+            && (route.ReferencesEarlier
+                || route.TaskRelationEstablished && route.TaskRelation is TaskRelation.ContinueRecent or TaskRelation.RequiresRecent)
             && route.TabDisposition == TabDisposition.Unspecified && route.ExplicitUrl is null
             && route.SurfacePreference != SurfacePreference.Native
-            && !(route.ContextDependency == ContextDependency.RequiresCurrentSurface && chromeForeground && active is not null))
+            // An explicit reference to earlier work is settled by the referents; anything else that
+            // needs the visible surface keeps it.
+            && !(!route.ReferencesEarlier && route.ContextDependency == ContextDependency.RequiresCurrentSurface
+                && chromeForeground && active is not null))
         {
             var candidates = ReferentResolver.BuildCandidates(referents, active);
             var resolution = await Timed("scope_referent", () => ReferentResolver.ResolveAsync(utterance, candidates,

@@ -36,6 +36,8 @@ public sealed record CommandRouteDecision(CommandRoute Route, double Confidence,
 {
     public IReadOnlyDictionary<string, JevAnswer>? RawAnswers { get; init; }
     public bool TaskRelationEstablished { get; init; }
+    /// <summary>The router judged that the request denotes something opened or used earlier (asked only when earlier referents exist).</summary>
+    public bool ReferencesEarlier { get; init; }
     public bool IntentActionable { get; init; }
     /// <summary>The coarse head proposed browser execution before its confidence gate.
     /// This is corroboration only, never sufficient to select a surface.</summary>
