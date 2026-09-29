@@ -40,6 +40,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
     private readonly IWindowAwareLauncher? _windowAwareLauncher;
     private readonly ScopeResolver _scopeResolver = new();
     private RecentTaskFrame? _recentTask;
+    private readonly ReferentStore _referents = new();
+    internal ReferentStore ReferentsForTesting => _referents;
     internal RecentTaskFrame? RecentTaskForTesting => _recentTask;
     private readonly VoiceOSConfig _config;
     private readonly ILogger<ActivationOrchestrator> _logger;
@@ -646,6 +648,10 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 return;
             }
             _recentTask = RecentTaskPolicy.AfterBrowserRun(_recentTask, browserResult, transcript, DateTimeOffset.UtcNow);
+            _referents.ObserveMany(browserResult.Referents);
+            if (browserResult.Referents is { Count: > 0 } observed)
+                _logger.LogInformation("Referents observed source=browser kinds={Kinds} store_count={Count}",
+                    string.Join(',', observed.Select(r => r.Kind)), _referents.Count);
             run.ActionCount = browserResult.Actions;
             run.Outcome = browserResult.Completion.ToString();
             if (browserResult.Completion == InteractionCompletionState.Uncertain)

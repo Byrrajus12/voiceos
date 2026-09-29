@@ -545,7 +545,9 @@ public sealed class BrowserInteractionService(
         return new(result.Completion, UserDetail(result.Detail, plan?.Only.Family), result.Choices,
             surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title,
             result.Progress.Decisions, result.Progress.Actions, surface.TabId, surface.SessionId,
-            goal.Normalization?.Objective);
+            goal.Normalization?.Objective,
+            Referents: ReferentPopulator.FromBrowserRun(result.Effects, result.Completion, surface.TabId,
+                surface.SessionId, surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title, DateTimeOffset.UtcNow));
     }
 
     /// <summary>Families a proof may complete when proof is On. Find stays shadow-only (25% shadow coverage), Reach is legacy.</summary>
