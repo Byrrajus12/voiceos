@@ -10,6 +10,9 @@ public sealed class FileLoggerProvider(string path) : ILoggerProvider
     private readonly StreamWriter _writer = new(File.Open(path, FileMode.Create, FileAccess.Write, FileShare.Read))
         { AutoFlush = true };
 
+    /// <summary>Opt-in Debug lines from the browser service category (bind diagnostics carry element labels).</summary>
+    public static bool ProofDiagnostics { get; } = Environment.GetEnvironmentVariable("VOICEOS_EVAL_PROOF_DIAG") == "1";
+
     public ILogger CreateLogger(string categoryName) => new FileLogger(this, categoryName);
 
     private void Write(string line)
@@ -23,7 +26,8 @@ public sealed class FileLoggerProvider(string path) : ILoggerProvider
     {
         public IDisposable? BeginScope<TState>(TState state) where TState : notnull => ScopeStack.Push(state?.ToString() ?? "");
 
-        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Information;
+        public bool IsEnabled(LogLevel logLevel) => logLevel >= LogLevel.Information
+            || (ProofDiagnostics && logLevel == LogLevel.Debug && categoryName.EndsWith("BrowserInteractionService", StringComparison.Ordinal));
 
         public void Log<TState>(LogLevel logLevel, EventId eventId, TState state, Exception? exception,
             Func<TState, Exception?, string> formatter)

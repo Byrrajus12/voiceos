@@ -43,7 +43,8 @@ public sealed class LiveScenarioRunner
         using var loggerFactory = LoggerFactory.Create(b =>
         {
             // The file keeps full Information product logs; the console stays quiet unless --verbose.
-            b.SetMinimumLevel(LogLevel.Information);
+            // VOICEOS_EVAL_PROOF_DIAG=1 additionally records bind diagnostics (element labels) for review.
+            b.SetMinimumLevel(FileLoggerProvider.ProofDiagnostics ? LogLevel.Debug : LogLevel.Information);
             b.AddSimpleConsole(o => { o.SingleLine = true; o.TimestampFormat = "HH:mm:ss "; });
             b.AddFilter<Microsoft.Extensions.Logging.Console.ConsoleLoggerProvider>(null,
                 options.Verbose ? LogLevel.Information : LogLevel.Warning);

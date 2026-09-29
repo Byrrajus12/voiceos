@@ -1,0 +1,1279 @@
+[
+  {
+    "id": "real.go-tour",
+    "name": "docs: named tutorial link",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "docs",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://go.dev/doc/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "go.dev"
+      }
+    ],
+    "transcript": "Open the tour of Go.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "tour.go.dev"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.k8s-tutorials",
+    "name": "docs: section by name",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "docs",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://kubernetes.io/docs/home/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "kubernetes.io"
+      }
+    ],
+    "transcript": "Open the tutorials section.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "docs/tutorials"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.mdn-css",
+    "name": "docs: topic by meaning",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "docs",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://developer.mozilla.org/en-US/docs/Web"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "developer.mozilla.org"
+      }
+    ],
+    "transcript": "Take me to the CSS documentation.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "docs/Web/CSS"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.books-exact",
+    "name": "shopping: exact product title",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "shop",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://books.toscrape.com/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "books.toscrape.com"
+      }
+    ],
+    "transcript": "Open the book called A Light in the Attic.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "a-light-in-the-attic"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.books-category",
+    "name": "shopping: category",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "shop",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://books.toscrape.com/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "books.toscrape.com"
+      }
+    ],
+    "transcript": "Show me the travel books.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "category/books/travel"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.books-third",
+    "name": "shopping: ordinal product",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "shop",
+      "activate",
+      "ordinal"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://books.toscrape.com/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "books.toscrape.com"
+      }
+    ],
+    "transcript": "Open the third book on the page.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "catalogue/"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.webscraper-laptops",
+    "name": "shopping: category link",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "shop",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://webscraper.io/test-sites/e-commerce/static"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "webscraper.io"
+      }
+    ],
+    "transcript": "Open the laptops category.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "computers/laptops"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.npr-top",
+    "name": "news: top story",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "news",
+      "activate",
+      "ordinal"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://text.npr.org/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "text.npr.org"
+      }
+    ],
+    "transcript": "Open the top story.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "text.npr.org/"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.hn-newest",
+    "name": "news: nav link",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "news",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://news.ycombinator.com/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "news.ycombinator.com"
+      }
+    ],
+    "transcript": "Show me the newest stories.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "newest"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.yt-first",
+    "name": "video listing: first result",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "video",
+      "activate",
+      "ordinal"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://www.youtube.com/results?search_query=tide+pools"
+      },
+      {
+        "kind": "wait",
+        "ms": 4500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "youtube.com"
+      }
+    ],
+    "transcript": "Play the first video.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "watch?v="
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.newtab-click-here",
+    "name": "target=_blank link",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "adopted",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://the-internet.herokuapp.com/windows"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "the-internet.herokuapp.com"
+      }
+    ],
+    "transcript": "Click the click here link.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "windows/new"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.redirect-link",
+    "name": "same-site redirect link",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "redirect",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://the-internet.herokuapp.com/redirector"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "the-internet.herokuapp.com"
+      }
+    ],
+    "transcript": "Click the redirect link.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "status_codes"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.add-element",
+    "name": "same-page mutation",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "samepage",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://the-internet.herokuapp.com/add_remove_elements/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "the-internet.herokuapp.com"
+      }
+    ],
+    "transcript": "Click add element.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "add_remove_elements"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.dynamic-remove",
+    "name": "same-page removal",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "samepage",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://the-internet.herokuapp.com/dynamic_controls"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "the-internet.herokuapp.com"
+      }
+    ],
+    "transcript": "Click the remove button.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "dynamic_controls"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.index-checkboxes",
+    "name": "index link",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://the-internet.herokuapp.com/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "the-internet.herokuapp.com"
+      }
+    ],
+    "transcript": "Open the checkboxes example.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "checkboxes"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.wiki-search",
+    "name": "site search box",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "find"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://en.wikipedia.org/wiki/Main_Page"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "wikipedia.org"
+      }
+    ],
+    "transcript": "Search Wikipedia for tide pools.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "tide"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.mdn-search",
+    "name": "site search box 2",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "find"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://developer.mozilla.org/en-US/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "developer.mozilla.org"
+      }
+    ],
+    "transcript": "Search this site for flexbox.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "flexbox"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.duck-search",
+    "name": "search engine query",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "find"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://duckduckgo.com/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "duckduckgo.com"
+      }
+    ],
+    "transcript": "Search for how volcanoes form.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "volcano"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.books-search-open",
+    "name": "search then open (multistep)",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "setup-page",
+      "find",
+      "activate",
+      "multistep"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://en.wikipedia.org/wiki/Main_Page"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "wikipedia.org"
+      }
+    ],
+    "transcript": "Search Wikipedia for the octopus and open the article.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "Octopus"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.dest-khan",
+    "name": "surface: named site",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "destination",
+      "surface"
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      }
+    ],
+    "transcript": "Open Khan Academy.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "min": 0,
+        "max": 1
+      },
+      "final": {
+        "activeTabOriginContains": "khanacademy.org"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.dest-mdn",
+    "name": "surface: named site 2",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "destination",
+      "surface"
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      }
+    ],
+    "transcript": "Go to the Mozilla developer site.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "min": 0,
+        "max": 1
+      },
+      "final": {
+        "activeTabOriginContains": "mozilla.org"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.dest-npr",
+    "name": "surface: named site 3",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "destination",
+      "surface"
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      }
+    ],
+    "transcript": "Open NPR.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "min": 0,
+        "max": 1
+      },
+      "final": {
+        "activeTabOriginContains": "npr.org"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.dest-archive",
+    "name": "surface: named site 4",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "destination",
+      "surface"
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      }
+    ],
+    "transcript": "Take me to the Internet Archive.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "min": 0,
+        "max": 1
+      },
+      "final": {
+        "activeTabOriginContains": "archive.org"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "real.dest-gutenberg",
+    "name": "surface: named site 5",
+    "family": "pass2-real",
+    "tags": [
+      "pass2",
+      "real",
+      "browser",
+      "chrome",
+      "destination",
+      "surface"
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      }
+    ],
+    "transcript": "Open Project Gutenberg.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "min": 0,
+        "max": 1
+      },
+      "final": {
+        "activeTabOriginContains": "gutenberg.org"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  }
+]
