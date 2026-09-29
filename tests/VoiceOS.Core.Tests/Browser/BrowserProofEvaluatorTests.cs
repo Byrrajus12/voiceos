@@ -121,6 +121,26 @@ public sealed class BrowserProofEvaluatorTests
     }
 
     [Fact]
+    public void Activate_HubPageThatDoesNotEchoTheControlsOwnWords_DoesNotProve()
+    {
+        // "READ THE BOOK" bound strongly, but it led to a "Learn" hub: the landing shows none of the control's distinctive word.
+        var hub = "https://rust.example/learn";
+        var effects = LinkFollowed(hub, Ref(href: hub, label: "READ THE BOOK"));
+        var binding = new TargetBinding("e5", 3, BindingMethod.JevChoice, 12, .91, .85, "READ THE BOOK", LabelTerms: ["book"]);
+        var verdict = Activate(effects, binding, hub, title: "Learn Rust - Rust Programming Language");
+        Assert.Equal(ProofStatus.Inconclusive, verdict.Status);
+        Assert.Equal("label_not_reflected", verdict.Rule);
+        // Same evidence, but the landing is the book itself.
+        var book = "https://rust.example/book/";
+        Assert.Equal(ProofStatus.Proved, Activate(LinkFollowed(book, Ref(href: book)), binding, book, title: "The Rust Programming Language").Status);
+        // The distinctive word may show in the title instead of the URL.
+        Assert.Equal(ProofStatus.Proved, Activate(effects, binding, hub, title: "The Book").Status);
+        // Generic labels contribute no distinctive terms, so nothing extra is required.
+        var generic = new TargetBinding("e5", 3, BindingMethod.JevChoice, 12, .91, .85, "Details", LabelTerms: []);
+        Assert.Equal(ProofStatus.Proved, Activate(effects, generic, hub, title: "Learn Rust").Status);
+    }
+
+    [Fact]
     public void Activate_ControlWithoutHref_NeverProves_EvenWhenItsOwnStateChanged()
     {
         // Live shadow data: a strongly bound button whose click changed the page was not the goal.

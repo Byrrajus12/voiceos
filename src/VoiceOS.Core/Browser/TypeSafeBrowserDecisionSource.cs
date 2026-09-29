@@ -245,7 +245,7 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             if (exact.Length == 1)
             {
                 var binding = new TargetBinding(exact[0].Id, revision, BindingMethod.ExactLabel, clickable.Count,
-                    Label: exact[0].Name);
+                    Label: exact[0].Name, LabelTerms: DistinctiveTerms(exact[0].Id, elements, clickable.Keys));
                 _logger?.LogInformation("Browser bind method=ExactLabel target={Target} candidates={Candidates}", binding.ElementRef, clickable.Count);
                 _logger?.LogDebug("Browser bind diag label={Label} descriptor={Descriptor}", exact[0].Name, step.What.Phrase);
                 return binding;
@@ -262,8 +262,23 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             string.Join(" | ", ranked.Select(item => $"{item.Key}:{item.Value:F2}:{elements.GetValueOrDefault(item.Key)}")));
         if (top.Choice == "NONE" || !clickable.ContainsKey(top.Choice)) return null;
         return new TargetBinding(top.Choice, revision, BindingMethod.JevChoice, clickable.Count, top.P, margin,
-            elements.GetValueOrDefault(top.Choice), ranked);
+            elements.GetValueOrDefault(top.Choice), ranked, DistinctiveTerms(top.Choice, elements, clickable.Keys));
     }
+
+    /// <summary>
+    /// The words of the bound control's own name that no other offered control uses. Generic labels shared by many
+    /// controls ("Details", "Read more") therefore contribute nothing, while a unique word ("book") must later show.
+    /// </summary>
+    internal static string[] DistinctiveTerms(string boundRef, IReadOnlyDictionary<string, string> names, IEnumerable<string> clickable)
+    {
+        if (!names.TryGetValue(boundRef, out var label)) return [];
+        var others = clickable.Where(id => id != boundRef).SelectMany(id => BrowserCompletionEvidence.Tokens(names.GetValueOrDefault(id)))
+            .Select(SingularTerm).ToHashSet();
+        return BrowserCompletionEvidence.Tokens(label).Where(static t => t.Length >= 4 || t.Length >= 3 && t.All(char.IsDigit))
+            .Select(SingularTerm).Where(t => !others.Contains(t)).Distinct().ToArray();
+    }
+
+    internal static string SingularTerm(string term) => term.Length > 3 && term.EndsWith('s') ? term[..^1] : term;
 
     private void LogBindingAgreement(TargetBinding binding, InteractionAction action, IReadOnlyDictionary<string, JevAnswer> answers)
     {

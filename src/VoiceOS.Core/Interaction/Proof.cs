@@ -37,10 +37,13 @@ public enum BindingStrength { Weak, Moderate, Strong }
 /// The control the step's descriptor was bound to, decided from the observation at
 /// <see cref="ObservationRevision"/> before (or independent of) the action that used it.
 /// </summary>
+/// <param name="LabelTerms">Words of the bound control's own name that no other offered control shares. A control
+/// whose landing page never echoes its own distinctive words is not established as the described target.</param>
 public sealed record TargetBinding(
     string ElementRef, long ObservationRevision, BindingMethod Method, int CandidateCount,
     double? P = null, double? Margin = null, string? Label = null,
-    IReadOnlyList<(string Ref, double P)>? RunnersUp = null);
+    IReadOnlyList<(string Ref, double P)>? RunnersUp = null,
+    IReadOnlyList<string>? LabelTerms = null);
 
 /// <summary>Calibrated cut points. The defaults are conservative starting values; shadow data sets the shipped ones.</summary>
 public sealed record ProofThresholds(

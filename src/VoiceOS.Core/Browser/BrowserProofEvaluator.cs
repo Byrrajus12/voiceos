@@ -143,6 +143,11 @@ internal sealed class BrowserProofEvaluator(BrowserGoal goal, ProofThresholds? t
                 return ProofVerdict.Inconclusive(family, "inconsistent_destination", detail, evidence);
             if (relation == UrlRelation.SameOrigin && !_thresholds.AllowSameOriginLink)
                 return ProofVerdict.Inconclusive(family, "same_origin_only", detail, evidence);
+            // The landing must echo the clicked control's own distinctive words. A hub page reached through a
+            // control named for the described thing (a "Read the book" button leading to a "Learn" page) does not.
+            if (binding.LabelTerms is { Count: > 0 } labelTerms
+                && !Reflects(labelTerms, landing, adopted is null ? CurrentTitle(input.Observation) : null))
+                return ProofVerdict.Inconclusive(family, "label_not_reflected", detail, evidence);
             if (strength == BindingStrength.Moderate
                 && !Corroborated(landing, adopted is null ? CurrentTitle(input.Observation) : null, input.Step))
                 return ProofVerdict.Inconclusive(family, "moderate_binding_uncorroborated", detail, evidence);
@@ -156,6 +161,15 @@ internal sealed class BrowserProofEvaluator(BrowserGoal goal, ProofThresholds? t
         if (changed is not null || navigated is not null || adopted is not null)
             return ProofVerdict.Inconclusive(family, "non_navigating_control", Describe(binding), evidence);
         return ProofVerdict.NotYet(family, "no_consequence");
+    }
+
+    private static bool Reflects(IReadOnlyList<string> labelTerms, string landing, string? title)
+    {
+        if (!Uri.TryCreate(landing, UriKind.Absolute, out var uri)) return false;
+        string Decode(string text) { try { return Uri.UnescapeDataString(text.Replace('+', ' ')); } catch { return text; } }
+        var shown = BrowserCompletionEvidence.Tokens(Decode(uri.Host + " " + uri.AbsolutePath + " " + uri.Query) + " " + title)
+            .Select(static t => t.Length > 3 && t.EndsWith('s') ? t[..^1] : t).ToHashSet();
+        return labelTerms.Any(shown.Contains);
     }
 
     private static bool Corroborated(string landing, string? title, OutcomeStep step)

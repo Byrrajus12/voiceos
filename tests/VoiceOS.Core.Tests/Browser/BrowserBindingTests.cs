@@ -112,6 +112,29 @@ public sealed class BrowserBindingTests
     }
 
     [Fact]
+    public void DistinctiveTerms_AreTheWordsOnlyTheBoundControlUses()
+    {
+        var names = new Dictionary<string, string> { ["e1"] = "READ THE BOOK", ["e2"] = "Read more", ["e3"] = "Read more", ["e4"] = "Blog posts" };
+        Assert.Equal(["book"], TypeSafeBrowserDecisionSource.DistinctiveTerms("e1", names, names.Keys));
+        // Rows that all say "Details" share the word, so it does not distinguish any of them.
+        var rows = new Dictionary<string, string> { ["r1"] = "Details", ["r2"] = "Details", ["r3"] = "Details" };
+        Assert.Empty(TypeSafeBrowserDecisionSource.DistinctiveTerms("r1", rows, rows.Keys));
+        // Plurals fold, short words and digits: 3+ digits kept, short words dropped.
+        var mixed = new Dictionary<string, string> { ["a"] = "Status 404 of the tents", ["b"] = "Status 200 tent" };
+        Assert.Equal(["404"], TypeSafeBrowserDecisionSource.DistinctiveTerms("a", mixed, mixed.Keys));
+        Assert.Empty(TypeSafeBrowserDecisionSource.DistinctiveTerms("missing", mixed, mixed.Keys));
+    }
+
+    [Fact]
+    public async Task Binding_CarriesTheControlsDistinctiveLabelTerms()
+    {
+        var gateway = new Gateway(_ => ClickE1(Choice("e2", ("e2", .9), ("e1", .06), ("NONE", .04))));
+        var decision = await new TypeSafeBrowserDecisionSource(gateway, Goal(), bindHead: true)
+            .DecideAsync(Context(Goal(), Observation(("e1", "Docs"), ("e2", "Read the book"))));
+        Assert.Equal(["book", "read"], decision.TargetBinding!.LabelTerms!.Order());
+    }
+
+    [Fact]
     public async Task ExactLabel_IsNotUsedForPartialOrDuplicateNames()
     {
         var gateway = new Gateway(_ => ClickE1(Choice("NONE", ("NONE", 1))));
