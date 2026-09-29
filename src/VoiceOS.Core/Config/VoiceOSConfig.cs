@@ -20,8 +20,12 @@ public class VoiceOSConfig
     public bool FrontDoorGrounding { get; set; } = true;
     public bool SpeculativeDirectDecision { get; set; } = true;
     public bool DirectRescue { get; set; } = true;
-    /// <summary>Off (default), Shadow (evaluate and log only) or On (a proof may complete or refute a browser step).</summary>
-    public Interaction.ProofMode BrowserProofMode { get; set; } = Interaction.ProofMode.Off;
+    /// <summary>
+    /// On (default): a proof from an active family (Surface, Activate) completes the browser step at once, with the
+    /// legacy completion path as fallback. Shadow evaluates and logs only; Off is exactly the legacy loop.
+    /// Override with VOICEOS_BROWSER_PROOF=Off|Shadow|On.
+    /// </summary>
+    public Interaction.ProofMode BrowserProofMode { get; set; } = Interaction.ProofMode.On;
 
     public void ApplyEnvironmentOverrides()
     {

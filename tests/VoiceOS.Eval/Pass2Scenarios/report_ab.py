@@ -20,6 +20,8 @@ def load_all(outs):
         for arm_dir in sorted(glob.glob(os.path.join(out, "*-r*-c*"))):
             if not os.path.isdir(arm_dir):
                 continue
+            if not os.path.exists(os.path.join(arm_dir, "done")):
+                continue
             arm = os.path.basename(arm_dir).split("-")[0]
             for run in glob.glob(os.path.join(arm_dir, "*", "results.jsonl")):
                 for r in load(os.path.dirname(run)):
