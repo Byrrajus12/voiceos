@@ -38,13 +38,22 @@ public sealed record BrowserExecutionScope(BrowserScopeKind Kind, int? TabId = n
     GoalShape GoalShape = GoalShape.Uncertain, string? ExpectedTitle = null,
     bool DestinationPending = false, bool TabClaimRefuted = false)
 {
+    public bool BlankTabRequested { get; init; }
+    public bool AcquiresSurface => Kind switch
+    {
+        BrowserScopeKind.NewTaskTab => Destination is not null
+            || ServiceResolver.Resolve(NamedServiceHint) is not null || BlankTabRequested,
+        BrowserScopeKind.ExistingNamedTab or BrowserScopeKind.RecentOwnedTaskTab => FocusOnly,
+        BrowserScopeKind.ActiveTab => ExplicitSelection && FocusOnly,
+        _ => false
+    };
     /// <summary>Acquiring the surface is the whole goal. A requested entity whose destination is
     /// not yet known (DestinationPending) still needs navigation, so the surface alone never
     /// completes it. A current tab reached because the inventory refuted a named-tab claim
     /// (TabClaimRefuted) was not requested as a surface, so arriving there completes nothing:
     /// the requested content action still has to run.</summary>
     public bool IsSurfaceOnly => EndState == SemanticEndState.SurfaceReady
-        && GoalShape == GoalShape.SurfaceOnly && !DestinationPending && !TabClaimRefuted;
+        && GoalShape == GoalShape.SurfaceOnly && !DestinationPending && !TabClaimRefuted && AcquiresSurface;
 }
 
 public sealed record NativeExecutionScope(nint WindowHandle, string ProcessName,
@@ -90,6 +99,8 @@ public sealed class ScopeResolver
         ExecutionScopeDecision Browser(BrowserExecutionScope scope)
             => new(ExecutionScopeKind.Browser, scope with { EndState = route.EndState,
                 GoalShape = route.GoalShape,
+                BlankTabRequested = scope.Kind == BrowserScopeKind.NewTaskTab
+                    && (route.TabDisposition == TabDisposition.NewTab || route.RequestedEntity == RequestedEntityKind.BrowserItself),
                 // A generic tab does not satisfy a named entity: without a tab, destination, or
                 // registered service, the browser must still discover and reach it.
                 DestinationPending = route.RequestsNamedEntity && scope.TabId is null

@@ -544,22 +544,95 @@ public sealed class BrowserSemanticTests
     [Fact]
     public async Task RefutedNamedTabFallbackNeverCompletesOnArrival()
     {
-        // "Click Sharp Objects" carries SurfaceOnly/SurfaceReady heads. On the current tab reached
-        // by refuting its named-tab claim, the service must enter the content-action path
-        // (normalization) rather than report the visible page as success.
-        BrowserExecutionScope Scope(bool refuted) => new(BrowserScopeKind.ActiveTab, 42,
-            "https://www.google.com/", EndState: SemanticEndState.SurfaceReady,
-            GoalShape: GoalShape.SurfaceOnly, TabClaimRefuted: refuted);
-        var service = new BrowserInteractionService(new StaticTransport(),
-            new FakeGateway((_, _) => throw new InvalidOperationException("stop at the first semantic call")));
+        var utterance = "Click on Sharp Objects";
+        var route = new CommandRouteDecision(CommandRoute.ComputerUse, .9,
+            TabDisposition: TabDisposition.ExistingNamedTab,
+            ContextDependency: ContextDependency.RequiresCurrentSurface,
+            EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly);
+        var foreground = new VoiceOS.Core.Candidates.WindowCandidate("chrome", "chrome", "Results", true, 42);
+        var scope = await new ScopeResolver().ResolveAsync(utterance, route,
+            new(foreground, [foreground], true, [
+                new(42, 1, true, "https://www.goodreads.com/list", "Books", BrowserTabProvenance.User),
+                new(8, 1, false, "https://docs.github.com/", "GitHub docs", BrowserTabProvenance.User)]),
+            new RefutingPicker());
+        Assert.Equal(BrowserScopeKind.ActiveTab, scope.Browser!.Kind);
+        Assert.Equal(42, scope.Browser.TabId);
+        Assert.True(scope.Browser.TabClaimRefuted);
+        Assert.False(scope.Browser.ExplicitSelection);
+        Assert.False(scope.Browser.IsSurfaceOnly);
 
-        var control = await service.RunAsync("Click on Sharp Objects", scope: Scope(false));
-        Assert.True(control.Completion == InteractionCompletionState.Complete, control.Detail);
-        Assert.Equal("The requested browser surface is ready.", control.Detail);
+        // Arrival on the current tab proves no click, with or without a refuted tab claim.
+        foreach (var refuted in new[] { false, true })
+        {
+            var transport = new ClickPageTransport();
+            var normalizer = new FakeNormalizer { Result = SharpObjectsGoal with {
+                ResourceType = "website", Entity = null, EndState = SemanticEndState.SurfaceReady } };
+            var service = new BrowserInteractionService(transport,
+                new FakeGateway((_, _) => Answers(("operation", Choice("DONE", .99)), ("goal_achieved", Noul(.99)))),
+                normalizer, foregroundVerifier: _ => true);
+            var result = await service.RunAsync(utterance, scope: scope.Browser with { TabClaimRefuted = refuted });
+            Assert.Equal(InteractionCompletionState.Uncertain, result.Completion);
+            Assert.Equal(0, result.Actions);
+            Assert.Equal(0, transport.Opens);
+            Assert.Equal(new[] { 42 }, transport.SelectedTabs);
+        }
 
-        var refuted = await service.RunAsync("Click on Sharp Objects", scope: Scope(true));
-        Assert.NotEqual(InteractionCompletionState.Complete, refuted.Completion);
-        Assert.NotEqual("The requested browser surface is ready.", refuted.Detail);
+        var clickTransport = new ClickPageTransport();
+        var clickNormalizer = new FakeNormalizer { Result = SharpObjectsGoal };
+        var clickService = new BrowserInteractionService(clickTransport, new FakeGateway((_, questions) =>
+            questions.ContainsKey("operation") && clickTransport.Actions == 0
+                ? Answers(("operation", Choice("CLICK", .99)), ("click_target", Choice("e5", .99)), ("goal_achieved", Noul(.01)))
+                : Answers(("operation", Choice("DONE", .99)), ("goal_achieved", Noul(.99)))),
+            clickNormalizer, foregroundVerifier: _ => true);
+        var clicked = await clickService.RunAsync(utterance, scope: scope.Browser);
+        Assert.Equal(InteractionCompletionState.Complete, clicked.Completion);
+        Assert.Equal(1, clicked.Actions);
+        Assert.Equal(1, clickTransport.Actions);
+        Assert.Equal("e5", clickTransport.ClickedRef);
+        Assert.Equal(new[] { 42 }, clickTransport.SelectedTabs);
+        Assert.Equal(0, clickTransport.Opens);
+        Assert.Equal(1, clickNormalizer.Calls);
+    }
+
+    private static BrowserGoalNormalization SharpObjectsGoal => new(
+        "Open Sharp Objects", "Sharp Objects", "book", "Goodreads", "https://www.goodreads.com/",
+        [], "Sharp Objects book page open", [], SemanticEndState.ResourceOpened);
+
+    private sealed class RefutingPicker : IContextualScopeDecisionSource
+    {
+        public ValueTask<NamedTabSelection> SelectNamedTabAsync(string utterance, IReadOnlyList<BrowserTabInfo> tabs,
+            CancellationToken cancellationToken = default) => ValueTask.FromResult(NamedTabSelection.NoMatch("content_reference_not_tab"));
+        public ValueTask<ContextualSurface> SelectAsync(string utterance, CommandRouteDecision intent,
+            ExecutionContextSnapshot context, IReadOnlyList<ContextualSurface> offered, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("Current-page rule should resolve without a picker.");
+    }
+
+    private sealed class ClickPageTransport : IChromeCompanionTransport
+    {
+        public int Opens;
+        public int Actions;
+        public string? ClickedRef;
+        public List<int> SelectedTabs = [];
+        public ValueTask SelectTabAsync(string sessionId, int tabId, string expectedUrl, bool requireActive,
+            CancellationToken cancellationToken = default)
+        { SelectedTabs.Add(tabId); return ValueTask.CompletedTask; }
+        public ValueTask<BrowserSnapshot> OpenTaskTabAsync(string sessionId, string url, CancellationToken cancellationToken = default)
+        { Opens++; throw new InvalidOperationException("Must preserve the current page."); }
+        public ValueTask<BrowserSnapshot> ObserveAsync(string sessionId, int tabId, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(Snapshot(sessionId));
+        public ValueTask<BrowserSnapshot> ActAsync(BrowserActionRequest action, CancellationToken cancellationToken = default)
+        {
+            Assert.Equal(42, action.TabId);
+            Assert.Equal("CLICK", action.Action);
+            Actions++; ClickedRef = action.ElementRef;
+            return ValueTask.FromResult(Snapshot(action.SessionId));
+        }
+        private BrowserSnapshot Snapshot(string session) => Actions == 0
+            ? new(42, session, "r1", "https://www.goodreads.com/list", "Books", "Books",
+                false, new(1280, 800, 0, 0), [new("e5", "link", "Sharp Objects", true, false, null,
+                    "https://www.goodreads.com/book/sharp-objects", new(10, 10, 100, 30, true), "Books")])
+            : new(42, session, "r2", "https://www.goodreads.com/book/sharp-objects", "Sharp Objects book", "Sharp Objects book",
+                false, new(1280, 800, 0, 0), []);
     }
 
     [Fact]
@@ -696,9 +769,9 @@ public sealed class BrowserSemanticTests
         var transport = new StaticTransport();
         var gateway = new FakeGateway((_, _) => throw new Exception("No action decision expected"));
         var service = new BrowserInteractionService(transport, gateway);
-        var outcome = await service.RunAsync("make a fresh tab", scope: new(
+        var outcome = await service.RunAsync("make a fresh tab", scope: new BrowserExecutionScope(
             BrowserScopeKind.NewTaskTab, EndState: SemanticEndState.SurfaceReady,
-            GoalShape: GoalShape.SurfaceOnly));
+            GoalShape: GoalShape.SurfaceOnly) { BlankTabRequested = true });
         Assert.Equal(InteractionCompletionState.Complete, outcome.Completion);
         Assert.Equal(1, transport.NormalTabs);
         Assert.Equal(0, transport.Opens);
@@ -982,6 +1055,57 @@ public sealed class BrowserSemanticTests
         Assert.Equal(InteractionCompletionState.Complete, result.Completion);
         Assert.Equal(2, surface.Observations);
         Assert.Equal(2, calls);
+    }
+
+    [Theory]
+    [InlineData("Click on Sharp Objects")]
+    [InlineData("Open the third result")]
+    public async Task ImplicitActiveTab_ZeroActionCompletion_IsNeverComplete(string utterance)
+    {
+        var transport = new StaticTransport();
+        var normalizer = new FakeNormalizer { Result = FakeNormalizer.Normalized with {
+            Objective = "Use current page", PreferredService = "Google", Entity = null,
+            SearchQueries = [], EndState = SemanticEndState.SurfaceReady } };
+        var service = new BrowserInteractionService(transport, new FakeGateway((_, _) =>
+            Answers(("operation", Choice("DONE", .99)), ("goal_achieved", Noul(.99)))), normalizer);
+        var result = await service.RunAsync(utterance, scope: new(BrowserScopeKind.ActiveTab, 42, "https://www.google.com/",
+            EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly));
+        Assert.Equal(1, normalizer.Calls);
+        Assert.Equal(InteractionCompletionState.Uncertain, result.Completion);
+        Assert.Equal("Nothing was done on the current page yet.", result.Detail);
+        Assert.Equal(0, result.Actions);
+        Assert.Equal(0, transport.Opens);
+    }
+
+    [Fact]
+    public async Task ExplicitBlankTab_FastPathRemainsCheap()
+    {
+        var transport = new StaticTransport();
+        var normalizer = new FakeNormalizer();
+        var service = new BrowserInteractionService(transport,
+            new FakeGateway((_, _) => throw new Exception("No model call expected")), normalizer);
+        var result = await service.RunAsync("Open a new tab", scope: new BrowserExecutionScope(BrowserScopeKind.NewTaskTab,
+            EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly) { BlankTabRequested = true });
+        Assert.Equal(InteractionCompletionState.Complete, result.Completion);
+        Assert.Equal(1, transport.NormalTabs);
+        Assert.Equal(0, transport.Opens);
+        Assert.Equal(0, normalizer.Calls);
+    }
+
+    [Fact]
+    public async Task OpenYouTube_SurfaceAcquisition_FastPathRemainsCheap()
+    {
+        var transport = new StaticTransport { SnapshotUrl = "https://www.youtube.com/" };
+        var normalizer = new FakeNormalizer();
+        var service = new BrowserInteractionService(transport,
+            new FakeGateway((_, _) => throw new Exception("No decision expected")), normalizer);
+        var result = await service.RunAsync("Open YouTube", scope: new(BrowserScopeKind.NewTaskTab,
+            Destination: new("https://www.youtube.com/"), NamedServiceHint: "YouTube",
+            EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly));
+        Assert.Equal(InteractionCompletionState.Complete, result.Completion);
+        Assert.Equal(1, transport.Opens);
+        Assert.Equal(0, normalizer.Calls);
+        Assert.Equal(0, result.Decisions);
     }
 
     private sealed class CompletionSurface(TypeSafeBrowserDecisionSource source, params InteractionObservation[] observations) : IInteractionSurface

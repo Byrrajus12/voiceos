@@ -72,7 +72,8 @@ public sealed class BrowserInteractionService(
                 return new(InteractionCompletionState.Incomplete,
                     "Chrome is no longer the foreground application.", null, null, null);
             if (scope?.IsSurfaceOnly == true && scope.Kind == BrowserScopeKind.NewTaskTab
-                && scope.Destination is null)
+                && scope.Destination is null && ServiceResolver.Resolve(scope.NamedServiceHint) is null
+                && scope.BlankTabRequested)
             {
                 ActionStarting?.Invoke(new(OpeningTab: true, Destination: scope.NamedServiceHint));
                 var owner = activationId ?? Guid.NewGuid().ToString("N");
@@ -214,7 +215,7 @@ public sealed class BrowserInteractionService(
                 return new(InteractionCompletionState.Complete, "The requested browser surface is ready.",
                     null, surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title);
             }
-            return await RunSurfaceAsync(goal, surface, decisions, cancellationToken).ConfigureAwait(false);
+            return await RunSurfaceAsync(goal, surface, decisions, cancellationToken, scope).ConfigureAwait(false);
         }
         catch (InfrastructureUnavailableException ex)
         {
@@ -341,7 +342,7 @@ public sealed class BrowserInteractionService(
         var reuse = startupDoneAtMs is not { } doneAt || (normalizationDoneAtMs - doneAt) <= _preparedFreshnessThresholdMs;
         surface.Prepare(startupSnapshot, reuse);
         ActionStarting?.Invoke(ActivityFor(goal, scope, null));
-        return await RunSurfaceAsync(goal, surface, decisions, cancellationToken).ConfigureAwait(false);
+        return await RunSurfaceAsync(goal, surface, decisions, cancellationToken, scope).ConfigureAwait(false);
     }
 
     private static bool IsWebContent(string? url)
@@ -515,10 +516,14 @@ public sealed class BrowserInteractionService(
 
     private async ValueTask<BrowserInteractionOutcome> RunSurfaceAsync(
         BrowserGoal goal, BrowserSurface surface, TypeSafeBrowserDecisionSource decisions,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken, BrowserExecutionScope? scope = null)
     {
         var result = await _engine.RunAsync(new(goal.OriginalUtterance), surface, decisions,
             new InteractionBudget(30, 24, 3, 30, TimeSpan.FromSeconds(90)), cancellationToken).ConfigureAwait(false);
+        if (scope is { Kind: BrowserScopeKind.ActiveTab, ExplicitSelection: false }
+            && result.Completion == InteractionCompletionState.Complete && result.Progress.Actions == 0)
+            result = result with { Completion = InteractionCompletionState.Uncertain,
+                Detail = "Nothing was done on the current page yet.", Choices = [new("cancel", "Cancel")] };
         _pending = result.Completion == InteractionCompletionState.Uncertain
             ? new(goal, surface, decisions, result) : null;
         logger?.LogInformation("Browser task outcome={Outcome} resumable={Resumable} detail={Detail} decisions={Decisions} actions={Actions} origin={Origin}",
