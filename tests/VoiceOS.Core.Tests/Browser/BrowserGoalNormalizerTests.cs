@@ -15,7 +15,6 @@ public sealed class BrowserGoalNormalizerTests
             ["objective"] = "open the docs", ["entity"] = null, ["resourceType"] = "documentation page",
             ["preferredService"] = null, ["preferredServiceUrl"] = null, ["searchQueries"] = new[] { "docs" },
             ["completionHint"] = "the docs page is open", ["endState"] = "ResourceOpened",
-            ["descriptor"] = "the official documentation", ["unresolvedReference"] = false,
             ["correctedTerms"] = Array.Empty<object>()
         };
         edit?.Invoke(payload);
@@ -30,73 +29,12 @@ public sealed class BrowserGoalNormalizerTests
     }
 
     [Fact]
-    public async Task ValidDescriptorAndFlag_AreParsed_AndOldFieldsAreUnchanged()
+    public async Task ValidPayload_IsParsed()
     {
         var (result, _) = await Normalize(Payload());
-        Assert.NotNull(result);
-        Assert.Equal("the official documentation", result.Descriptor);
-        Assert.False(result.UnresolvedReference);
-        Assert.Equal("open the docs", result.Objective);
-        Assert.Equal("documentation page", result.ResourceType);
+        Assert.Equal("open the docs", result!.Objective);
+        Assert.Equal(SemanticEndState.ResourceOpened, result.EndState);
         Assert.Equal(["docs"], result.SearchQueries);
-        Assert.Equal("the docs page is open", result.CompletionHint);
-        Assert.Equal(SemanticEndState.ResourceOpened, result.EndState);
-    }
-
-    [Fact]
-    public async Task UnresolvedReferenceTrue_IsParsed()
-    {
-        var (result, _) = await Normalize(Payload(p => p["unresolvedReference"] = true));
-        Assert.True(result!.UnresolvedReference);
-    }
-
-    [Fact]
-    public async Task NullDescriptor_IsNull()
-    {
-        var (result, _) = await Normalize(Payload(p => p["descriptor"] = null));
-        Assert.NotNull(result);
-        Assert.Null(result.Descriptor);
-    }
-
-    [Theory]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData("<script>alert(1)</script>")]
-    [InlineData("bad\u0007control")]
-    public async Task UnusableDescriptor_IsDropped_WithoutRejectingTheGoal(string descriptor)
-    {
-        var (result, _) = await Normalize(Payload(p => p["descriptor"] = descriptor));
-        Assert.NotNull(result);
-        Assert.Null(result.Descriptor);
-        Assert.Equal(SemanticEndState.ResourceOpened, result.EndState);
-    }
-
-    [Fact]
-    public async Task OversizedDescriptor_IsDropped_AndTheBoundaryIsAccepted()
-    {
-        var (over, _) = await Normalize(Payload(p => p["descriptor"] = new string('a', 121)));
-        Assert.NotNull(over);
-        Assert.Null(over.Descriptor);
-        var (edge, _) = await Normalize(Payload(p => p["descriptor"] = new string('a', 120)));
-        Assert.Equal(120, edge!.Descriptor!.Length);
-    }
-
-    [Fact]
-    public async Task MissingNewFields_FallBackToSafeDefaults()
-    {
-        var (result, _) = await Normalize(Payload(p => { p.Remove("descriptor"); p.Remove("unresolvedReference"); }));
-        Assert.NotNull(result);
-        Assert.Null(result.Descriptor);
-        Assert.False(result.UnresolvedReference);
-    }
-
-    [Fact]
-    public async Task WrongTypedNewFields_FallBackToSafeDefaults()
-    {
-        var (result, _) = await Normalize(Payload(p => { p["descriptor"] = 5; p["unresolvedReference"] = "yes"; }));
-        Assert.NotNull(result);
-        Assert.Null(result.Descriptor);
-        Assert.False(result.UnresolvedReference);
     }
 
     [Fact]
@@ -107,41 +45,25 @@ public sealed class BrowserGoalNormalizerTests
     }
 
     [Fact]
-    public async Task Schema_IsStrictAndRequiresTheNewFields_AndDoesNotAskForFamilyOrOperations()
+    public async Task Schema_IsStrict_AndAsksOnlyForTheOriginalFields()
     {
         var (_, request) = await Normalize(Payload());
         var schema = request.RootElement.GetProperty("response_format").GetProperty("json_schema");
         Assert.True(schema.GetProperty("strict").GetBoolean());
         var body = schema.GetProperty("schema");
-        Assert.False(body.GetProperty("additionalProperties").GetBoolean());
         var properties = body.GetProperty("properties").EnumerateObject().Select(static p => p.Name).ToHashSet();
         var required = body.GetProperty("required").EnumerateArray().Select(static e => e.GetString()!).ToHashSet();
-
-        Assert.Equal(properties, required); // strict mode: every property is required
-        Assert.Contains("descriptor", properties);
-        Assert.Contains("unresolvedReference", properties);
-        Assert.Equal("boolean", body.GetProperty("properties").GetProperty("unresolvedReference").GetProperty("type").GetString());
-        foreach (var forbidden in new[] { "family", "proofFamily", "operation", "elementId", "ordinal", "plan", "steps", "proof" })
-            Assert.DoesNotContain(forbidden, properties);
-        foreach (var old in new[] { "objective", "entity", "resourceType", "preferredService", "preferredServiceUrl",
-                     "searchQueries", "completionHint", "endState", "correctedTerms" })
-            Assert.Contains(old, properties);
+        Assert.Equal(properties, required);
+        Assert.Equal(new[] { "objective", "entity", "resourceType", "preferredService", "preferredServiceUrl",
+            "searchQueries", "completionHint", "endState", "correctedTerms" }.ToHashSet(), properties);
     }
 
     [Fact]
-    public async Task Request_KeepsHeadroomAboveTheMeasuredTokenTail()
+    public async Task Request_KeepsTheOriginalTokenCap()
     {
         var (_, request) = await Normalize(Payload());
-        Assert.True(request.RootElement.GetProperty("max_completion_tokens").GetInt32() >= 400);
+        Assert.Equal(300, request.RootElement.GetProperty("max_completion_tokens").GetInt32());
         Assert.Equal("low", request.RootElement.GetProperty("reasoning").GetProperty("effort").GetString());
-    }
-
-    [Fact]
-    public void Prompt_DefinesTheNewFields_WithoutAskingForProofFamily()
-    {
-        Assert.Contains("descriptor", OpenRouterBrowserGoalNormalizer.Prompt);
-        Assert.Contains("unresolvedReference", OpenRouterBrowserGoalNormalizer.Prompt);
-        Assert.DoesNotContain("proof", OpenRouterBrowserGoalNormalizer.Prompt, StringComparison.OrdinalIgnoreCase);
     }
 
     private sealed class Handler(string content) : HttpMessageHandler

@@ -39,6 +39,16 @@ public sealed record BrowserExecutionScope(BrowserScopeKind Kind, int? TabId = n
     bool DestinationPending = false, bool TabClaimRefuted = false)
 {
     public bool BlankTabRequested { get; init; }
+    /// <summary>The router's own classification of where a referenced target comes from; Uncertain when unknown.</summary>
+    public ContextDependency ContextDependency { get; init; } = ContextDependency.Uncertain;
+    /// <summary>Continuity with earlier VoiceOS work, only meaningful when <see cref="TaskRelationEstablished"/>.</summary>
+    public TaskRelation TaskRelation { get; init; } = TaskRelation.Uncertain;
+    public bool TaskRelationEstablished { get; init; }
+    public BrowserExecutionScope WithRouterSignals(CommandRouteDecision route) => this with
+    {
+        ContextDependency = route.ContextDependency, TaskRelation = route.TaskRelation,
+        TaskRelationEstablished = route.TaskRelationEstablished
+    };
     public bool AcquiresSurface => Kind switch
     {
         BrowserScopeKind.NewTaskTab => Destination is not null

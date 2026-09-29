@@ -637,7 +637,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             PublishSnapshot(new(ApplicationInteractionPhase.Observing, kind,
                 transcript, "Framing browser goal and acquiring managed context"));
             var browserResult = await _browserInteraction.RunAsync(transcript, _shutdown.Token,
-                activationId, executionScope.Browser).ConfigureAwait(false);
+                activationId, executionScope.Browser is { } browserScope ? browserScope.WithRouterSignals(route) : null).ConfigureAwait(false);
             run.BrowserOutcome = browserResult;
             if (browserResult.Unavailable is { } unavailable)
             {

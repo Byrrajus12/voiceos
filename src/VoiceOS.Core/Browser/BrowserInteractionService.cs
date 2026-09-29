@@ -519,11 +519,10 @@ public sealed class BrowserInteractionService(
         CancellationToken cancellationToken, BrowserExecutionScope? scope = null, string? turnId = null)
     {
         // Observational framing: the step rides on the goal but no decision or completion consults it yet.
-        var plan = goal.Normalization is null ? null : BrowserStepFramer.Frame(goal, turnId ?? surface.SessionId);
+        var plan = goal.Normalization is null ? null : BrowserStepFramer.Frame(goal, turnId ?? surface.SessionId, scope);
         if (plan is not null)
-            logger?.LogInformation("Browser step framed id={StepId} family={Family} descriptor_reliable={Reliable} has_descriptor={HasDescriptor} has_query={HasQuery}",
-                plan.Only.Id, plan.Only.Family, plan.Only.DescriptorReliable,
-                goal.Normalization?.Descriptor is not null, plan.Only.What.Query is not null);
+            logger?.LogInformation("Browser step framed id={StepId} family={Family} descriptor_reliable={Reliable} has_query={HasQuery}",
+                plan.Only.Id, plan.Only.Family, plan.Only.DescriptorReliable, plan.Only.What.Query is not null);
         var result = await _engine.RunAsync(new(goal.OriginalUtterance, plan?.Only), surface, decisions,
             new InteractionBudget(30, 24, 3, 30, TimeSpan.FromSeconds(90)), cancellationToken).ConfigureAwait(false);
         if (scope is { Kind: BrowserScopeKind.ActiveTab, ExplicitSelection: false }

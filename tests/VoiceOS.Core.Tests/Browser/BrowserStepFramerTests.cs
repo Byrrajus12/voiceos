@@ -6,40 +6,36 @@ namespace VoiceOS.Core.Tests.Browser;
 
 public sealed class BrowserStepFramerTests
 {
-    private static BrowserGoal Goal(SemanticEndState endState, string? resourceType = null, string? descriptor = null,
-        string[]? queries = null, bool unresolved = false, string objective = "an objective")
+    private static BrowserGoal Goal(SemanticEndState endState, string? resourceType = null,
+        string[]? queries = null, string objective = "an objective", string? entity = null)
         => BrowserGoal.FromUtterance("the utterance") with
         {
-            Normalization = new(objective, null, resourceType, null, null, queries ?? [], "hint", [], endState,
-                descriptor, unresolved)
+            Normalization = new(objective, entity, resourceType, null, null, queries ?? [], "hint", [], endState)
         };
 
     [Theory]
     // Site-level SurfaceReady is Surface; a specific sub-resource stays model-judged (Reach).
-    [InlineData(SemanticEndState.SurfaceReady, null, null, null, ProofFamily.Surface)]
-    [InlineData(SemanticEndState.SurfaceReady, "  ", null, null, ProofFamily.Surface)]
-    [InlineData(SemanticEndState.SurfaceReady, "website", null, null, ProofFamily.Surface)]
-    [InlineData(SemanticEndState.SurfaceReady, "home page", "ignored", null, ProofFamily.Surface)]
-    [InlineData(SemanticEndState.SurfaceReady, "jobs page", null, null, ProofFamily.Reach)]
+    [InlineData(SemanticEndState.SurfaceReady, null, null, ProofFamily.Surface)]
+    [InlineData(SemanticEndState.SurfaceReady, "  ", null, ProofFamily.Surface)]
+    [InlineData(SemanticEndState.SurfaceReady, "website", null, ProofFamily.Surface)]
+    [InlineData(SemanticEndState.SurfaceReady, "home page", null, ProofFamily.Surface)]
+    [InlineData(SemanticEndState.SurfaceReady, "jobs page", null, ProofFamily.Reach)]
     // ResultsVisible needs a grounded query.
-    [InlineData(SemanticEndState.ResultsVisible, null, null, "dune", ProofFamily.Find)]
-    [InlineData(SemanticEndState.ResultsVisible, null, null, null, ProofFamily.Reach)]
-    [InlineData(SemanticEndState.ResultsVisible, null, null, " ", ProofFamily.Reach)]
-    // ResourceOpened / ContentActive need a usable descriptor.
-    [InlineData(SemanticEndState.ResourceOpened, null, "the third result", null, ProofFamily.Activate)]
-    [InlineData(SemanticEndState.ResourceOpened, null, null, "q", ProofFamily.Reach)]
-    [InlineData(SemanticEndState.ResourceOpened, null, "   ", null, ProofFamily.Reach)]
-    [InlineData(SemanticEndState.ContentActive, null, "a video about tides", null, ProofFamily.Activate)]
-    [InlineData(SemanticEndState.ContentActive, null, null, null, ProofFamily.Reach)]
-    // Everything else, with or without a descriptor, is Reach.
-    [InlineData(SemanticEndState.ResourceLocated, null, "the docs", "q", ProofFamily.Reach)]
-    [InlineData(SemanticEndState.StateChanged, null, "page 7", "q", ProofFamily.Reach)]
-    [InlineData(SemanticEndState.OtherBoundedGoal, null, "x", "q", ProofFamily.Reach)]
-    [InlineData(SemanticEndState.Unspecified, null, "x", "q", ProofFamily.Reach)]
+    [InlineData(SemanticEndState.ResultsVisible, null, "dune", ProofFamily.Find)]
+    [InlineData(SemanticEndState.ResultsVisible, null, null, ProofFamily.Reach)]
+    [InlineData(SemanticEndState.ResultsVisible, null, " ", ProofFamily.Reach)]
+    // Opening a resource or activating content is Activate; the objective is the descriptor.
+    [InlineData(SemanticEndState.ResourceOpened, null, "q", ProofFamily.Activate)]
+    [InlineData(SemanticEndState.ContentActive, null, null, ProofFamily.Activate)]
+    // Everything else is Reach.
+    [InlineData(SemanticEndState.ResourceLocated, null, "q", ProofFamily.Reach)]
+    [InlineData(SemanticEndState.StateChanged, null, "q", ProofFamily.Reach)]
+    [InlineData(SemanticEndState.OtherBoundedGoal, null, "q", ProofFamily.Reach)]
+    [InlineData(SemanticEndState.Unspecified, null, "q", ProofFamily.Reach)]
     public void Family_IsDerivedFromEndStateAndGroundedFields(SemanticEndState state, string? resource,
-        string? descriptor, string? query, ProofFamily expected)
+        string? query, ProofFamily expected)
     {
-        var goal = Goal(state, resource, descriptor, query is null ? null : [query]);
+        var goal = Goal(state, resource, query is null ? null : [query]);
         Assert.Equal(expected, BrowserStepFramer.Frame(goal, "turn").Only.Family);
     }
 
@@ -49,7 +45,7 @@ public sealed class BrowserStepFramerTests
         // A new SemanticEndState must be considered deliberately: unknown states fall back to Reach.
         foreach (var state in Enum.GetValues<SemanticEndState>())
         {
-            var family = BrowserStepFramer.Frame(Goal(state, descriptor: "d", queries: ["q"]), "t").Only.Family;
+            var family = BrowserStepFramer.Frame(Goal(state, queries: ["q"]), "t").Only.Family;
             Assert.True(Enum.IsDefined(family));
         }
     }
@@ -77,29 +73,45 @@ public sealed class BrowserStepFramerTests
     [Fact]
     public void Query_IsOnlyCarriedForFind()
     {
-        var goal = Goal(SemanticEndState.ResourceOpened, descriptor: "the third result", queries: ["dune"]);
+        var goal = Goal(SemanticEndState.ResourceOpened, queries: ["dune"], objective: "open the third result");
         var step = BrowserStepFramer.Frame(goal, "t").Only;
         Assert.Equal(ProofFamily.Activate, step.Family);
         Assert.Null(step.What.Query);
-        Assert.Equal("the third result", step.What.Phrase);
+        Assert.Equal("open the third result", step.What.Phrase);
     }
 
     [Fact]
-    public void Phrase_PrefersDescriptorThenObjective()
+    public void Descriptor_IsTheObjective_WithTheUtteranceKeptAsContext()
     {
-        Assert.Equal("the docs link", BrowserStepFramer.Frame(Goal(SemanticEndState.ResourceLocated, descriptor: " the docs link "), "t").Only.What.Phrase);
-        Assert.Equal("open a site", BrowserStepFramer.Frame(Goal(SemanticEndState.SurfaceReady, objective: "open a site"), "t").Only.What.Phrase);
+        var step = BrowserStepFramer.Frame(Goal(SemanticEndState.ResourceLocated, objective: "the docs link"), "t").Only;
+        Assert.Equal("the docs link", step.What.Phrase);
+        Assert.Equal("the utterance", step.What.Utterance);
     }
 
+    private static BrowserExecutionScope Scope(ContextDependency dependency, TaskRelation relation, bool established = true)
+        => new(BrowserScopeKind.ActiveTab) { ContextDependency = dependency, TaskRelation = relation, TaskRelationEstablished = established };
+
     [Theory]
-    [InlineData(true, false)]
-    [InlineData(false, true)]
-    public void UnresolvedReference_OnlyMarksTheDescriptorUnreliable_AndNeverChangesFamily(bool unresolved, bool reliable)
+    [InlineData(ContextDependency.SelfContained, TaskRelation.NewTask, true, true)]
+    [InlineData(ContextDependency.RequiresCurrentSurface, TaskRelation.NewTask, true, true)]
+    [InlineData(ContextDependency.Uncertain, TaskRelation.NewTask, true, false)]
+    [InlineData(ContextDependency.SelfContained, TaskRelation.ContinueRecent, true, false)]
+    [InlineData(ContextDependency.RequiresCurrentSurface, TaskRelation.RequiresRecent, true, false)]
+    [InlineData(ContextDependency.SelfContained, TaskRelation.NewTask, false, false)]
+    public void ActivateAndFindReliability_RequiresAnEstablishedFreshTaskWithAResolvableReferent(
+        ContextDependency dependency, TaskRelation relation, bool established, bool reliable)
     {
-        var goal = Goal(SemanticEndState.ResourceOpened, descriptor: "its pilot", unresolved: unresolved);
-        var step = BrowserStepFramer.Frame(goal, "t").Only;
-        Assert.Equal(ProofFamily.Activate, step.Family);
-        Assert.Equal(reliable, step.DescriptorReliable);
+        var scope = Scope(dependency, relation, established);
+        Assert.Equal(reliable, BrowserStepFramer.Frame(Goal(SemanticEndState.ResourceOpened), "t", scope).Only.DescriptorReliable);
+        Assert.Equal(reliable, BrowserStepFramer.Frame(Goal(SemanticEndState.ResultsVisible, queries: ["q"]), "t", scope).Only.DescriptorReliable);
+    }
+
+    [Fact]
+    public void WithoutRouterSignals_ActivateAndFindAreUnreliable_ButSurfaceAndReachAreNot()
+    {
+        Assert.False(BrowserStepFramer.Frame(Goal(SemanticEndState.ResourceOpened), "t").Only.DescriptorReliable);
+        Assert.True(BrowserStepFramer.Frame(Goal(SemanticEndState.SurfaceReady), "t").Only.DescriptorReliable);
+        Assert.True(BrowserStepFramer.Frame(Goal(SemanticEndState.OtherBoundedGoal), "t").Only.DescriptorReliable);
     }
 
     [Fact]

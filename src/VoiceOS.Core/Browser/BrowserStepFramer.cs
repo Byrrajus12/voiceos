@@ -12,14 +12,15 @@ internal static class BrowserStepFramer
 {
     internal const string StepId = "s1";
 
-    public static CommandPlan Frame(BrowserGoal goal, string turnId)
+    public static CommandPlan Frame(BrowserGoal goal, string turnId, BrowserExecutionScope? scope = null)
     {
         var normalized = goal.Normalization;
         var family = Family(normalized);
         var query = family == ProofFamily.Find ? GroundedQuery(normalized!) : null;
-        var phrase = FirstUsable(normalized?.Descriptor, normalized?.Objective, goal.OriginalUtterance)!;
-        return new CommandPlan(turnId, [new OutcomeStep(StepId, family, new Descriptor(phrase, query),
-            DescriptorReliable: normalized?.UnresolvedReference != true)]);
+        // The normalized Objective is the open descriptor; the utterance stays as supporting context only.
+        var phrase = FirstUsable(normalized?.Objective, goal.OriginalUtterance)!;
+        return new CommandPlan(turnId, [new OutcomeStep(StepId, family, new Descriptor(phrase, query, goal.OriginalUtterance),
+            DescriptorReliable: DescriptorReliable(family, scope))]);
     }
 
     internal static ProofFamily Family(BrowserGoalNormalization? normalized)
@@ -31,10 +32,22 @@ internal static class BrowserStepFramer
                 || BrowserCompletionEvidence.IsSiteItself(normalized.ResourceType) => ProofFamily.Surface,
             SemanticEndState.ResultsVisible when GroundedQuery(normalized) is not null => ProofFamily.Find,
             SemanticEndState.ResourceOpened or SemanticEndState.ContentActive
-                when FirstUsable(normalized.Descriptor) is not null => ProofFamily.Activate,
+                when FirstUsable(normalized.Objective) is not null => ProofFamily.Activate,
             _ => ProofFamily.Reach
         };
     }
+
+    /// <summary>
+    /// Whether the described target is anchored in this request. The normalizer sees one utterance and cannot
+    /// tell "its docs" from "the docs"; the router already classified where a referenced target comes from
+    /// and whether the request continues earlier work. Only a request the router established as a fresh task
+    /// whose referent is either self-contained or supplied by the visible page is trusted; anything else
+    /// (unknown, continuation, no router signal) caps proof so the legacy path decides.
+    /// </summary>
+    private static bool DescriptorReliable(ProofFamily family, BrowserExecutionScope? scope)
+        => family is not (ProofFamily.Activate or ProofFamily.Find)
+            || scope is { TaskRelationEstablished: true, TaskRelation: TaskRelation.NewTask,
+                ContextDependency: ContextDependency.SelfContained or ContextDependency.RequiresCurrentSurface };
 
     private static string? GroundedQuery(BrowserGoalNormalization normalized)
         => FirstUsable(normalized.SearchQueries.ToArray());

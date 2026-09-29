@@ -16,8 +16,11 @@ public enum ProofFamily
     Reach
 }
 
-/// <summary>Open text describing what the user wants; <see cref="Query"/> is a grounded search string (Find only).</summary>
-public sealed record Descriptor(string Phrase, string? Query = null);
+/// <summary>
+/// Open text describing what the user wants (the normalized objective); <see cref="Query"/> is a grounded
+/// search string (Find only); <see cref="Utterance"/> is the original wording kept as supporting context.
+/// </summary>
+public sealed record Descriptor(string Phrase, string? Query = null, string? Utterance = null);
 
 /// <summary>
 /// One proof-oriented unit of a command. <see cref="DescriptorReliable"/> is false when the request
