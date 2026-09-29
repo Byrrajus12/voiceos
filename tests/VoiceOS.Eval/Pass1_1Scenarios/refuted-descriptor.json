@@ -1,0 +1,22 @@
+[
+  {
+    "id": "pass1-1.refuted-descriptor-current-page",
+    "name": "Recorded item descriptor on the visible search page",
+    "family": "pass1-1-entry",
+    "tags": ["browser", "current-page"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://www.imdb.com/find/?q=Dune&ref_=hm_nv_srb_sm" },
+      { "kind": "wait", "ms": 3500 },
+      { "kind": "focusWindow", "process": "chrome" }
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+      { "kind": "activeTabOrigin", "contains": "imdb.com" }
+    ],
+    "transcript": "Open the 2021 one.",
+    "timeoutSeconds": 90,
+    "expect": { "outcome": "Complete", "scope": ["ActiveTab"], "newTabs": { "max": 0 } },
+    "cleanup": [ { "kind": "closeNewTabs" } ]
+  }
+]

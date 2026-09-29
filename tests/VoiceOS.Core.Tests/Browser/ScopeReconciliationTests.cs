@@ -197,7 +197,8 @@ public sealed class ScopeReconciliationTests
     [Fact]
     public async Task PickerReceivesSemanticsAndSelectsPageForObservationDespiteUncertainDependency()
     {
-        var gateway = new Gateway { CoarseRoute = "CLARIFY", Dependency = "Uncertain", Preference = "Browser",
+        var gateway = new Gateway { CoarseRoute = "COMPUTER_USE", RouteConfidence = .40,
+            Dependency = "Uncertain", Preference = "Browser", Shape = "SurfaceOnly", EndState = "ResourceOpened",
             Pick = "ActiveBrowserTab" };
         var router = new TypeSafeCommandRouter(gateway);
         var route = await router.RouteAsync("Open the official site");
@@ -209,8 +210,9 @@ public sealed class ScopeReconciliationTests
         Assert.Equal("Uncertain", semantics.GetProperty("contextDependency").GetString());
         Assert.Equal("Browser", semantics.GetProperty("surfacePreference").GetString());
         Assert.Equal("NewTask", semantics.GetProperty("taskRelation").GetString());
-        Assert.Equal("ActionOnSurface", semantics.GetProperty("goalShape").GetString());
+        Assert.Equal("SurfaceOnly", semantics.GetProperty("goalShape").GetString());
         Assert.Contains("observation", gateway.PickerInstruction);
+        Assert.Contains("an unresolved target identity alone does not require Clarify", gateway.PickerInstruction);
     }
 
     private sealed class Gateway : IJevGateway
