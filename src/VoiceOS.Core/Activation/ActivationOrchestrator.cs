@@ -834,6 +834,15 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                     _logger.LogError(ex, "Execution error for program ({Steps} steps)", program.Steps.Count);
                 }
                 executionTimer.Stop();
+                if (run.ProgramResult is { } executed)
+                {
+                    var native = NativeReferents.FromProgram(program, executed, DateTimeOffset.UtcNow);
+                    _referents.ObserveMany(native.Observed);
+                    foreach (var closed in native.Closed) _referents.InvalidateWindow(closed);
+                    if (native.Observed.Count > 0 || native.Closed.Count > 0)
+                        _logger.LogInformation("Referents observed source=direct windows={Windows} closed={Closed} store_count={Count}",
+                            native.Observed.Count, native.Closed.Count, _referents.Count);
+                }
                 trace.Record("direct_execution", executionTimer.Elapsed.TotalMilliseconds);
                 run.ActionCount = run.ProgramResult?.ExecutedCount ?? 0;
                 _logger.LogInformation("Direct executor outcome={Outcome} executed={Executed} latency_ms={LatencyMs:F0}",

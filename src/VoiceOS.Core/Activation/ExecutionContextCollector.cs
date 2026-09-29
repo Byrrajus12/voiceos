@@ -4,6 +4,7 @@ using VoiceOS.Core.Apps;
 using VoiceOS.Core.Browser;
 using VoiceOS.Core.Candidates;
 using VoiceOS.Core.Decision;
+using VoiceOS.Core.Execution;
 using VoiceOS.Core.Interaction;
 using VoiceOS.Core.Monitors;
 
@@ -42,8 +43,7 @@ public static class ExecutionContextCollector
         var state = new DecisionState(transcript, foreground?.Title ?? "", apps, windows,
             [MediaOperation.Play, MediaOperation.Pause, MediaOperation.Toggle, MediaOperation.Next, MediaOperation.Previous],
             [SnapDirection.Left, SnapDirection.Right], topology,
-            ReferentWindowIds: validReferents.Where(r => r.Kind == ReferentKind.AppWindow)
-                .Select(r => windows.FirstOrDefault(w => w.Hwnd == r.Hwnd)?.Id).OfType<string>().ToArray());
+            ReferentWindowIds: NativeReferents.ImplicitWindowIds(validReferents, windows));
         trace.Record("context", timer.Elapsed.TotalMilliseconds);
         trace.Record("decision_prep", prepMs);
         logger.LogInformation("Decision prep enum={EnumMs} proc={ProcMs} aumid={AumidMs} hit={Hits} miss={Misses}",

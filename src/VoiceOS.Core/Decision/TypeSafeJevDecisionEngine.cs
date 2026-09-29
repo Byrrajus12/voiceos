@@ -299,6 +299,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         //   Missing or low-confidence → uncertain (RequiresClarification; never default to foreground).
         WindowTargetMode windowTargetMode = WindowTargetMode.Current;
         bool windowTargetModeUncertain = false;
+        bool referentMode = false;
 
         if (action == VoiceAction.FocusWindow)
         {
@@ -317,8 +318,25 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             else
             {
                 windowTargetMode = wtmAnswer.SelectedChoice == "Named"
+                    || wtmAnswer.SelectedChoice == ReferentMode && state.ReferentWindowIds is { Count: > 0 }
                     ? WindowTargetMode.Named
                     : WindowTargetMode.Current;
+                referentMode = wtmAnswer.SelectedChoice == ReferentMode
+                    && state.ReferentWindowIds is { Count: > 0 };
+            }
+        }
+
+        // A reference back to earlier work is honored only for a window VoiceOS itself established and that
+        // still exists. A pick outside that set is not a reference; a single candidate needs no pick.
+        if (referentMode)
+        {
+            var known = state.ReferentWindowIds!;
+            if (windowCandidateId is null || !known.Contains(windowCandidateId))
+            {
+                windowCandidateId = known.Count == 1 ? known[0] : null;
+                windowCandidate = windowCandidateId is null ? null
+                    : state.OpenWindows.FirstOrDefault(w => w.Id == windowCandidateId)?.Title;
+                if (windowCandidateId is null) windowTargetModeUncertain = true;
             }
         }
 
@@ -439,7 +457,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         // The app is used only when its identity corroborates the resolved window; an unrelated
         // forced app choice must never replace the exact resolved window.
         string? windowAppCandidateId = null;
-        if (isWindowTargetedAction && windowTargetMode == WindowTargetMode.Named
+        if (isWindowTargetedAction && windowTargetMode == WindowTargetMode.Named && !referentMode
             && AppCorroboratesWindow(appMatch, state.OpenWindows.FirstOrDefault(w => w.Id == windowCandidateId)))
             windowAppCandidateId = appCandidateId;
 
@@ -463,6 +481,22 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             MonitorMove: action is VoiceAction.MoveWindow ? monitorTarget : null,
             WindowAppCandidateId: windowAppCandidateId,
             VolumeAdjustAmount: volumeAdjustAmount);
+    }
+
+    internal const string ReferentMode = "Referent";
+
+    private static Dictionary<string, string> WindowModeCriteria(bool referentOffered)
+    {
+        var criteria = new Dictionary<string, string>
+        {
+            ["Current"] = referentOffered
+                ? "User refers to the current or foreground window using words like 'this', 'the current window', 'the window'. No specific application name is mentioned as the target."
+                : "User refers to the current or foreground window using words like 'this', 'the current window', 'it', 'the window'. No specific application name is mentioned as the target.",
+            ["Named"] = "User names a specific application as the target — 'Chrome', 'VS Code', 'Discord', 'the terminal', 'Google Chrome'. The command is directed at that particular named app's window."
+        };
+        if (referentOffered)
+            criteria[ReferentMode] = "User refers back to a window VoiceOS recently opened or used, with a pronoun or description such as 'it', 'that one', 'the one I just opened', without naming an app. Only windows marked as recently opened or used by VoiceOS qualify. Never use for 'this' or 'the current window'.";
+        return criteria;
     }
 
     /// <summary>The target_app choice key meaning no offered app is the target. A forced choice
@@ -502,7 +536,9 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
     {
         var textCandidates = TextCandidateExtractor.Extract(state.Transcript);
         var appCandidates = AppChoices(state);
-        var windowCandidates = state.OpenWindows.ToDictionary(w => w.Id, w => w.Title);
+        var referentWindows = state.ReferentWindowIds ?? [];
+        var windowCandidates = state.OpenWindows.ToDictionary(w => w.Id,
+            w => referentWindows.Contains(w.Id) ? $"{w.Title} (recently opened or used by VoiceOS)" : w.Title);
 
         var questions = new Dictionary<string, JevQuestionDto>
         {
@@ -576,11 +612,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             ["window_target_mode"] = new JevQuestionDto(
                 "choice",
                 "Assume the user is issuing a window operation (close, maximize, minimize, snap). Is the target the current foreground window, or a specific named application window?",
-                new Dictionary<string, string>
-                {
-                    ["Current"] = "User refers to the current or foreground window using words like 'this', 'the current window', 'it', 'the window'. No specific application name is mentioned as the target.",
-                    ["Named"] = "User names a specific application as the target — 'Chrome', 'VS Code', 'Discord', 'the terminal', 'Google Chrome'. The command is directed at that particular named app's window.",
-                }),
+                WindowModeCriteria(referentWindows.Count > 0)),
 
             ["is_compound"] = new JevQuestionDto(
                 "noul",
