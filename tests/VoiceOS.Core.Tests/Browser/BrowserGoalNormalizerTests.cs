@@ -129,6 +129,14 @@ public sealed class BrowserGoalNormalizerTests
     }
 
     [Fact]
+    public async Task Request_KeepsHeadroomAboveTheMeasuredTokenTail()
+    {
+        var (_, request) = await Normalize(Payload());
+        Assert.True(request.RootElement.GetProperty("max_completion_tokens").GetInt32() >= 400);
+        Assert.Equal("low", request.RootElement.GetProperty("reasoning").GetProperty("effort").GetString());
+    }
+
+    [Fact]
     public void Prompt_DefinesTheNewFields_WithoutAskingForProofFamily()
     {
         Assert.Contains("descriptor", OpenRouterBrowserGoalNormalizer.Prompt);
