@@ -167,6 +167,10 @@ public interface IContextualScopeDecisionSource
     ValueTask<string?> SelectInstalledAppAsync(string utterance,
         IReadOnlyList<VoiceOS.Core.Candidates.AppCandidate> apps, CancellationToken cancellationToken = default)
         => ValueTask.FromResult<string?>(null);
+    /// <summary>Focused choice over typed, validated referents; one request with two heads, no generation.</summary>
+    ValueTask<ReferentChoice> SelectReferentAsync(string utterance, IReadOnlyList<ReferentCandidate> candidates,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(new ReferentChoice(ReferentChoiceKind.Unavailable));
 }
 
 public sealed record BrowserInteractionOutcome(

@@ -46,6 +46,8 @@ internal static class BrowserStepFramer
     /// </summary>
     private static bool DescriptorReliable(ProofFamily family, BrowserExecutionScope? scope)
         => family is not (ProofFamily.Activate or ProofFamily.Find)
+            // A validated typed referent grounded the surface, so the request's own "it"/"that" is no longer unknown.
+            || scope is { ReferentResolved: true }
             || scope is { TaskRelationEstablished: true, TaskRelation: TaskRelation.NewTask,
                 ContextDependency: ContextDependency.SelfContained or ContextDependency.RequiresCurrentSurface };
 

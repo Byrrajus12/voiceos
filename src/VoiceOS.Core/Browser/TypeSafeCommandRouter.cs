@@ -1,3 +1,4 @@
+using VoiceOS.Core.Interaction;
 using VoiceOS.Core.Decision;
 using VoiceOS.Core.Activation;
 using System.Text.RegularExpressions;
@@ -373,6 +374,62 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
             StringComparison.OrdinalIgnoreCase) && Equals(t.Origin, selected.Origin));
         if (duplicates != 1) return Outcome(NamedTabSelection.Ambiguous("duplicate_title_and_origin"));
         return Outcome(NamedTabSelection.Select(tabId));
+    }
+
+    /// <summary>
+    /// Picks which validated earlier referent a spoken reference denotes. One request, two heads: the
+    /// candidate and the semantic relation. Nothing outside the offered typed list can be returned.
+    /// </summary>
+    public async ValueTask<ReferentChoice> SelectReferentAsync(string utterance,
+        IReadOnlyList<ReferentCandidate> candidates, CancellationToken cancellationToken = default)
+    {
+        if (candidates.Count == 0) return new(ReferentChoiceKind.None);
+        string Describe(ReferentCandidate c)
+            => $"{(c.Referent.Kind == ReferentKind.Page ? "page" : "item")}: title={c.Referent.Label}; site={c.Site}; "
+                + $"in_view={(c.Current ? "yes" : "no")}; recency_rank={c.Rank}; "
+                + $"same_site_set={(c.Group is null ? "no" : "yes")}; opened_by={(c.Referent.OwnedByVoiceOs ? "VoiceOS" : "user")}";
+        var ids = candidates.ToDictionary(c => c.Id, Describe);
+        ids["NONE"] = "No offered candidate is what the reference denotes.";
+        ids["AMBIGUOUS"] = "More than one offered candidate plausibly matches the reference.";
+        foreach (var c in candidates)
+            logger?.LogInformation("Referent candidate id={Id} kind={Kind} site={Site} in_view={InView} rank={Rank} provenance={Provenance}",
+                c.Id, c.Referent.Kind, c.Site, c.Current, c.Rank, c.Referent.Provenance);
+        var answers = await gateway.AskAsync(new { utterance }, new Dictionary<string, JevQuestionDto>
+        {
+            ["referent"] = new("choice",
+                "The user refers back to something VoiceOS earlier opened or used. Which offered candidate does the reference denote? Choose one candidate ID only when exactly one is the clear match, using the candidate title and details. Choose AMBIGUOUS when several plausibly match. Choose NONE when the reference is not to any offered candidate (for example, it names something new).",
+                ids),
+            ["relation"] = new("choice",
+                "How does the reference relate to the earlier things?",
+                new Dictionary<string, string>
+                {
+                    ["SAME"] = "One specific earlier thing, referred to as it, that, or that page.",
+                    ["ALTERNATIVE"] = "The other one of a pair or set, meaning not the one in view.",
+                    ["PREVIOUS"] = "The one before, the earlier one.",
+                    ["PROPERTY"] = "Identified by a described property such as a name, year, or kind.",
+                    ["NONE_OF_THESE"] = "Not a reference to earlier things."
+                })
+        }, cancellationToken).ConfigureAwait(false);
+        foreach (var head in answers)
+            JevDiagnostics.Log(logger, "Referent", head.Key, head.Value);
+        var threshold = Math.Max(confidenceThreshold, .7);
+        if (!answers.TryGetValue("referent", out var pick) || pick.QuestionType != "choice" || pick.SelectedChoice is null)
+            return new(ReferentChoiceKind.Unavailable);
+        if (pick.Confidence < confidenceThreshold) return new(ReferentChoiceKind.Unavailable);
+        var relation = answers.TryGetValue("relation", out var rel) && rel.QuestionType == "choice" && rel.Confidence >= confidenceThreshold
+            ? rel.SelectedChoice switch
+            {
+                "SAME" => ReferenceRelation.Same, "ALTERNATIVE" => ReferenceRelation.Alternative,
+                "PREVIOUS" => ReferenceRelation.Previous, "PROPERTY" => ReferenceRelation.Property, _ => ReferenceRelation.None
+            } : ReferenceRelation.None;
+        logger?.LogInformation("Referent selected={Selection} confidence={Confidence:F2} relation={Relation}",
+            pick.SelectedChoice, pick.Confidence, relation);
+        if (pick.SelectedChoice == "NONE") return new(ReferentChoiceKind.None);
+        if (pick.SelectedChoice == "AMBIGUOUS") return new(ReferentChoiceKind.Ambiguous);
+        if (!ids.ContainsKey(pick.SelectedChoice)) return new(ReferentChoiceKind.Unavailable);
+        // A weakly held pick is not a unique one.
+        if (pick.Confidence < threshold) return new(ReferentChoiceKind.Ambiguous);
+        return new(ReferentChoiceKind.Selected, pick.SelectedChoice, relation);
     }
 
     public async ValueTask<string?> SelectInstalledAppAsync(string utterance,

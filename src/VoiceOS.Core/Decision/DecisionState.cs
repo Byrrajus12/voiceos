@@ -10,4 +10,5 @@ public record DecisionState(
     IReadOnlyList<WindowCandidate> OpenWindows,
     IReadOnlyList<MediaOperation> AvailableMediaOps,
     IReadOnlyList<SnapDirection> AvailableSnapDirs,
-    DisplayTopology? Topology = null);
+    DisplayTopology? Topology = null,
+    IReadOnlyList<string>? ReferentWindowIds = null);

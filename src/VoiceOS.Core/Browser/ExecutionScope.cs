@@ -1,3 +1,4 @@
+using VoiceOS.Core.Interaction;
 using VoiceOS.Core.Candidates;
 using VoiceOS.Core.Activation;
 using System.Diagnostics;
@@ -21,6 +22,8 @@ public sealed record ExecutionContextSnapshot(WindowCandidate? ForegroundWindow,
     Activation.FrontDoorContext? FrontDoor = null)
 {
     public DirectOffer? SafeDirectOffer { get; init; }
+    /// <summary>Validated typed referents (most recent first); empty when none are live.</summary>
+    public IReadOnlyList<Interaction.Referent>? Referents { get; init; }
 }
 
 public sealed record RecentTaskFrame(int TabId, string SessionId, string Url,
@@ -39,6 +42,8 @@ public sealed record BrowserExecutionScope(BrowserScopeKind Kind, int? TabId = n
     bool DestinationPending = false, bool TabClaimRefuted = false)
 {
     public bool BlankTabRequested { get; init; }
+    /// <summary>The surface was fixed by a validated typed referent rather than inferred from wording.</summary>
+    public bool ReferentResolved { get; init; }
     /// <summary>The router's own classification of where a referenced target comes from; Uncertain when unknown.</summary>
     public ContextDependency ContextDependency { get; init; } = ContextDependency.Uncertain;
     /// <summary>Continuity with earlier VoiceOS work, only meaningful when <see cref="TaskRelationEstablished"/>.</summary>
@@ -187,6 +192,35 @@ public sealed class ScopeResolver
             && route.TabDisposition is TabDisposition.CurrentTab or TabDisposition.ExistingNamedTab)
             return new(ExecutionScopeKind.Clarify,
                 Detail: "An explicit URL cannot be combined safely with this tab selection yet.");
+        // An earlier, concrete thing VoiceOS established. The visible surface keeps precedence for
+        // references that need it; otherwise a validated referent grounds the reference before any
+        // wording-based inference. No usable referent falls through to the existing behavior unchanged.
+        if (context.Referents is { Count: > 0 } referents && contextual is not null
+            && (route.Route == CommandRoute.ComputerUse || uncertainBrowser)
+            && route.TaskRelationEstablished && route.TaskRelation is TaskRelation.ContinueRecent or TaskRelation.RequiresRecent
+            && route.TabDisposition == TabDisposition.Unspecified && route.ExplicitUrl is null
+            && route.SurfacePreference != SurfacePreference.Native
+            && !(route.ContextDependency == ContextDependency.RequiresCurrentSurface && chromeForeground && active is not null))
+        {
+            var candidates = ReferentResolver.BuildCandidates(referents, active);
+            var resolution = await Timed("scope_referent", () => ReferentResolver.ResolveAsync(utterance, candidates,
+                contextual, cancellationToken)).ConfigureAwait(false);
+            var focusOnlyReferent = route.EndState == SemanticEndState.SurfaceReady && route.GoalShape == GoalShape.SurfaceOnly;
+            switch (resolution.Kind)
+            {
+                case ReferentResolutionKind.Ambiguous:
+                    return new(ExecutionScopeKind.Clarify, Detail: "More than one earlier item could be what you mean.");
+                case ReferentResolutionKind.Selected when resolution.Candidate!.Referent is { Kind: ReferentKind.Page } page:
+                    var pageTab = context.BrowserTabs.FirstOrDefault(t => t.TabId == page.TabId && t.Origin is not null);
+                    if (pageTab is null) break;
+                    var kind = chromeForeground && active?.TabId == pageTab.TabId
+                        ? BrowserScopeKind.ActiveTab : BrowserScopeKind.ExistingNamedTab;
+                    return Browser(Select(pageTab, kind, true, focusOnlyReferent) with { ReferentResolved = true });
+                case ReferentResolutionKind.Selected when resolution.Candidate!.Referent is { Kind: ReferentKind.Item } item
+                    && Uri.TryCreate(item.Href, UriKind.Absolute, out var itemUri):
+                    return Browser(new(BrowserScopeKind.NewTaskTab, Destination: itemUri) { ReferentResolved = true });
+            }
+        }
         if (route.TabDisposition == TabDisposition.NewTab)
             return Browser(new(BrowserScopeKind.NewTaskTab, Destination: destination,
                 NamedServiceHint: route.DestinationKind == SemanticDestinationKind.KnownService

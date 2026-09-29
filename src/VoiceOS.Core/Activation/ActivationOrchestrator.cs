@@ -465,7 +465,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
 
         PublishState(kind, ActivationState.Understanding);
         var collected = await ExecutionContextCollector.CollectAsync(transcript, _catalog, _topoService,
-            _browserTransport, _recentTask, trace, _logger, _shutdown.Token).ConfigureAwait(false);
+            _browserTransport, _recentTask, trace, _logger, _shutdown.Token, _referents).ConfigureAwait(false);
         _recentTask = collected.StoredRecentTask;
         var executionContext = collected.Snapshot;
         var decisionState = collected.DecisionState;
