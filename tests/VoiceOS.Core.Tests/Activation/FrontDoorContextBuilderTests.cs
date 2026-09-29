@@ -101,6 +101,20 @@ public sealed class FrontDoorContextBuilderTests
     }
 
     [Theory]
+    [InlineData('漢')]
+    [InlineData('"')]
+    public void ContextBound_IncludesJsonEscaping(char character)
+    {
+        var text = new string(character, 200);
+        var context = new FrontDoorContext(new(text, text, ForegroundKind.NativeApp, 1),
+            Enumerable.Range(0, 5).Select(i => new NamedMatch(text, NamedMatchKind.OpenWindow, false, 3)).ToArray(),
+            new(true, 60, new(1, text, text, true, true),
+                Enumerable.Range(0, 3).Select(i => new TabFact(i, text, text, false, true)).ToArray()),
+            new(text, text, true, 41, true));
+        Assert.True(JsonSerializer.Serialize(context.ToJevState()).Length <= 1500);
+    }
+
+    [Theory]
     [InlineData("Close Character Map", "Character Map", 3)]
     [InlineData("map character", "Character Map", 2)]
     [InlineData("Character", "Character Map", 1)]

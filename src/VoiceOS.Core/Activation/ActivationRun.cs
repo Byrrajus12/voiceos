@@ -54,6 +54,11 @@ public sealed class ActivationRun
     public ExecutionScopeDecision? Scope { get; internal set; }
     public BrowserInteractionOutcome? BrowserOutcome { get; internal set; }
     public DecisionResult? Decision { get; internal set; }
+    public DecisionResult? SpeculativeDecision { get; internal set; }
+    public Task<DecisionResult>? SpeculativeTask { get; internal set; }
+    public bool SpeculativeDirectUsed { get; internal set; }
+    public double? SpeculativeDirectMs { get; internal set; }
+    public FrontDoorVerdict? FrontDoor { get; internal set; }
     public VoiceProgram? Program { get; internal set; }
     public ProgramResult? ProgramResult { get; internal set; }
     public DateTimeOffset? JevStart { get; internal set; }

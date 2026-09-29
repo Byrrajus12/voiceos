@@ -7,7 +7,7 @@ namespace VoiceOS.Core.Browser;
 public enum CommandRoute { DirectCapability, ComputerUse, NativeInteraction, TextTransform, Clarify }
 public enum RoutingReason { None, MediaTransport, NewContentTarget, IncompleteIntent, LowConfidence, AmbiguousIntent, RouterFailure,
     /// <summary>Going back was requested but neither media playback nor navigation was established.</summary>
-    UnresolvedReturn }
+    UnresolvedReturn, DirectRescue }
 public enum MediaRequestKind { None, Transport, ContentSelection, Uncertain }
 public enum SemanticDestinationKind { None, KnownService, ExplicitUrl, NamedTab }
 public enum TabDisposition { Unspecified, CurrentTab, NewTab, ExistingNamedTab }
@@ -117,7 +117,7 @@ public interface IChromeCompanionTransport
         => SelectTabAsync(sessionId, tabId, expectedUrl, requireActive, cancellationToken);
 }
 
-public enum ContextualSurface { ActiveBrowserTab, RecentOwnedBrowserTab, NewBrowserTaskTab, ForegroundNativeWindow, Clarify }
+public enum ContextualSurface { ActiveBrowserTab, RecentOwnedBrowserTab, NewBrowserTaskTab, ForegroundNativeWindow, Clarify, DirectCapability }
 
 /// <summary>How the real tab inventory settled a named-tab claim.</summary>
 public enum NamedTabSelectionKind

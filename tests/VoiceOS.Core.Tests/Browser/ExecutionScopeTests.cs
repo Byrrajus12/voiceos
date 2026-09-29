@@ -262,14 +262,18 @@ public sealed class ExecutionScopeTests
             "edit prior value", VoiceOS.Core.Interaction.InteractionCompletionState.Complete, DateTimeOffset.UtcNow);
         var continued = await Run("make the earlier change more precise", relation: "ContinueRecent",
             contextDependency: "Uncertain",
-            tabs: [Tab(1, "https://news.example/", true), recentTab], recent: frame);
+            tabs: [Tab(1, "https://news.example/", true), recentTab], recent: frame,
+            contextChoice: ContextualSurface.Clarify);
         Assert.Equal(ExecutionScopeKind.Clarify, continued.Scope.Kind);
-        Assert.Equal(0, continued.ContextCalls);
+        Assert.Equal(1, continued.ContextCalls);
+        Assert.NotEqual(7, continued.Scope.Browser?.TabId);
         var required = await Run("Go back to those results.", relation: "RequiresRecent",
             contextDependency: "Uncertain",
-            tabs: [Tab(1, "https://news.example/", true), recentTab], recent: frame);
+            tabs: [Tab(1, "https://news.example/", true), recentTab], recent: frame,
+            contextChoice: ContextualSurface.Clarify);
         Assert.Equal(ExecutionScopeKind.Clarify, required.Scope.Kind);
-        Assert.Equal(0, required.ContextCalls);
+        Assert.Equal(1, required.ContextCalls);
+        Assert.NotEqual(7, required.Scope.Browser?.TabId);
         var independent = await Run("Search for React.", relation: "ContinueRecent",
             contextDependency: "SelfContained",
             tabs: [Tab(1, "https://news.example/", true), recentTab], recent: frame);

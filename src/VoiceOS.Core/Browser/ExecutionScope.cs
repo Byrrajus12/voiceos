@@ -1,4 +1,6 @@
 using VoiceOS.Core.Candidates;
+using VoiceOS.Core.Activation;
+using System.Diagnostics;
 
 namespace VoiceOS.Core.Browser;
 
@@ -16,7 +18,10 @@ public sealed record ExecutionContextSnapshot(WindowCandidate? ForegroundWindow,
     IReadOnlyList<WindowCandidate> OpenWindows, bool BrowserConnected,
     IReadOnlyList<BrowserTabInfo> BrowserTabs, RecentTaskFrame? RecentTask = null,
     IReadOnlyList<AppCandidate>? InstalledApps = null,
-    Activation.FrontDoorContext? FrontDoor = null);
+    Activation.FrontDoorContext? FrontDoor = null)
+{
+    public DirectOffer? SafeDirectOffer { get; init; }
+}
 
 public sealed record RecentTaskFrame(int TabId, string SessionId, string Url,
     string SemanticGoal, Interaction.InteractionCompletionState Completion,
@@ -54,7 +59,8 @@ public sealed class ScopeResolver
 {
     public async ValueTask<ExecutionScopeDecision> ResolveAsync(string utterance, CommandRouteDecision route,
         ExecutionContextSnapshot context, IContextualScopeDecisionSource? contextual = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        Func<CancellationToken, ValueTask<DirectOffer?>>? directOffer = null, bool grounded = true)
     {
         if (route.Reason == RoutingReason.IncompleteIntent)
             return new(ExecutionScopeKind.Clarify, Detail: route.Detail);
@@ -67,8 +73,10 @@ public sealed class ScopeResolver
         if (route.Route == CommandRoute.Clarify && route.Reason == RoutingReason.RouterFailure)
             return new(ExecutionScopeKind.Clarify, Detail: route.Detail);
 
-        var chromeForeground = context.ForegroundWindow?.ProcessName.Equals("chrome", StringComparison.OrdinalIgnoreCase) == true;
-        var activeTabs = context.BrowserTabs.Where(t => t.Active && t.Origin is not null).Take(2).ToArray();
+        var chromeForeground = context.BrowserConnected
+            && context.ForegroundWindow?.ProcessName.Equals("chrome", StringComparison.OrdinalIgnoreCase) == true;
+        var activeTabs = context.BrowserConnected
+            ? context.BrowserTabs.Where(t => t.Active && t.Origin is not null).Take(2).ToArray() : [];
         BrowserTabInfo? active = activeTabs.Length == 1 ? activeTabs[0] : null;
         BrowserExecutionScope Select(BrowserTabInfo tab, BrowserScopeKind kind, bool explicitSelection = false,
             bool focusOnly = false) => new(kind, tab.TabId, tab.Url, tab.SessionId,
@@ -142,6 +150,7 @@ public sealed class ScopeResolver
         if (route.TabDisposition == TabDisposition.CurrentTab)
             return active is not null ? Browser(Select(active, BrowserScopeKind.ActiveTab, true))
                 : new(ExecutionScopeKind.Clarify, Detail: "Chrome does not have one identifiable active tab.");
+        var weakNamedTab = false;
         if (route.TabDisposition == TabDisposition.ExistingNamedTab
             || route.DestinationKind == SemanticDestinationKind.NamedTab)
         {
@@ -173,7 +182,10 @@ public sealed class ScopeResolver
                         return Browser(Select(active, BrowserScopeKind.ActiveTab) with { TabClaimRefuted = true });
                     return new(ExecutionScopeKind.Clarify, Detail: "No open tab matches that name.");
             }
-            return new(ExecutionScopeKind.Clarify, Detail: "The named tab was not uniquely identified.");
+            weakNamedTab = grounded && selection.Kind == NamedTabSelectionKind.Unavailable
+                && selection.Reason == "choice_confidence_below_threshold";
+            if (!weakNamedTab)
+                return new(ExecutionScopeKind.Clarify, Detail: "The named tab was not uniquely identified.");
         }
         // Current-surface dependence is its own dimension, independent of task relation: a new
         // task can still target what is visible now. A service destination alone does not
@@ -183,7 +195,7 @@ public sealed class ScopeResolver
         // surface (a literal URL, an explicit web-surface preference, or a goal that is solely
         // acquiring that surface), or when no current browser surface is in view.
         if (route.Route == CommandRoute.ComputerUse
-            && route.TabDisposition == TabDisposition.Unspecified
+            && (route.TabDisposition == TabDisposition.Unspecified || weakNamedTab)
             && route.SurfacePreference != SurfacePreference.Native
             && route.ContextDependency == ContextDependency.RequiresCurrentSurface)
         {
@@ -216,7 +228,8 @@ public sealed class ScopeResolver
                     ? route.DestinationName : null));
         }
         if ((route.TaskRelation is TaskRelation.ContinueRecent or TaskRelation.RequiresRecent)
-            && route.ContextDependency != ContextDependency.SelfContained)
+            && route.ContextDependency != ContextDependency.SelfContained
+            && !(grounded && chromeForeground && active is not null))
             return new(ExecutionScopeKind.Clarify,
                 Detail: "The request depends on prior VoiceOS work without a safe current surface or destination.");
         if (route.SurfacePreference != SurfacePreference.Browser
@@ -249,6 +262,20 @@ public sealed class ScopeResolver
         if (contextual is null)
             return new(ExecutionScopeKind.Clarify, Detail: "The execution surface is ambiguous.");
         var offered = new List<ContextualSurface> { ContextualSurface.Clarify };
+        var safeDirect = directOffer is null ? null : await directOffer(cancellationToken).ConfigureAwait(false);
+        if (safeDirect is not null)
+        {
+            offered.Add(ContextualSurface.DirectCapability);
+            context = context with { SafeDirectOffer = safeDirect };
+        }
+        var recentTab = context.RecentTask is { } frame && context.BrowserConnected
+            ? context.BrowserTabs.FirstOrDefault(t => t.TabId == frame.TabId && t.SessionId == frame.SessionId
+                && t.Url == frame.Url && t.Active && t.Provenance == BrowserTabProvenance.VoiceOs && t.Origin is not null)
+            : null;
+        if (grounded && recentTab is not null && route.TaskRelationEstablished
+            && route.TaskRelation is TaskRelation.ContinueRecent or TaskRelation.RequiresRecent
+            && !(chromeForeground && context.BrowserTabs.Any(t => t.Active && t.Origin is not null && t.TabId != recentTab.TabId)))
+            offered.Add(ContextualSurface.RecentOwnedBrowserTab);
         {
             offered.Add(ContextualSurface.NewBrowserTaskTab);
             if (chromeForeground && active is not null)
@@ -263,6 +290,8 @@ public sealed class ScopeResolver
         return selected switch
         {
             ContextualSurface.ActiveBrowserTab when active is not null => Browser(Select(active, BrowserScopeKind.ActiveTab)),
+            ContextualSurface.RecentOwnedBrowserTab when recentTab is not null => Browser(Select(recentTab, BrowserScopeKind.RecentOwnedTaskTab)),
+            ContextualSurface.DirectCapability when safeDirect is not null => new(ExecutionScopeKind.DirectCapability, Detail: "contextual_direct"),
             ContextualSurface.NewBrowserTaskTab => Browser(new(BrowserScopeKind.NewTaskTab)),
             ContextualSurface.ForegroundNativeWindow when context.ForegroundWindow is { Hwnd: not 0 } window
                 => new(ExecutionScopeKind.NativeInteraction, Native: new(window.Hwnd, window.ProcessName)),

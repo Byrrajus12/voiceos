@@ -248,18 +248,28 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
             ContextualSurface.RecentOwnedBrowserTab => "Reuse this previously owned VoiceOS task tab only when its metadata makes the action belong there.",
             ContextualSurface.NewBrowserTaskTab => "Preserve unrelated user work and start a separate VoiceOS task tab for a fresh browser task.",
             ContextualSurface.ForegroundNativeWindow => "The complete action concerns controls inside the foreground native app; representation only.",
+            ContextualSurface.DirectCapability => "Run the native action now: " + context.SafeDirectOffer?.Summary,
             _ => "Context does not safely identify an execution surface."
         });
         var active = context.BrowserTabs.FirstOrDefault(t => t.Active);
-        var owned = context.BrowserTabs.Where(t => t.Provenance == BrowserTabProvenance.VoiceOs
-            && t.LastUsedSequence is not null).OrderByDescending(t => t.LastUsedSequence).FirstOrDefault();
-        var result = await gateway.AskAsync(new
+        var owned = context.FrontDoor is null ? context.BrowserTabs.Where(t => t.Provenance == BrowserTabProvenance.VoiceOs
+                && t.LastUsedSequence is not null).OrderByDescending(t => t.LastUsedSequence).FirstOrDefault()
+            : context.RecentTask is { } frame ? context.BrowserTabs.FirstOrDefault(t => t.TabId == frame.TabId) : null;
+        object pickerState = context.FrontDoor is null ? new
+        {
+            utterance, intent = intent.Route.ToString(), intent.MediaRequestKind,
+            foreground = context.ForegroundWindow is { } legacyWindow ? new { legacyWindow.ProcessName, legacyWindow.Title } : null,
+            activeTab = active is null ? null : new { origin = active.Origin?.AbsoluteUri, active.Title },
+            recentOwnedTab = owned is null ? null : new { origin = owned.Origin?.AbsoluteUri, owned.Title }
+        } : new
         {
             utterance, intent = intent.Route.ToString(), intent.MediaRequestKind,
             foreground = context.ForegroundWindow is { } w ? new { w.ProcessName, w.Title } : null,
             activeTab = active is null ? null : new { origin = active.Origin?.AbsoluteUri, active.Title },
-            recentOwnedTab = owned is null ? null : new { origin = owned.Origin?.AbsoluteUri, owned.Title }
-        }, new Dictionary<string, JevQuestionDto>
+            recentOwnedTab = owned is null ? null : new { origin = owned.Origin?.AbsoluteUri, owned.Title },
+            context = context.FrontDoor?.ToJevState()
+        };
+        var result = await gateway.AskAsync(pickerState, new Dictionary<string, JevQuestionDto>
         {
             ["surface"] = new("choice", "Choose only one offered execution surface from metadata. Do not infer an action for a bare entity. No DOM or page actions are available here.", criteria)
         }, cancellationToken).ConfigureAwait(false);

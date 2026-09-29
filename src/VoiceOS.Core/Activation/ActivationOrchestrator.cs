@@ -468,6 +468,62 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         var decisionState = collected.DecisionState;
         var exposedRecentTask = executionContext.RecentTask;
         CommandRouteDecision route;
+        var frontDoorTimer = Stopwatch.StartNew();
+        Task<DecisionResult>? directTask = null;
+        async Task<DecisionResult> StartDirect(bool speculative)
+        {
+            var timer = Stopwatch.StartNew();
+            DecisionResult result;
+            try { result = await _decisionEngine!.DecideAsync(decisionState, _shutdown.Token).ConfigureAwait(false); }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Direct decision failed speculative={Speculative}", speculative);
+                result = new(new(VoiceAction.None), null, new Dictionary<string, JevAnswer>(),
+                    timer.Elapsed.TotalMilliseconds, 0, 0) { ProviderFailed = true };
+            }
+            trace.Record(speculative ? "direct_decision_speculative" : "direct_decision", timer.Elapsed.TotalMilliseconds);
+            if (speculative)
+            {
+                run.SpeculativeDecision = result;
+                run.SpeculativeDirectMs = timer.Elapsed.TotalMilliseconds;
+            }
+            return result;
+        }
+        async ValueTask<DecisionResult?> GetDirect()
+        {
+            if (_decisionEngine is null) return null;
+            directTask ??= StartDirect(false);
+            if (run.SpeculativeTask is not null) run.SpeculativeDirectUsed = true;
+            return await directTask.ConfigureAwait(false);
+        }
+        FrontDoorVerdict Evaluate(DecisionResult? direct, bool nativeFallback = false, bool offer = false)
+        {
+            var verdict = FrontDoorArbiter.Evaluate(route, direct, collected.Snapshot.FrontDoor!, _catalog,
+                decisionState.OpenWindows, nativeFallback, offer);
+            run.FrontDoor = offer && verdict.Kind == FrontDoorVerdictKind.RescueDirect
+                ? verdict with { Kind = FrontDoorVerdictKind.UseRoute, Reasons = ["safe_direct_offered"] } : verdict;
+            _logger.LogInformation("Front door verdict={Verdict} reasons=[{Reasons}] direct_action={Action} route={Route} distribution={Distribution}",
+                verdict.Kind, string.Join(",", verdict.Reasons), direct?.Plan.Action, route.Route,
+                route.RawAnswers?.GetValueOrDefault("route")?.HasDistribution == true ? "present" : "distribution_absent");
+            return verdict;
+        }
+        async ValueTask<DirectOffer?> LazyDirectOffer(CancellationToken ct)
+        {
+            var direct = await GetDirect().ConfigureAwait(false);
+            var verdict = Evaluate(direct, offer: true);
+            return verdict.Program is { } program
+                ? FrontDoorArbiter.Offer(program, _catalog, decisionState.OpenWindows) : null;
+        }
+        void Rescue(DecisionResult direct, FrontDoorVerdictKind verdictKind)
+        {
+            route = run.Route = route with { Route = CommandRoute.DirectCapability,
+                Reason = RoutingReason.DirectRescue, Detail = "Direct rescue of an uncertain route." };
+            run.Lane = route.Route.ToString();
+            run.Decision = direct;
+            run.FrontDoor = run.FrontDoor! with { Kind = verdictKind };
+        }
+        if (_config.SpeculativeDirectDecision && _decisionEngine is not null && _commandRouter is not null)
+            run.SpeculativeTask = directTask = StartDirect(true);
         var routeTimer = Stopwatch.StartNew();
         try
         {
@@ -489,6 +545,11 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         routeTimer.Stop();
         trace.Record("route", routeTimer.Elapsed.TotalMilliseconds);
         run.InitialRoute = run.Route = route;
+        if (_config.DirectRescue && FrontDoorArbiter.IsEligible(route))
+        {
+            var direct = await GetDirect().ConfigureAwait(false);
+            if (Evaluate(direct).Kind == FrontDoorVerdictKind.RescueDirect) Rescue(direct!, FrontDoorVerdictKind.RescueDirect);
+        }
         _logger.LogInformation("Command route heads destination_kind={DestinationKind} destination={Destination} tab_disposition={TabDisposition} context_dependency={ContextDependency} task_relation={TaskRelation} surface_preference={SurfacePreference} goal_shape={GoalShape} end_state={EndState}",
             route.DestinationKind, route.DestinationName ?? "-", route.TabDisposition, route.ContextDependency,
             route.TaskRelation, route.SurfacePreference, route.GoalShape, route.EndState);
@@ -511,7 +572,10 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
 
         executionContext = collected.Snapshot with
         {
-            RecentTask = RecentTaskPolicy.ExposedForScope(exposedRecentTask, route)
+            RecentTask = RecentTaskPolicy.ExposedForScope(exposedRecentTask, route),
+            FrontDoor = !_config.FrontDoorGrounding ? null : collected.Snapshot.FrontDoor! with {
+                RecentTask = RecentTaskPolicy.ExposedForScope(exposedRecentTask, route) is null
+                    ? null : collected.Snapshot.FrontDoor.RecentTask }
         };
         run.ExecutionContext = executionContext;
         var scopeTimer = Stopwatch.StartNew();
@@ -520,7 +584,8 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         {
             executionScope = await _scopeResolver.ResolveAsync(transcript, route,
                 executionContext, _commandRouter as IContextualScopeDecisionSource,
-                _shutdown.Token).ConfigureAwait(false);
+                _shutdown.Token, directOffer: _config.DirectRescue ? LazyDirectOffer : null,
+                grounded: _config.FrontDoorGrounding).ConfigureAwait(false);
         }
         catch (Exception ex) when (ex is not OperationCanceledException || !_shutdown.IsCancellationRequested)
         {
@@ -531,6 +596,12 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         scopeTimer.Stop();
         trace.Record("scope", scopeTimer.Elapsed.TotalMilliseconds);
         run.Scope = executionScope;
+        if (executionScope.Detail == "contextual_direct")
+            Rescue((await GetDirect().ConfigureAwait(false))!, FrontDoorVerdictKind.ContextualDirect);
+        if (executionScope.Kind == ExecutionScopeKind.DirectCapability && run.Decision is null
+            && route.MediaOperation is null && _decisionEngine is not null)
+            run.Decision = await GetDirect().ConfigureAwait(false);
+        trace.Record("front_door", frontDoorTimer.Elapsed.TotalMilliseconds);
         _logger.LogInformation("Execution scope={Scope} browser_scope={BrowserScope} tab={TabId} detail={Detail}",
             executionScope.Kind, executionScope.Browser?.Kind, executionScope.Browser?.TabId,
             executionScope.Detail);
@@ -598,6 +669,15 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                     prepared.Detail));
                 return;
             }
+            if (_config.DirectRescue && FrontDoorArbiter.IsEligible(route, nativeFallback: true))
+            {
+                var direct = await GetDirect().ConfigureAwait(false);
+                if (Evaluate(direct, nativeFallback: true).Kind == FrontDoorVerdictKind.RescueDirect)
+                {
+                    Rescue(direct!, FrontDoorVerdictKind.RescueDirect);
+                    goto directExecution;
+                }
+            }
             run.Outcome = "Unsupported";
             PublishSnapshot(new(ApplicationInteractionPhase.Failed, kind,
                 transcript, "Native UI interaction is not enabled yet."));
@@ -617,17 +697,18 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             return;
         }
 
+    directExecution:
         PublishSnapshot(new(ApplicationInteractionPhase.Observing, kind,
             transcript, "Collecting direct capabilities"));
         if (_decisionEngine is not null || route.MediaOperation is not null)
         {
-            if (route.MediaOperation is { } mediaOperation)
+            if (run.Decision is null && route.MediaOperation is { } mediaOperation)
             {
                 var plan = new VoicePlan(VoiceAction.MediaControl, Media: mediaOperation, Confidence: 1);
                 run.Decision = new DecisionResult(plan, SemanticProgramPlanner.ToSingleStepProgram(plan),
                     new Dictionary<string, JevAnswer>(), 0, 0, 0);
             }
-            else if (_decisionEngine is not null)
+            else if (run.Decision is null && _decisionEngine is not null)
             {
                 PublishState(kind, ActivationState.Understanding);
                 PublishSnapshot(new(ApplicationInteractionPhase.Deciding, kind,
@@ -635,7 +716,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 run.JevStart = DateTimeOffset.UtcNow;
                 try
                 {
-                    run.Decision = await _decisionEngine.DecideAsync(decisionState).ConfigureAwait(false);
+                    run.Decision = await GetDirect().ConfigureAwait(false);
                 }
                 catch (Exception ex) when (ex is not OperationCanceledException || !_shutdown.IsCancellationRequested)
                 {
@@ -644,7 +725,6 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                     return;
                 }
                 run.JevEnd = DateTimeOffset.UtcNow;
-                trace.Record("direct_decision", (run.JevEnd.Value - run.JevStart.Value).TotalMilliseconds);
             }
             if (run.Decision?.ProviderFailed == true)
             {
@@ -663,11 +743,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
 
         if (_programExecutor is not null && run.Decision is { } decision && decisionState is not null)
         {
-            var compoundAttempted = decision.RawAnswers.TryGetValue("is_compound", out var compound)
-                && compound.QuestionType == "noul"
-                && compound.Probabilities.GetValueOrDefault("noul") >= SemanticProgramPlanner.NoulDecisionBoundary;
-            var program = decision.Program
-                ?? (compoundAttempted ? null : SemanticProgramPlanner.ToSingleStepProgram(decision.Plan));
+            var program = FrontDoorArbiter.ProgramFor(decision);
             run.Program = program;
 
             var targetVerdict = reroutedFromDirect ? DirectTargetVerdict.Proceed
@@ -703,8 +779,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             }
 
             if (_commandRouter is not null
-                && program?.Steps.Any(static step => step is MediaControlStep) == true
-                && route.MediaRequestKind != MediaRequestKind.Transport)
+                && !DirectMediaGuard.Allows(route, program))
             {
                 _logger.LogWarning("Direct media execution blocked: media_request_kind={MediaRequestKind}",
                     route.MediaRequestKind);
