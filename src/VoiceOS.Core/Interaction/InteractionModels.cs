@@ -45,7 +45,8 @@ public sealed record InteractionObservation(
     long Revision,
     string StateKey,
     string Evidence,
-    IReadOnlyList<InteractionCandidate> Candidates);
+    IReadOnlyList<InteractionCandidate> Candidates,
+    IReadOnlyList<Effect>? Effects = null);
 
 public enum InteractionResultStatus
 {
@@ -61,13 +62,16 @@ public enum InteractionResultStatus
     PlatformFailure
 }
 
-public sealed record InteractionActionResult(InteractionResultStatus Status, string? Detail = null)
+public sealed record InteractionActionResult(
+    InteractionResultStatus Status, string? Detail = null, IReadOnlyList<Effect>? Effects = null)
 {
     public bool Succeeded => Status == InteractionResultStatus.Success;
     public bool IsFailure => !Succeeded;
 
-    public static InteractionActionResult Ok(string? detail = null) => new(InteractionResultStatus.Success, detail);
-    public static InteractionActionResult Fail(InteractionResultStatus status, string detail) => new(status, detail);
+    public static InteractionActionResult Ok(string? detail = null, IReadOnlyList<Effect>? effects = null)
+        => new(InteractionResultStatus.Success, detail, effects);
+    public static InteractionActionResult Fail(InteractionResultStatus status, string detail, IReadOnlyList<Effect>? effects = null)
+        => new(status, detail, effects);
 }
 
 public enum InteractionCompletionState
@@ -147,7 +151,8 @@ public sealed record InteractionRunResult(
     IReadOnlyList<InteractionHistoryEntry> RecentHistory,
     InteractionProgress Progress,
     string? Detail = null,
-    IReadOnlyList<InteractionChoice>? Choices = null);
+    IReadOnlyList<InteractionChoice>? Choices = null,
+    IReadOnlyList<Effect>? Effects = null);
 
 public interface IInteractionSurface
 {

@@ -28,11 +28,13 @@ public sealed class InteractionEngine
         var token = timeout.Token;
 
         var history = new List<InteractionHistoryEntry>();
+        var ledger = new EffectLedger();
         var rejectedCompletionStates = new HashSet<string>(StringComparer.Ordinal);
         var progress = new InteractionProgress(0, 0, 0, 0);
         double previousGoalConfidence = 0;
         bool awaitingProgressJudgment = false;
         var observation = await surface.ObserveAsync(token).ConfigureAwait(false);
+        ledger.Append(observation.Effects);
 
         while (progress.Decisions < budget.MaxDecisions && progress.Actions < budget.MaxActions)
         {
@@ -61,6 +63,7 @@ public sealed class InteractionEngine
             if (decision.Completion == InteractionCompletionState.Complete)
             {
                 var fresh = await surface.ObserveAsync(token).ConfigureAwait(false);
+                ledger.Append(fresh.Effects);
                 if (!StringComparer.Ordinal.Equals(observation.StateKey, fresh.StateKey))
                 {
                     progress = progress with
@@ -133,6 +136,7 @@ public sealed class InteractionEngine
             }
 
             progress = progress with { Actions = progress.Actions + 1 };
+            ledger.Append(result.Effects, action.Id);
             if (result.Status == InteractionResultStatus.TopologyAmbiguous)
             {
                 AddHistory(action, result, observation.StateKey, suppressed: false,
@@ -141,10 +145,15 @@ public sealed class InteractionEngine
                     result.Detail ?? "The browser action changed tabs ambiguously.");
             }
             var next = await surface.ObserveAfterActionAsync(token).ConfigureAwait(false);
+            ledger.Append(next.Effects, action.Id);
             var changed = !StringComparer.Ordinal.Equals(observation.StateKey, next.StateKey);
             if (result.Succeeded && !changed)
+            {
                 result = InteractionActionResult.Fail(InteractionResultStatus.NoEffect,
                     result.Detail ?? "The action reported success but observable state did not change.");
+                ledger.Append([new Effect(EffectKind.NoEffect, EffectSource.EngineRule, EffectStrength.Derived,
+                    Data: new Dictionary<string, string> { ["reason"] = "state_unchanged" })], action.Id);
+            }
 
             AddHistory(action, result, next.StateKey, suppressed: false, next.Evidence);
             progress = progress with
@@ -187,7 +196,7 @@ public sealed class InteractionEngine
             InteractionCompletionState state,
             string? detail,
             IReadOnlyList<InteractionChoice>? choices = null)
-            => new(state, observation, history.ToArray(), progress, detail, choices);
+            => new(state, observation, history.ToArray(), progress, detail, choices, ledger.All.ToArray());
 
         static IReadOnlyList<InteractionChoice> CompletionChoices() =>
         [
