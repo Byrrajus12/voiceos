@@ -9,6 +9,23 @@ const tabLineage = new Map(); // childTabId -> { openerTabId, sessionId }
 const taskLastUsed = new Map();
 let taskUseSequence = 0;
 
+// TEMPORARY (browser-history investigation): full-URL navigation-chain tracing for one physical run.
+// View in chrome://extensions > VoiceOS companion > service worker console; filter "HISTORY-TRACE".
+const HISTORY_TRACE = true;
+async function historyTrace(tabId, stage, extra = {}) {
+  if (!HISTORY_TRACE) return;
+  let page = null;
+  try {
+    const [probe] = await chrome.scripting.executeScript({ target: { tabId }, func: () => ({
+      url: location.href, historyLength: history.length,
+      navType: performance.getEntriesByType("navigation")[0]?.type ?? null,
+      everActivated: navigator.userActivation?.hasBeenActive ?? null }) });
+    page = probe?.result ?? null;
+  } catch (error) { page = { error: String(error?.message ?? error) }; }
+  console.info("VoiceOS HISTORY-TRACE", new Date().toISOString(), `tab=${tabId}`, stage,
+    JSON.stringify({ owned: ownedTaskTabs.has(tabId), adopted: adoptedUserTabs.has(tabId), page, ...extra }));
+}
+
 let nativePort = null;
 let connecting = false;
 
@@ -229,8 +246,10 @@ async function selectTab(payload) {
     adoptedUserTabs.add(tabId);
     await persistOwnedTabs();
   }
+  await historyTrace(tabId, "select:before-focus", { expectedUrl: payload.expectedUrl });
   await focusOwnedTab(tabId, sessionId);
   await markTaskUsed(tabId);
+  await historyTrace(tabId, "select:after-focus");
   const selected = await chrome.tabs.get(tabId);
   if (selected.url !== payload.expectedUrl)
     throw protocolError("STALE_TAB", "The selected tab changed while focusing.");
@@ -252,6 +271,7 @@ async function openTaskTab(payload) {
   const mark = (key) => { if (timings[key] === null) timings[key] = Date.now() - commandAt; };
 
   const tab = await chrome.tabs.create({ url: url.href, active: true });
+  console.info("VoiceOS HISTORY-TRACE", new Date().toISOString(), `tab=${tab.id}`, "OPEN_TASK_TAB:tabs.create", url.origin);
   if (!Number.isInteger(tab.id)) throw protocolError("TAB_CREATE_FAILED", "Chrome did not return a task tab id.");
   mark("created");
   ownedTaskTabs.set(tab.id, sessionId);
@@ -368,6 +388,7 @@ async function actInOwnedTab(payload) {
   const isNavAction = action === "CLICK" || isTraversal;
   if (isNavAction) traceTask(tabId, "navigation-act", { action, elementRef: payload.elementRef });
 
+  if (isNavAction) await historyTrace(tabId, `act:${action}:before`);
   const commandAt = Date.now();
   const timings = { dispatched: null, signal: "none", signalAt: null, committed: null,
     domContentLoaded: null, settled: null, settleReason: null, observed: null };
@@ -475,6 +496,7 @@ async function actInOwnedTab(payload) {
   await markTaskUsed(tabId);
   const snapshot = await observeOwnedTab({ tabId, sessionId });
   mark("observed");
+  if (isNavAction) await historyTrace(tabId, `act:${action}:after`, { signal: timings.signal });
   return { snapshot, timings };
 }
 
