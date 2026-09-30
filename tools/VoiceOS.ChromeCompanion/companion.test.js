@@ -830,3 +830,168 @@ test("content observe marks the search field via a [role=search] ancestor, indep
   assert.equal(observation.elements[0].search, true);
   assert.equal(observation.elements[1].search, false);
 });
+
+// ---- Chrome-owned session history, task lineage and ownership (browser-history) ----
+// A small stateful model of Chrome's per-tab session history. Entries created by VoiceOS's
+// synthetic clicks are not user-activated, so chrome.tabs.goBack skips them (history-manipulation
+// intervention) while the page's own history.back() traverses them - as observed in real Chrome.
+// VoiceOS therefore traverses through the page first.
+function historyChrome(initialTabs) {
+  const tabsState = new Map();
+  for (const [id, spec] of Object.entries(initialTabs))
+    tabsState.set(Number(id), { entries: [...spec.entries], index: spec.entries.length - 1,
+      activated: new Set(spec.activated ?? []), opener: spec.opener });
+  const calls = { create: 0, remove: 0, goBack: 0, pageTraversals: 0, focused: [] };
+  let fireRef;
+  const current = (id) => tabsState.get(id).entries[tabsState.get(id).index];
+  const tabRecord = (id) => ({ id, windowId: 1, active: true, status: "complete", url: current(id),
+    openerTabId: tabsState.get(id).opener });
+  const move = (id, target) => {
+    tabsState.get(id).index = target;
+    setTimeout(() => {
+      fireRef("nav-before", { tabId: id, frameId: 0 });
+      fireRef("nav-committed", { tabId: id, frameId: 0, transitionQualifiers: ["forward_back"] });
+      fireRef("nav-dcl", { tabId: id, frameId: 0 });
+    }, 5);
+  };
+  const created = createMockChrome({
+    tabs: {
+      query: async () => [...tabsState.keys()].map(tabRecord),
+      get: async (id) => { if (!tabsState.has(id)) throw new Error("No tab"); return tabRecord(id); },
+      create: async () => { calls.create++; return { id: 999, windowId: 1 }; },
+      remove: async (id) => { calls.remove++; tabsState.delete(id); },
+      update: async (id, props) => { calls.focused.push(id); return { ...tabRecord(id), ...props }; },
+      goBack: async (id) => {
+        calls.goBack++;
+        const state = tabsState.get(id);
+        for (let i = state.index - 1; i >= 0; i--)
+          if (state.activated.has(i)) return move(id, i);
+        throw new Error("Cannot find a next page in history.");
+      },
+      sendMessage: async (id, message) => {
+        if (message.type === "VOICEOS_PING") return { ok: true };
+        if (message.type === "VOICEOS_ACT") return { acted: true, navigation: null };
+        if (message.type === "VOICEOS_SETTLE")
+          return { settled: true, reason: "quiet", waitedMs: 5, mutations: 0, actionable: true };
+        return { revision: "r2", url: current(id), title: "Page", visibleText: "", truncated: false,
+          viewport: {}, elements: [] };
+      }
+    },
+    scripting: {
+      executeScript: async ({ target, args }) => {
+        const state = tabsState.get(target.tabId);
+        const length = state.entries.length;
+        const to = state.index + (args[0] === "back" ? -1 : 1);
+        if (length > 1 && to >= 0 && to < length) { calls.pageTraversals++; move(target.tabId, to); }
+        return [{ result: length }];
+      }
+    }
+  });
+  fireRef = created.fire;
+  const context = backgroundContext(created.chrome);
+  return { ...created, context, calls, tabsState, current,
+    navigate: (id, url) => { const s = tabsState.get(id); s.entries.splice(s.index + 1); s.entries.push(url); s.index++; },
+    back: (id, session) => vm.runInContext(
+      `actInOwnedTab({ tabId: ${id}, sessionId: "${session}", revision: "r1", action: "BACK" })`, context) };
+}
+
+test("history: VOS-owned tab A->B->C by programmatic navigation goes back C->B, then B->A (Chrome history, same tab)", async () => {
+  const h = historyChrome({ 5: { entries: ["https://a.test/", "https://b.test/", "https://c.test/"] } });
+  vm.runInContext('ownedTaskTabs.set(5, "session-hist-5")', h.context);
+  const first = await h.back(5, "session-hist-5");
+  assert.equal(first.snapshot.url, "https://b.test/");
+  assert.equal(first.snapshot.tabId, 5);
+  assert.equal(h.calls.pageTraversals, 1);
+  assert.equal(h.calls.goBack, 0, "page-level history is the primary mechanism, not tabs.goBack");
+  const second = await h.back(5, "session-hist-5");
+  assert.equal(second.snapshot.url, "https://a.test/");
+  assert.equal(h.calls.create + h.calls.remove, 0, "the tab is never recreated or closed to simulate history");
+});
+
+test("history: an adopted user tab keeps its pre-existing history and is never recreated or closed", async () => {
+  const h = historyChrome({ 6: { entries: ["https://a.test/", "https://b.test/", "https://c.test/"], activated: [0, 1, 2] } });
+  const selected = await vm.runInContext(
+    'selectTab({ sessionId: "session-hist-6", tabId: 6, expectedUrl: "https://c.test/" })', h.context);
+  assert.equal(selected.tabId, 6);
+  assert.equal(vm.runInContext("adoptedUserTabs.has(6)", h.context), true);
+  h.navigate(6, "https://d.test/"); // VOS navigates within the same adopted tab
+  const observed = await vm.runInContext('observeOwnedTab({ tabId: 6, sessionId: "session-hist-6" })', h.context);
+  assert.equal(observed.adopted, true);
+  assert.equal(observed.ownedByVoiceOS, false);
+  const back = await h.back(6, "session-hist-6");
+  assert.equal(back.snapshot.tabId, 6);
+  assert.equal(back.snapshot.url, "https://c.test/");
+  assert.equal(h.tabsState.get(6).entries.length, 4, "pre-existing entries plus D are intact");
+  assert.equal(h.calls.create + h.calls.remove, 0);
+  await assert.rejects(vm.runInContext('closeTaskTab({ tabId: 6, sessionId: "session-hist-6" })', h.context),
+    error => error.code === "TAB_NOT_OWNED");
+});
+
+test("history: a child tab with no same-tab history returns to its opener; the child is left open", async () => {
+  const h = historyChrome({ 7: { entries: ["https://a.test/"] }, 8: { entries: ["https://child.test/"], opener: 7 } });
+  vm.runInContext('ownedTaskTabs.set(7, "session-hist-7"); ownedTaskTabs.set(8, "session-hist-7"); tabLineage.set(8, { openerTabId: 7, sessionId: "session-hist-7" })', h.context);
+  const result = await h.back(8, "session-hist-7");
+  assert.equal(result.snapshot.tabId, 7);
+  assert.equal(result.snapshot.returnedFromTabId, 8);
+  assert.equal(result.timings.signal, "opener");
+  assert.equal(h.calls.remove, 0);
+  assert.ok(h.calls.focused.includes(7));
+});
+
+test("history: lineage is recorded from Chrome's opener for a child of an owned tab and grants no ownership", async () => {
+  const h = historyChrome({ 9: { entries: ["https://a.test/"] } });
+  await vm.runInContext('selectTab({ sessionId: "session-hist-9", tabId: 9, expectedUrl: "https://a.test/" })', h.context);
+  h.tabsState.set(10, { entries: ["https://child.test/"], index: 0, activated: new Set(), opener: 9 });
+  h.fire("tabs-created", { id: 10, openerTabId: 9 });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(vm.runInContext("tabLineage.get(10)?.openerTabId", h.context), 9);
+  assert.equal(vm.runInContext("ownedTaskTabs.has(10)", h.context), false);
+});
+
+test("history: a fresh tab with no history and no lineage is NO_HISTORY (no previous page)", async () => {
+  const h = historyChrome({ 11: { entries: ["about:blank"] } });
+  vm.runInContext('ownedTaskTabs.set(11, "session-hist-11")', h.context);
+  await assert.rejects(h.back(11, "session-hist-11"), error => error.code === "NO_HISTORY");
+  assert.equal(h.calls.remove, 0);
+});
+
+test("history: a child whose opener is gone, and a tab with only forward entries, are NO_HISTORY", async () => {
+  const h = historyChrome({ 12: { entries: ["https://child.test/"], opener: 7 }, 13: { entries: ["https://x.test/", "https://y.test/"] } });
+  vm.runInContext('ownedTaskTabs.set(12, "session-hist-12"); tabLineage.set(12, { openerTabId: 7, sessionId: "session-hist-12" }); ownedTaskTabs.set(13, "session-hist-13")', h.context);
+  await assert.rejects(h.back(12, "session-hist-12"), error => error.code === "NO_HISTORY");
+  h.tabsState.get(13).index = 0;
+  await assert.rejects(h.back(13, "session-hist-13"), error => error.code === "NO_HISTORY");
+});
+
+test("history: tab identity and ownership stay stable through ordinary same-tab navigation", async () => {
+  const h = historyChrome({ 14: { entries: ["https://a.test/"] } });
+  vm.runInContext('ownedTaskTabs.set(14, "session-hist-14")', h.context);
+  h.navigate(14, "https://b.test/");
+  const observed = await vm.runInContext('observeOwnedTab({ tabId: 14, sessionId: "session-hist-14" })', h.context);
+  assert.equal(observed.tabId, 14);
+  assert.equal(observed.url, "https://b.test/");
+  assert.equal(observed.ownedByVoiceOS, true);
+  assert.equal(vm.runInContext("ownedTaskTabs.get(14)", h.context), "session-hist-14");
+  assert.equal(h.calls.create, 0);
+});
+
+test("history: Forward mirrors Back through the page session history; a Back-less tab has no Forward to fake", async () => {
+  const h = historyChrome({ 15: { entries: ["https://a.test/", "https://b.test/", "https://c.test/"] } });
+  vm.runInContext('ownedTaskTabs.set(15, "session-hist-15")', h.context);
+  await h.back(15, "session-hist-15");
+  const forward = await vm.runInContext(
+    'actInOwnedTab({ tabId: 15, sessionId: "session-hist-15", revision: "r1", action: "FORWARD" })', h.context);
+  assert.equal(forward.snapshot.url, "https://c.test/");
+  await assert.rejects(vm.runInContext(
+    'actInOwnedTab({ tabId: 15, sessionId: "session-hist-15", revision: "r1", action: "FORWARD" })', h.context),
+    error => error.code === "NO_HISTORY");
+});
+
+test("history: when the page cannot be scripted, Chrome's tab API is the fallback for Back", async () => {
+  const h = historyChrome({ 16: { entries: ["https://a.test/", "https://b.test/"], activated: [0] } });
+  h.chrome.scripting.executeScript = async () => { throw new Error("Cannot access contents of the page."); };
+  vm.runInContext('ownedTaskTabs.set(16, "session-hist-16")', h.context);
+  const result = await h.back(16, "session-hist-16");
+  assert.equal(result.snapshot.url, "https://a.test/");
+  assert.equal(h.calls.goBack, 1);
+});

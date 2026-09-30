@@ -233,6 +233,43 @@ public sealed class BrowserSurfaceTests
         Assert.NotNull(after.Candidates.SingleOrDefault(c => c.Id == "e9"));
     }
 
+    [Fact]
+    public async Task BackFromChildWithoutHistory_ReturnsToOpener_AsATypedSurfaceTransition()
+    {
+        var session = "back-session-opener";
+        var child = ButtonSnapshot(session, 9, "e1") with { CanGoBack = true };
+        var opener = ButtonSnapshot(session, 7, "e1") with { Revision = "rev-opener", ReturnedFromTabId = 9 };
+        var transport = new FakeTransport([child, opener]);
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("go back"), new NeverComplete(), session);
+        var observation = await surface.ObserveAsync();
+
+        var result = await surface.ExecuteAsync(BackAction(observation), observation);
+
+        Assert.True(result.Succeeded);
+        Assert.Equal(7, surface.TabId);
+        Assert.DoesNotContain(result.Effects!, static e => e.Kind == EffectKind.HistoryMoved);
+        var next = await surface.ObserveAfterActionAsync();
+        var acquired = Assert.Single(next.Effects!);
+        Assert.Equal(EffectKind.SurfaceAcquired, acquired.Kind);
+        Assert.Equal("returned_to_opener", acquired.Get("mode"));
+        Assert.Equal("9", acquired.Get("fromTabId"));
+    }
+
+    [Fact]
+    public async Task BackThatChangesTabsWithoutReturnEvidence_StaysTopologyAmbiguous()
+    {
+        var session = "back-session-other-tab";
+        var current = ButtonSnapshot(session, 9, "e1") with { CanGoBack = true };
+        var elsewhere = ButtonSnapshot(session, 7, "e1");
+        var transport = new FakeTransport([current, elsewhere]);
+        var surface = new BrowserSurface(transport, BrowserGoal.FromUtterance("go back"), new NeverComplete(), session);
+        var observation = await surface.ObserveAsync();
+
+        var result = await surface.ExecuteAsync(BackAction(observation), observation);
+
+        Assert.Equal(InteractionResultStatus.TopologyAmbiguous, result.Status);
+    }
+
     [Theory]
     [InlineData("NO_HISTORY", InteractionResultStatus.NoEffect)]
     [InlineData("NAVIGATION_NOT_OBSERVED", InteractionResultStatus.NoEffect)]

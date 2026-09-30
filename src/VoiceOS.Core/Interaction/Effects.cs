@@ -74,7 +74,7 @@ public sealed record Effect(
     }
 
     private static readonly string[] SafeDataKeys =
-        ["mode", "signal", "reason", "matched", "subjectPresent", "toOrigin", "fromTabId"];
+        ["mode", "signal", "direction", "reason", "matched", "subjectPresent", "toOrigin", "fromTabId"];
 }
 
 /// <summary>Append-only record of the effects of one interaction run.</summary>

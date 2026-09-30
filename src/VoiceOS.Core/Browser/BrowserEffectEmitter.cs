@@ -25,7 +25,7 @@ internal static class BrowserEffectEmitter
         => new(snapshot.TabId, snapshot.SessionId, revision, null, Hash(snapshot.Url),
             snapshot.Title, "page", snapshot.Url);
 
-    /// <summary>A task tab was opened (mode=opened) or continued into a child tab (mode=adopted).</summary>
+    /// <summary>A task tab was opened (mode=opened), continued into a child tab (mode=adopted), or returned to its opener (mode=returned_to_opener).</summary>
     internal static Effect SurfaceAcquired(BrowserSnapshot snapshot, long revision, string mode, int? fromTabId = null)
     {
         var data = new Dictionary<string, string>
@@ -78,14 +78,18 @@ internal static class BrowserEffectEmitter
                 break;
 
             case InteractionActionKind.GoBack:
-                effects.Add(new(EffectKind.HistoryMoved, EffectSource.CompanionResponse, EffectStrength.Observed, null,
-                    WithSignal(new() { ["from"] = before.Url, ["to"] = after.Url }, signal)));
+                // Returning to the opener tab is reported as SurfaceAcquired(mode=returned_to_opener)
+                // by the next observation; only a same-tab traversal is HistoryMoved.
+                if (!adopted)
+                    effects.Add(new(EffectKind.HistoryMoved, EffectSource.CompanionResponse, EffectStrength.Observed, null,
+                        WithSignal(new() { ["direction"] = "back", ["from"] = before.Url, ["to"] = after.Url }, signal)));
                 break;
         }
         return effects;
     }
 
-    /// <summary>The companion confirmed that nothing happened (NO_HISTORY, NAVIGATION_NOT_OBSERVED).</summary>
+    /// <summary>The companion confirmed that nothing happened (NO_HISTORY, NAVIGATION_NOT_OBSERVED).
+    /// NO_HISTORY is the "no previous page" outcome: no same-tab history and no opener to return to.</summary>
     internal static IReadOnlyList<Effect> ForNoEffectFailure(string code)
         => [new(EffectKind.NoEffect, EffectSource.CompanionResponse, EffectStrength.Observed, null,
             new Dictionary<string, string> { ["reason"] = code })];

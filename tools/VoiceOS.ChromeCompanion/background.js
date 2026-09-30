@@ -3,6 +3,9 @@ const PROTOCOL_VERSION = 1;
 const RECONNECT_ALARM = "voiceos-native-reconnect";
 const ownedTaskTabs = new Map(); // tabId -> opaque VoiceOS session id
 const adoptedUserTabs = new Set();
+// Task lineage only: child tabId -> the tab it was opened from. Chrome owns each tab's own
+// navigation history; this exists solely so a child with no same-tab history can return to its opener.
+const tabLineage = new Map(); // childTabId -> { openerTabId, sessionId }
 const taskLastUsed = new Map();
 let taskUseSequence = 0;
 
@@ -22,7 +25,16 @@ chrome.tabs.onRemoved.addListener((tabId) => {
     ownedTaskTabs.delete(tabId);
     adoptedUserTabs.delete(tabId);
     taskLastUsed.delete(tabId);
+    tabLineage.delete(tabId);
     void persistOwnedTabs();
+  }
+});
+chrome.tabs.onCreated?.addListener(async (tab) => {
+  await ownedTabsReady;
+  const opener = tab.openerTabId;
+  if (Number.isInteger(tab.id) && Number.isInteger(opener) && ownedTaskTabs.has(opener)) {
+    tabLineage.set(tab.id, { openerTabId: opener, sessionId: ownedTaskTabs.get(opener) });
+    await persistOwnedTabs();
   }
 });
 chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
@@ -92,7 +104,7 @@ function scheduleReconnect() {
 }
 
 async function restoreOwnedTabs() {
-  const stored = await chrome.storage.session.get(["ownedTaskTabs", "adoptedUserTabs", "taskLastUsed", "taskUseSequence"]);
+  const stored = await chrome.storage.session.get(["ownedTaskTabs", "adoptedUserTabs", "taskLastUsed", "taskUseSequence", "tabLineage"]);
   taskUseSequence = Number.isSafeInteger(stored.taskUseSequence) ? stored.taskUseSequence : 0;
   for (const [tabId, sessionId] of stored.ownedTaskTabs ?? []) {
     try {
@@ -102,6 +114,10 @@ async function restoreOwnedTabs() {
   }
   for (const tabId of stored.adoptedUserTabs ?? [])
     if (ownedTaskTabs.has(Number(tabId))) adoptedUserTabs.add(Number(tabId));
+  for (const [childId, lineage] of stored.tabLineage ?? [])
+    if (Number.isInteger(lineage?.openerTabId) && typeof lineage?.sessionId === "string") {
+      try { await chrome.tabs.get(Number(childId)); tabLineage.set(Number(childId), lineage); } catch { /* closed */ }
+    }
   for (const [tabId, sequence] of stored.taskLastUsed ?? [])
     if (ownedTaskTabs.has(Number(tabId)) && Number.isSafeInteger(sequence))
       taskLastUsed.set(Number(tabId), sequence);
@@ -111,7 +127,7 @@ async function restoreOwnedTabs() {
 function persistOwnedTabs() {
   return chrome.storage.session.set({ ownedTaskTabs: Array.from(ownedTaskTabs.entries()),
     adoptedUserTabs: Array.from(adoptedUserTabs), taskLastUsed: Array.from(taskLastUsed.entries()),
-    taskUseSequence });
+    tabLineage: Array.from(tabLineage.entries()), taskUseSequence });
 }
 
 async function markTaskUsed(tabId) {
@@ -319,13 +335,26 @@ async function observeOwnedTab(payload) {
   const { tabId, sessionId } = assertOwnedTab(payload?.tabId, payload?.sessionId);
   await ensureContentScript(tabId);
   const snapshot = await sendContentMessage(tabId, { type: "VOICEOS_OBSERVE" });
-  return { tabId, sessionId, ...snapshot };
+  return { tabId, sessionId, ...snapshot, ...(await tabFacts(tabId)) };
+}
+
+// Grounded navigation facts for an owned tab. Chrome exposes no back/forward entry count to
+// extensions, so canGoBack stays the page's own history hint (content.js); the authoritative
+// answer to "can this tab go back" is the traversal attempt itself.
+async function tabFacts(tabId) {
+  const facts = { ownedByVoiceOS: !adoptedUserTabs.has(tabId), adopted: adoptedUserTabs.has(tabId),
+    openerTabId: tabLineage.get(tabId)?.openerTabId ?? null, documentId: null };
+  try {
+    const frame = await chrome.webNavigation.getFrame?.({ tabId, frameId: 0 });
+    if (typeof frame?.documentId === "string") facts.documentId = frame.documentId;
+  } catch { /* documentId is best-effort */ }
+  return facts;
 }
 
 async function actInOwnedTab(payload) {
   const { tabId, sessionId } = assertOwnedTab(payload?.tabId, payload?.sessionId);
   const action = payload?.action;
-  if (!["CLICK", "REPLACE_TEXT", "INSERT_TEXT", "SCROLL", "BACK", "SUBMIT"].includes(action))
+  if (!["CLICK", "REPLACE_TEXT", "INSERT_TEXT", "SCROLL", "BACK", "FORWARD", "SUBMIT"].includes(action))
     throw protocolError("INVALID_ACTION", "The requested browser action is not supported.");
   if (typeof payload?.revision !== "string")
     throw protocolError("INVALID_ACTION", "revision must be a string.");
@@ -335,7 +364,8 @@ async function actInOwnedTab(payload) {
       && (typeof payload?.text !== "string" || payload.text.length > 2_000))
     throw protocolError("INVALID_TEXT", "Text must be a string of at most 2000 characters.");
 
-  const isNavAction = action === "CLICK" || action === "BACK" || action === "SUBMIT";
+  const isTraversal = action === "BACK" || action === "FORWARD";
+  const isNavAction = action === "CLICK" || action === "SUBMIT" || isTraversal;
   if (isNavAction) traceTask(tabId, "navigation-act", { action, elementRef: payload.elementRef });
 
   const commandAt = Date.now();
@@ -346,9 +376,10 @@ async function actInOwnedTab(payload) {
   const beforeTabs = isNavAction ? await chrome.tabs.query({}) : null;
   const sourceTab = beforeTabs?.find(tab => tab.id === tabId);
 
-  const isBack = action === "BACK";
-  const watcher = isNavAction ? watchActionSignals(tabId, commandAt, { traversal: isBack }) : null;
+  const watcher = isNavAction ? watchActionSignals(tabId, commandAt, { traversal: isTraversal }) : null;
   let actionResult;
+  let traversalVia = null;
+  let noHistory = null;
 
   try {
     await ensureContentScript(tabId);
@@ -357,7 +388,10 @@ async function actInOwnedTab(payload) {
       type: "VOICEOS_ACT", revision: payload.revision, elementRef: payload.elementRef,
       action, text: payload.text, direction: payload.direction
     });
-    if (isBack) await goBackInTab(tabId);
+    if (isTraversal) {
+      try { traversalVia = await traverseHistory(tabId, action === "BACK" ? "back" : "forward"); }
+      catch (error) { if (error?.code !== "NO_HISTORY") throw error; noHistory = error; }
+    }
     mark("dispatched");
     traceTask(tabId, "action-dispatch", { action, elapsedMs: Date.now() - actionStart });
     if (actionResult?.navigation)
@@ -366,9 +400,9 @@ async function actInOwnedTab(payload) {
         origin: safeOrigin(actionResult.navigation.href)
       });
     const readinessStart = Date.now();
-    if (watcher) {
+    if (watcher && !noHistory) {
       const outcome = await waitForClickEffects(tabId, watcher, actionStart,
-        isBack ? BACK_NO_SIGNAL_MS : CLICK_NO_SIGNAL_MS) ?? {};
+        isTraversal ? BACK_NO_SIGNAL_MS : CLICK_NO_SIGNAL_MS) ?? {};
       timings.signal = outcome.signal ?? "none";
       if (outcome.signalAt != null) mark("signalAt");
       timings.committed = watcher.marks.committed;
@@ -377,13 +411,26 @@ async function actInOwnedTab(payload) {
         mark("settled");
         timings.settleReason = outcome.settled.reason ?? null;
       }
-    } else await delay(100);
+    } else if (!noHistory) await delay(100);
     traceTask(tabId, "action-readiness", { action, elapsedMs: Date.now() - readinessStart, signal: timings.signal });
   } finally {
     watcher?.stop();
   }
 
-  if (isBack) await confirmBackTraversal(tabId, sourceTab?.url, watcher.marks);
+  if (isTraversal) {
+    try {
+      if (noHistory) throw noHistory;
+      await confirmTraversal(tabId, sourceTab?.url, watcher.marks, traversalVia);
+    } catch (error) {
+      // Task-level Back: a child tab with no same-tab history returns to the tab it was opened
+      // from. Forward is never faked across tabs.
+      if (error?.code === "NO_HISTORY" && action === "BACK") {
+        const returned = await returnToOpener(tabId, sessionId, timings);
+        if (returned) return returned;
+      }
+      throw error;
+    }
+  }
 
   if (beforeTabs) {
     const afterTabs = await chrome.tabs.query({});
@@ -410,7 +457,11 @@ async function actInOwnedTab(payload) {
           throw protocolError("TAB_TOPOLOGY_AMBIGUOUS", "The new tab is not active or observable.");
         parseAllowedUrl(finalChild.url);
         ownedTaskTabs.set(child.id, sessionId);
+        tabLineage.set(child.id, { openerTabId: tabId, sessionId });
+        // A child of a user's adopted tab stays conservative: never auto-closable by VoiceOS.
+        if (adoptedUserTabs.has(tabId)) adoptedUserTabs.add(child.id);
         await markTaskUsed(child.id);
+        await persistOwnedTabs();
         traceTask(child.id, "task-tab-adopted", { fromTabId: tabId });
         const childSnapshot = await observeOwnedTab({ tabId: child.id, sessionId });
         mark("observed");
@@ -481,31 +532,64 @@ async function ensureContentScript(tabId) {
   await chrome.scripting.executeScript({ target: { tabId }, files: ["content.js"], injectImmediately: true });
 }
 
-// BACK dispatch is only a request: Chrome's tab-level traversal behaves like the user's Back
-// button (it skips entries a page pushed without user activation) and rejects outright when the
-// tab has no earlier entry.
-async function goBackInTab(tabId) {
+// History traversal is only a request; the caller confirms the effect. The primary mechanism is the
+// page's own history.back()/forward(), which walks the real session history including entries
+// VoiceOS created with synthetic clicks. chrome.tabs.goBack/goForward is only the fallback for a tab
+// the page cannot be scripted in: it honours Chrome's history-manipulation intervention, so it skips
+// entries created without trusted user activation (every VoiceOS element click) and can report "no
+// page in history" for tabs that visibly have earlier pages. Returns which mechanism was used.
+async function traverseHistory(tabId, direction) {
+  let length = null;
   try {
-    await chrome.tabs.goBack(tabId);
+    const [probe] = await chrome.scripting.executeScript({ target: { tabId },
+      func: (dir) => { const length = history.length; if (length > 1) history[dir](); return length; },
+      args: [direction] });
+    if (typeof probe?.result === "number") length = probe.result;
+  } catch { /* Not scriptable: fall back to the tab API below. */ }
+  if (length !== null) {
+    if (length <= 1)
+      throw protocolError("NO_HISTORY", `The tab has no ${direction === "back" ? "previous" : "next"} page.`);
+    return "page";
+  }
+  try {
+    await (direction === "back" ? chrome.tabs.goBack(tabId) : chrome.tabs.goForward(tabId));
+    return "chrome";
   } catch (error) {
     if (/history/i.test(String(error?.message ?? "")))
-      throw protocolError("NO_HISTORY", "The tab has no previous page to go back to.");
-    throw protocolError("NAVIGATION_FAILED", "The browser could not go back.");
+      throw protocolError("NO_HISTORY", `The tab has no ${direction === "back" ? "previous" : "next"} page.`);
+    throw protocolError("NAVIGATION_FAILED", "The browser could not navigate history.");
   }
 }
 
-// BACK succeeds only on evidence the tab actually moved backward: a committed main-frame
-// document, a same-document history traversal, or a changed tab URL. A dispatched request
-// with none of these is never reported as success.
-async function confirmBackTraversal(tabId, beforeUrl, marks) {
+// A traversal succeeds only on evidence the tab actually moved: a committed main-frame
+// document, a same-document history traversal, or a changed tab URL. When the page-level fallback
+// produced no movement there was no entry in that direction (the page's length also counts the
+// other direction), which is NO_HISTORY, not an unobserved effect.
+async function confirmTraversal(tabId, beforeUrl, marks, via) {
   if (marks.traversed) return;
   const after = await chrome.tabs.get(tabId);
   if (typeof beforeUrl === "string" && typeof after?.url === "string" && after.url !== beforeUrl) return;
   if (marks.navigationError)
-    throw protocolError("NAVIGATION_FAILED", "The browser could not go back.");
+    throw protocolError("NAVIGATION_FAILED", "The browser could not navigate history.");
   if (marks.navigationStarted || after?.pendingUrl)
-    throw protocolError("NAVIGATION_UNCONFIRMED", "Going back started, but the previous page was not confirmed.");
-  throw protocolError("NAVIGATION_NOT_OBSERVED", "Going back did not change the page.");
+    throw protocolError("NAVIGATION_UNCONFIRMED", "History traversal started, but the page was not confirmed.");
+  if (via === "page") throw protocolError("NO_HISTORY", "The tab has no page in that direction.");
+  throw protocolError("NAVIGATION_NOT_OBSERVED", "History traversal did not change the page.");
+}
+
+// The opener must still exist and belong to this same task session. The child is left open:
+// closing it is a separate ownership decision and is never made to simulate history.
+async function returnToOpener(childId, sessionId, timings) {
+  const lineage = tabLineage.get(childId);
+  if (!lineage || lineage.sessionId !== sessionId || ownedTaskTabs.get(lineage.openerTabId) !== sessionId)
+    return null;
+  try { await chrome.tabs.get(lineage.openerTabId); } catch { return null; }
+  await focusOwnedTab(lineage.openerTabId, sessionId);
+  await markTaskUsed(lineage.openerTabId);
+  traceTask(lineage.openerTabId, "task-tab-returned-to-opener", { fromTabId: childId });
+  const snapshot = await observeOwnedTab({ tabId: lineage.openerTabId, sessionId });
+  timings.signal = "opener";
+  return { snapshot: { ...snapshot, returnedFromTabId: childId }, timings };
 }
 
 // Registers navigation/tab listeners for one act(), resolving on the first observed
