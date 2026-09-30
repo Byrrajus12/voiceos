@@ -126,6 +126,42 @@ public sealed class FrontDoorArbiterTests
         Assert.Contains("route_prefers_non_direct", FrontDoorArbiter.Evaluate(route, Direct("louder", VoiceAction.AdjustVolume), Context(), Apps).Reasons);
     }
 
+    private static CommandRouteDecision Browserish => new(CommandRoute.ComputerUse, .9, MediaRequestKind: MediaRequestKind.None,
+        EndState: SemanticEndState.StateChanged);
+
+    [Fact]
+    public void DirectFirst_GroundedProgramBeatsConfidentBrowserRoute()
+    {
+        // The route is confidently browser (and its distribution prefers COMPUTER_USE): a complete grounded program still wins.
+        var route = Browserish with { RawAnswers = new Dictionary<string, JevAnswer> { ["route"] = new("choice", "COMPUTER_USE",
+            new Dictionary<string, double> { ["COMPUTER_USE"] = .8, ["DIRECT_CAPABILITY"] = .1 }, .8) } };
+        var direct = Direct("Turn the volume down to thirty percent", VoiceAction.AdjustVolume);
+        Assert.True(FrontDoorArbiter.IsDirectFirstCandidate(route, "Turn the volume down"));
+        Assert.Equal(FrontDoorVerdictKind.RescueDirect,
+            FrontDoorArbiter.Evaluate(route, direct, Context(true), Apps, transcript: "Turn the volume down", directFirst: true).Kind);
+    }
+
+    [Fact]
+    public void DirectFirst_NamedBrowserHostIsDirect_ButUnnamedForegroundBrowserIsNot()
+    {
+        var windows = new[] { new WindowCandidate("w1", "chrome", "Docs - Chrome", true) };
+        var named = Direct("Snap Chrome left", VoiceAction.SnapCurrentWindow, "chrome", named: true);
+        Assert.Equal(FrontDoorVerdictKind.RescueDirect, FrontDoorArbiter.Evaluate(Browserish, named, Context(true), Apps,
+            windows, transcript: "Snap Chrome left", directFirst: true).Kind);
+        // "Close the cookie banner" resolved by direct to the foreground window must not close the browser.
+        var implicitClose = Direct("Close the cookie banner", VoiceAction.CloseCurrentWindow);
+        var verdict = FrontDoorArbiter.Evaluate(Browserish, implicitClose, Context(true), Apps, windows,
+            transcript: "Close the cookie banner", directFirst: true);
+        Assert.Equal(FrontDoorVerdictKind.UseRoute, verdict.Kind);
+        Assert.Contains("browser_host_target", verdict.Reasons);
+    }
+
+    [Theory]
+    [InlineData(SemanticEndState.ResultsVisible)]
+    [InlineData(SemanticEndState.ResourceOpened)]
+    public void DirectFirst_ContentLevelRoutesStayBrowser(SemanticEndState endState)
+        => Assert.False(FrontDoorArbiter.IsDirectFirstCandidate(Browserish with { EndState = endState }, "open the repo"));
+
     [Fact]
     public void CompoundFailure_ProviderFailure_AndInsanePlan_Refused()
     {

@@ -499,13 +499,13 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             if (run.SpeculativeTask is not null) run.SpeculativeDirectUsed = true;
             return await directTask.ConfigureAwait(false);
         }
-        FrontDoorVerdict Evaluate(DecisionResult? direct, bool nativeFallback = false, bool offer = false)
+        FrontDoorVerdict Evaluate(DecisionResult? direct, bool nativeFallback = false, bool offer = false, bool directFirst = false)
         {
             var verdict = FrontDoorArbiter.Evaluate(route, direct, collected.Snapshot.FrontDoor!, _catalog,
-                decisionState.OpenWindows, nativeFallback, offer);
+                decisionState.OpenWindows, nativeFallback, offer, transcript, directFirst);
             var probabilities = route.RawAnswers?.GetValueOrDefault("route");
             double? P(string choice) => probabilities?.Probabilities.GetValueOrDefault(choice);
-            run.FrontDoorEvaluations.Add(new(offer ? "direct_offer" : nativeFallback ? "native_fallback" : "rescue",
+            run.FrontDoorEvaluations.Add(new(offer ? "direct_offer" : nativeFallback ? "native_fallback" : directFirst ? "direct_first" : "rescue",
                 verdict.Kind, verdict.Reasons, direct?.Plan.Action.ToString(), probabilities?.HasDistribution == true,
                 P("DIRECT_CAPABILITY"), P("COMPUTER_USE"), P("TEXT_TRANSFORM")));
             run.FrontDoor = offer && verdict.Kind == FrontDoorVerdictKind.RescueDirect
@@ -562,6 +562,14 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         {
             var direct = await GetDirect().ConfigureAwait(false);
             if (Evaluate(direct).Kind == FrontDoorVerdictKind.RescueDirect) Rescue(direct!, FrontDoorVerdictKind.RescueDirect);
+        }
+        else if (_config.DirectRescue && FrontDoorArbiter.IsDirectFirstCandidate(route, transcript))
+        {
+            // A valid, grounded direct Windows program beats a coarse browser opinion; direct was already
+            // started speculatively alongside routing, so this waits on work in flight rather than adding a call.
+            var direct = await GetDirect().ConfigureAwait(false);
+            if (Evaluate(direct, directFirst: true).Kind == FrontDoorVerdictKind.RescueDirect)
+                Rescue(direct!, FrontDoorVerdictKind.RescueDirect);
         }
         _logger.LogInformation("Command route heads destination_kind={DestinationKind} destination={Destination} tab_disposition={TabDisposition} context_dependency={ContextDependency} task_relation={TaskRelation} surface_preference={SurfacePreference} goal_shape={GoalShape} end_state={EndState}",
             route.DestinationKind, route.DestinationName ?? "-", route.TabDisposition, route.ContextDependency,

@@ -23,6 +23,26 @@ public static class FrontDoorArbiter
         => route.Route == CommandRoute.Clarify && route.Reason is RoutingReason.LowConfidence or RoutingReason.AmbiguousIntent
             || nativeFallback && route.Route == CommandRoute.NativeInteraction;
 
+    /// <summary>
+    /// A confident browser/native route may still be a plain Windows request. Direct is consulted first unless the
+    /// route carries a browser-content signal: a content-level end state, an explicit URL, a named tab, content
+    /// selection, or the word "tab" (a code-derived fact) together with a tab disposition.
+    /// </summary>
+    public static bool IsDirectFirstCandidate(CommandRouteDecision route, string transcript)
+        => route.Route == CommandRoute.ComputerUse && !HasBrowserContentSignal(route, transcript);
+
+    internal static bool HasBrowserContentSignal(CommandRouteDecision route, string transcript)
+        => route.ExplicitUrl is not null
+            || route.DestinationKind is SemanticDestinationKind.ExplicitUrl or SemanticDestinationKind.NamedTab
+            || route.MediaRequestKind == MediaRequestKind.ContentSelection
+            || route.EndState is SemanticEndState.ResultsVisible or SemanticEndState.ResourceLocated
+                or SemanticEndState.ResourceOpened or SemanticEndState.ContentActive
+            || route.TabDisposition != TabDisposition.Unspecified && MentionsTab(transcript);
+
+    private static bool MentionsTab(string transcript)
+        => System.Text.RegularExpressions.Regex.IsMatch(transcript ?? "", @"tabs?",
+            System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
     public static VoiceProgram? ProgramFor(DecisionResult direct)
     {
         var compoundAttempted = direct.RawAnswers.TryGetValue("is_compound", out var compound)
@@ -33,10 +53,11 @@ public static class FrontDoorArbiter
 
     public static FrontDoorVerdict Evaluate(CommandRouteDecision route, DecisionResult? direct,
         FrontDoorContext context, IAppCatalog? catalog, IReadOnlyList<WindowCandidate>? windows = null,
-        bool nativeFallback = false, bool skipEligibility = false)
+        bool nativeFallback = false, bool skipEligibility = false, string? transcript = null, bool directFirst = false)
     {
         var reasons = new List<string>();
-        if (!skipEligibility && !IsEligible(route, nativeFallback)) reasons.Add("route_not_eligible");
+        if (!skipEligibility && !directFirst && !IsEligible(route, nativeFallback)) reasons.Add("route_not_eligible");
+        if (directFirst && HasBrowserContentSignal(route, transcript ?? "")) reasons.Add("web_wording");
         if (direct?.ProviderFailed == true) reasons.Add("direct_unavailable");
         var program = direct is null || direct.ProviderFailed ? null : ProgramFor(direct);
         if (program is null || program.Steps.Count == 0) reasons.Add("no_program");
@@ -47,29 +68,35 @@ public static class FrontDoorArbiter
             var policy = DirectTargetPolicy.Evaluate(route, direct.Plan, program, catalog);
             if (policy != DirectTargetVerdict.Proceed) reasons.Add("policy_" + policy);
             if (!DirectMediaGuard.Allows(route, program)) reasons.Add("media_guard");
-            if (route.TabDisposition != TabDisposition.Unspecified || route.SurfacePreference == SurfacePreference.Browser
-                || route.MediaRequestKind == MediaRequestKind.ContentSelection) reasons.Add("web_wording");
+            if (!directFirst && (route.TabDisposition != TabDisposition.Unspecified || route.SurfacePreference == SurfacePreference.Browser
+                || route.MediaRequestKind == MediaRequestKind.ContentSelection)) reasons.Add("web_wording");
 
+            // Direct-first: a browser host the user actually named ("Snap Chrome left") is a Windows request; an
+            // unnamed one ("close the banner" resolved to the foreground browser) is not grounded and stays with routing.
+            bool Ungrounded(string? text) => !directFirst
+                || string.IsNullOrWhiteSpace(text) || !(transcript ?? "").Contains(text, StringComparison.OrdinalIgnoreCase);
+            bool UngroundedHost(AppEntry? app) => DirectTargetPolicy.IsGenericBrowserHost(app)
+                && Ungrounded(app!.DisplayName) && Ungrounded(app.ProcessName);
             bool BrowserTarget(VoiceTarget target, HashSet<string> visited) => target switch
             {
                 CurrentWindowTarget => context.Foreground?.Kind == ForegroundKind.Browser,
-                AppTarget app => DirectTargetPolicy.IsGenericBrowserHost(catalog?.FindById(app.AppCandidateId)),
-                CandidateWindowTarget selected => DirectTargetPolicy.IsBrowserHostProcess(
-                    windows?.FirstOrDefault(w => w.Id == selected.WindowCandidateId)?.ProcessName),
+                AppTarget app => UngroundedHost(catalog?.FindById(app.AppCandidateId)),
+                CandidateWindowTarget selected => windows?.FirstOrDefault(w => w.Id == selected.WindowCandidateId)?.ProcessName is { } process
+                    && DirectTargetPolicy.IsBrowserHostProcess(process) && Ungrounded(process),
                 StepResultTarget result when visited.Add(result.StepId) => program.Steps.FirstOrDefault(s => s.StepId == result.StepId) switch
                 {
-                    OpenAppStep open => DirectTargetPolicy.IsGenericBrowserHost(catalog?.FindById(open.App.AppCandidateId)),
+                    OpenAppStep open => UngroundedHost(catalog?.FindById(open.App.AppCandidateId)),
                     { } prior when Target(prior) is { } priorTarget => BrowserTarget(priorTarget, visited),
                     _ => false
                 },
                 _ => false
             };
-            if (program.Steps.OfType<OpenAppStep>().Any(s => DirectTargetPolicy.IsGenericBrowserHost(catalog?.FindById(s.App.AppCandidateId))))
+            if (program.Steps.OfType<OpenAppStep>().Any(s => UngroundedHost(catalog?.FindById(s.App.AppCandidateId))))
                 reasons.Add("browser_host_open");
             if (program.Steps.Any(s => Target(s) is { } target && BrowserTarget(target, [])))
                 reasons.Add("browser_host_target");
         }
-        if (route.RawAnswers?.TryGetValue("route", out var answer) == true && answer.HasDistribution)
+        if (!directFirst && route.RawAnswers?.TryGetValue("route", out var answer) == true && answer.HasDistribution)
         {
             var p = answer.Probabilities;
             if (Math.Max(p.GetValueOrDefault("COMPUTER_USE"), p.GetValueOrDefault("TEXT_TRANSFORM"))
