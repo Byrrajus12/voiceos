@@ -160,7 +160,7 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
         }
         var compiled = Parse(content, utterance);
         if (compiled is null)
-            logger?.LogWarning("Browser compile rejected provider plan: {Plan}", content.Length > 900 ? content[..900] : content);
+            logger?.LogWarning("Browser compile rejected provider plan: {Plan}", content.Length > 3000 ? content[..3000] : content);
         return compiled;
     }
 
