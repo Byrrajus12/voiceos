@@ -232,6 +232,23 @@
       return { method: "element.click", href: element instanceof HTMLAnchorElement ? element.href : null };
     }
 
+    if (message.action === "SUBMIT") {
+      // Apply the text in a field as Enter would: key events for script-driven search boxes, then the form itself
+      // when nothing handled the key.
+      if (!isEditable(element)) {
+        throw actionError("NOT_EDITABLE", "SUBMIT requires an editable control.");
+      }
+      element.focus({ preventScroll: false });
+      const init = { key: "Enter", code: "Enter", keyCode: 13, which: 13, bubbles: true, cancelable: true };
+      const down = new KeyboardEvent("keydown", init);
+      element.dispatchEvent(down);
+      element.dispatchEvent(new KeyboardEvent("keypress", init));
+      element.dispatchEvent(new KeyboardEvent("keyup", init));
+      const form = element.form ?? element.closest?.("form");
+      if (!down.defaultPrevented && form && typeof form.requestSubmit === "function") form.requestSubmit();
+      return { method: "enter", href: null };
+    }
+
     if (message.action === "REPLACE_TEXT" || message.action === "INSERT_TEXT") {
       if (!isEditable(element)) {
         throw actionError("NOT_EDITABLE", "TYPE_TEXT requires an editable control.");

@@ -113,7 +113,7 @@ internal sealed class PlannedStepEvaluator(BrowserGoal goal, IProofEvaluator leg
             return ProofVerdict.NotYet(family, "text_not_confirmed");
         // The consequence must come from an action after the one that entered the text: the submit.
         if (StringComparer.Ordinal.Equals(textSet.ActionId, action.Id)) return ProofVerdict.NotYet(family, "not_submitted");
-        if (action.Kind != InteractionActionKind.Activate) return ProofVerdict.NotYet(family, "not_submitted");
+        if (action.Kind is not (InteractionActionKind.Activate or InteractionActionKind.PressKey)) return ProofVerdict.NotYet(family, "not_submitted");
         var last = input.Effects.Where(e => StringComparer.Ordinal.Equals(e.ActionId, action.Id)).ToArray();
         if (last.Any(static e => e.Kind == EffectKind.NoEffect)) return ProofVerdict.NotYet(family, "no_effect");
         var navigated = last.FirstOrDefault(static e => e.Kind == EffectKind.Navigated);

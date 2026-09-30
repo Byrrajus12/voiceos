@@ -228,6 +228,12 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                 _logger?.LogInformation("Browser step shortcut=submit_search target={Target}", submit);
                 return InteractionDecision.Act(click);
             }
+            // No submit control in the form (a script-driven search box): Enter applies the field.
+            if (typed is not null && Offered(typed.Id, InteractionActionKind.PressKey) is { } enter && !AlreadyFailed(enter))
+            {
+                _logger?.LogInformation("Browser step shortcut=submit_with_enter target={Target}", typed.Id);
+                return InteractionDecision.Act(enter);
+            }
             if (typed is null && fields.Length == 1 && Offered(fields[0].Id, InteractionActionKind.SetText) is { } set)
             {
                 var action = set with { Text = step.Query.Trim() };

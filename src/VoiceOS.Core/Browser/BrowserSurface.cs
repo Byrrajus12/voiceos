@@ -201,6 +201,7 @@ public sealed class BrowserSurface : IInteractionSurface
             InteractionActionKind.TypeText => "INSERT_TEXT",
             InteractionActionKind.Scroll => "SCROLL",
             InteractionActionKind.GoBack => "BACK",
+            InteractionActionKind.PressKey => "SUBMIT",
             _ => null
         };
         if (protocolAction is null)
@@ -302,7 +303,12 @@ public sealed class BrowserSurface : IInteractionSurface
             {
                 actions.Add(new($"r{revision}:replace:{element.Ref}", InteractionActionKind.SetText, element.Ref));
                 if (!string.IsNullOrEmpty(element.Value))
+                {
                     actions.Add(new($"r{revision}:insert:{element.Ref}", InteractionActionKind.TypeText, element.Ref));
+                    // Enter applies a field that holds text (search boxes without a submit button).
+                    if (element.Search || element.Role == "searchbox")
+                        actions.Add(new($"r{revision}:submit:{element.Ref}", InteractionActionKind.PressKey, element.Ref));
+                }
             }
             if (element.Role is "button" or "link" or "tab" or "menuitem" or "option" or "checkbox" or "radio" or "summary")
                 actions.Add(new($"r{revision}:click:{element.Ref}", InteractionActionKind.Activate, element.Ref));

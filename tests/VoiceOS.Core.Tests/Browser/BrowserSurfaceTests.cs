@@ -135,7 +135,7 @@ public sealed class BrowserSurfaceTests
         var surface = new BrowserSurface(new FakeTransport([snapshot]),
             BrowserGoal.FromUtterance("search for ripgrep"), new NeverComplete(), session);
         var observation = await surface.ObserveAsync();
-        Assert.Equal([InteractionActionKind.SetText, InteractionActionKind.TypeText],
+        Assert.Equal([InteractionActionKind.SetText, InteractionActionKind.TypeText, InteractionActionKind.PressKey],
             observation.Candidates.Single(c => c.Id == "q").Actions.Select(a => a.Kind));
     }
 

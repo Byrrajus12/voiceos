@@ -325,17 +325,17 @@ async function observeOwnedTab(payload) {
 async function actInOwnedTab(payload) {
   const { tabId, sessionId } = assertOwnedTab(payload?.tabId, payload?.sessionId);
   const action = payload?.action;
-  if (!["CLICK", "REPLACE_TEXT", "INSERT_TEXT", "SCROLL", "BACK"].includes(action))
+  if (!["CLICK", "REPLACE_TEXT", "INSERT_TEXT", "SCROLL", "BACK", "SUBMIT"].includes(action))
     throw protocolError("INVALID_ACTION", "The requested browser action is not supported.");
   if (typeof payload?.revision !== "string")
     throw protocolError("INVALID_ACTION", "revision must be a string.");
-  if (["CLICK", "REPLACE_TEXT", "INSERT_TEXT"].includes(action) && typeof payload?.elementRef !== "string")
+  if (["CLICK", "REPLACE_TEXT", "INSERT_TEXT", "SUBMIT"].includes(action) && typeof payload?.elementRef !== "string")
     throw protocolError("INVALID_ACTION", "This action requires an elementRef.");
   if (["REPLACE_TEXT", "INSERT_TEXT"].includes(action)
       && (typeof payload?.text !== "string" || payload.text.length > 2_000))
     throw protocolError("INVALID_TEXT", "Text must be a string of at most 2000 characters.");
 
-  const isNavAction = action === "CLICK" || action === "BACK";
+  const isNavAction = action === "CLICK" || action === "BACK" || action === "SUBMIT";
   if (isNavAction) traceTask(tabId, "navigation-act", { action, elementRef: payload.elementRef });
 
   const commandAt = Date.now();

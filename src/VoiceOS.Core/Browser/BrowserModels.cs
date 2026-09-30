@@ -107,7 +107,7 @@ public sealed record BrowserSnapshot(
 /// </summary>
 public sealed record BrowserActionSignals(string Navigation, string? SettleReason = null)
 {
-    public static bool IsMeaningfulFor(string protocolAction) => protocolAction is "CLICK" or "BACK";
+    public static bool IsMeaningfulFor(string protocolAction) => protocolAction is "CLICK" or "BACK" or "SUBMIT";
 }
 
 public sealed record BrowserActionRequest(

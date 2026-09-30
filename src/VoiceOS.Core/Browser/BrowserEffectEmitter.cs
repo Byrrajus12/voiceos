@@ -55,6 +55,7 @@ internal static class BrowserEffectEmitter
         switch (action.Kind)
         {
             case InteractionActionKind.Activate:
+            case InteractionActionKind.PressKey:
                 effects.Add(new(EffectKind.Activated, EffectSource.CompanionResponse, EffectStrength.Observed,
                     subject, WithSignal(new(), signal)));
                 if (adopted) break;
