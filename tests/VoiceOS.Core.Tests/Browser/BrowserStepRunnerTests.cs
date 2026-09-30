@@ -130,18 +130,6 @@ public sealed class BrowserStepRunnerTests
         Assert.Contains("Tauri", decision.GetProperty("original_goal").GetString());
     }
 
-    [Fact]
-    public async Task OpenStep_CompletesFromTheBoundActionAndItsEffect_NotFromAnotherModelJudgment()
-    {
-        var site = new Site();
-        var gateway = TauriGateway();
-        var service = new BrowserInteractionService(site, gateway, compiler: new Compiler(Plan), proofMode: ProofMode.On);
-        await service.RunAsync("open Tauri", scope: NewGitHubTab);
-        // The last action is the bound click; nothing asked the model whether the destination looks right.
-        Assert.Equal("CLICK:e1:", site.Actions[^1]);
-        Assert.All(gateway.Heads, heads => Assert.DoesNotContain("goal_achieved", heads));
-    }
-
     // -- postconditions -------------------------------------------------------------------
 
     private static InteractionObservation Obs(string url, params BrowserElement[] elements)

@@ -121,6 +121,10 @@ internal sealed class PlannedStepEvaluator(BrowserGoal goal, IProofEvaluator leg
         var query = input.Step.What.Query?.Trim();
         if (string.IsNullOrWhiteSpace(value) || !StringComparer.OrdinalIgnoreCase.Equals(value, query))
             return ProofVerdict.NotYet(family, "query_not_entered");
+        // The query must have gone into the search surface this step meant; an entry elsewhere (a collection finder,
+        // a filter, a search inside the open resource) is not this search, however it ended.
+        if (SearchScopes.Conflicts(textSet.Get("scope"), input.Step.What.SearchScope ?? SearchScopes.Global))
+            return ProofVerdict.NotYet(family, "wrong_search_scope");
         var readback = textSet.Get("readback");
         // No readback means the field could not be re-identified after the action (the page changed under it); the
         // companion reported the entry succeeded. A readback that differs is a refusal of the text.

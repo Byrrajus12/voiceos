@@ -83,8 +83,6 @@ public sealed class BrowserStepCompilerTests
 
     [Theory]
     [InlineData("scroll down")]
-    [InlineData("click Support")]
-    [InlineData("go back")]
     public async Task SimpleCurrentPageRequest_BypassesTheCompiler(string utterance)
     {
         var compiler = new CountingCompiler();

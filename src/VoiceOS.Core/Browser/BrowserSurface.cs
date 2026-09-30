@@ -166,8 +166,8 @@ public sealed class BrowserSurface : IInteractionSurface
             ["Href"] = element.Href, ["Context"] = element.Context, ["Editable"] = element.Editable,
             ["Enabled"] = element.Enabled, ["InViewport"] = element.Geometry.InViewport
         };
-        if (facts.Kind is BrowserDomFacts.SearchField or BrowserDomFacts.SubmitControl or BrowserDomFacts.NavigationLink
-            or BrowserDomFacts.ResultItem) entry["Kind"] = facts.Kind;
+        if (facts.Kind is BrowserDomFacts.SearchField or BrowserDomFacts.SearchOpener or BrowserDomFacts.SubmitControl
+            or BrowserDomFacts.NavigationLink or BrowserDomFacts.ResultItem) entry["Kind"] = facts.Kind;
         if (facts.SearchScope is not null) entry["SearchScope"] = facts.SearchScope;
         if (facts.SubmitRef is not null) entry["SubmitRef"] = facts.SubmitRef;
         if (element.Form is not null) entry["Form"] = element.Form;
@@ -295,6 +295,7 @@ public sealed class BrowserSurface : IInteractionSurface
             var fact = facts[element.Ref];
             var label = $"{element.Role} '{element.Name}' value='{element.Value}' context='{element.Context}'"
                 + (element.Search ? " purpose='search'" : "")
+                + (fact.Kind == BrowserDomFacts.SearchOpener ? " opens='search'" : "")
                 + (fact.SearchScope is { } scope ? $" scope='{scope}'" : "")
                 + (fact.Selected is { } selected ? $" selected={selected.ToString().ToLowerInvariant()}" : "")
                 + (fact.Landmark is "navigation" ? " region='navigation'" : "")

@@ -751,6 +751,8 @@ public sealed class BrowserInteractionService(
             ?? (kind is InteractionActionKind.GoBack or InteractionActionKind.Scroll
                 ? fresh.Candidates.FirstOrDefault(c => c.Actions.Any(a => a.Kind == kind)) : null);
         if (kind is null || candidate is null) return null;
+        // Locating only reveals content; clicking a control would navigate away from the results being searched.
+        if (step.Kind == PlanStepKind.Locate && kind != InteractionActionKind.Scroll) return null;
         var direction = fix.Operation == "scroll_up" ? "up" : fix.Operation == "scroll_down" ? "down" : null;
         var offered = candidate.Actions.FirstOrDefault(a => a.Kind == kind && (direction is null || a.Direction == direction));
         if (offered is null) return null;

@@ -21,7 +21,7 @@ internal static class PlanFraming
         {
             PlanStepKind.Reach => new(id, ProofFamily.Surface, new(target, Utterance: goal.OriginalUtterance), WithinPlan: true),
             PlanStepKind.Search when !string.IsNullOrWhiteSpace(step.Query)
-                => new(id, ProofFamily.Find, new(step.Description, step.Query, goal.OriginalUtterance), WithinPlan: true),
+                => new(id, ProofFamily.Find, new(step.Description, step.Query, goal.OriginalUtterance, WantedScope(step)), WithinPlan: true),
             PlanStepKind.Locate when !referential
                 => new(id, ProofFamily.Locate, new(target, Utterance: goal.OriginalUtterance), WithinPlan: true),
             PlanStepKind.Open when !referential
@@ -29,6 +29,15 @@ internal static class PlanFraming
             _ => new(id, ProofFamily.Reach, new(step.Description, Utterance: goal.OriginalUtterance), WithinPlan: true)
         };
     }
+
+    /// <summary>The scope a Search step must run on; an unstated intent means the broad service-wide search.</summary>
+    internal static string WantedScope(PlanStep step) => step.ScopeIntent switch
+    {
+        SearchScopeIntent.CurrentResource => SearchScopes.CurrentResource,
+        SearchScopeIntent.InPage => SearchScopes.InPage,
+        SearchScopeIntent.Collection => SearchScopes.Collection,
+        _ => SearchScopes.Global
+    };
 
     private static string? FirstUsable(params string?[] values)
         => values.FirstOrDefault(static value => !string.IsNullOrWhiteSpace(value))?.Trim();

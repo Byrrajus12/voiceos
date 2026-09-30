@@ -64,6 +64,8 @@ public static class SimpleStepFramer
 public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKey,
     Microsoft.Extensions.Logging.ILogger? logger = null) : IBrowserStepCompiler
 {
+    public static readonly TimeSpan CompileTimeout = TimeSpan.FromSeconds(8);
+
     public const string Prompt =
         "Compile the user's browser request into an ordered plan of semantic steps. Each step is one desired operation or outcome, " +
         "never a selector, script or element reference. Keep EVERY meaningful intermediate intent in order; never collapse 'A then B then C' into C. " +
@@ -71,6 +73,9 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
         "Locate (make a described target visible in the content now shown: a result, section or item), " +
         "Open (activate a described target and follow it), Act (any other bounded in-page operation). " +
         "Use 1 to 5 steps. Scope each Search to where the user said: a site-wide search is one Search step with the exact query. " +
+        "For Search also say which search surface the user meant in searchScope: Global (the service-wide search; the default), " +
+        "CurrentResource (inside the repository/document/project that is open), InPage (find text on the current page) or Collection " +
+        "(a bounded list such as the user's own items); use null for other step kinds. " +
         "Open follows Locate when the user names a specific target. Give each step a short description, a query (Search only), " +
         "a target (Locate/Open, or the site for Reach) and a two-to-four word present-tense progress phrase such as 'Searching GitHub'. " +
         "Correct likely speech-recognition errors only when context strongly supports it, and report each with confidence; preserve uncertain terms as heard. " +
@@ -99,9 +104,10 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
                         description = new { type = "string" },
                         query = new { type = new[] { "string", "null" } },
                         target = new { type = new[] { "string", "null" } },
-                        progress = new { type = new[] { "string", "null" } }
+                        progress = new { type = new[] { "string", "null" } },
+                        searchScope = new { type = new[] { "string", "null" }, @enum = new object?[] { "Global", "CurrentResource", "InPage", "Collection", null } }
                     },
-                    required = new[] { "kind", "description", "query", "target", "progress" }
+                    required = new[] { "kind", "description", "query", "target", "progress", "searchScope" }
                 }
             },
             correctedTerms = new
@@ -135,11 +141,14 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
         string content;
         try
         {
+            // A provider stall must not cost the 15 s transport timeout: compile has its own, shorter, hard limit.
+            using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+            limit.CancelAfter(CompileTimeout);
             using var modelCall = Activation.LatencyTrace.Current?.BeginModelCall("compile");
-            using var response = await http.SendAsync(request, cancellationToken).ConfigureAwait(false);
+            using var response = await http.SendAsync(request, limit.Token).ConfigureAwait(false);
             if (!response.IsSuccessStatusCode)
                 throw new InfrastructureUnavailableException(UnavailableReason.BrowserGoalService, "Browser help is unavailable right now.");
-            using var body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(cancellationToken), cancellationToken: cancellationToken).ConfigureAwait(false);
+            using var body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(limit.Token), cancellationToken: limit.Token).ConfigureAwait(false);
             content = body.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString()
                 ?? throw new InvalidOperationException("Missing provider content.");
         }
@@ -179,7 +188,9 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
                 if (kind == PlanStepKind.Search && query is null) return null;
                 if (kind is PlanStepKind.Locate or PlanStepKind.Open && target is null) return null;
                 if (progress is not null && !SafeText(progress, 48)) progress = null;
-                steps.Add(new(kind, description!, kind == PlanStepKind.Search ? query : null, target, progress));
+                var intent = kind == PlanStepKind.Search && Enum.TryParse<SearchScopeIntent>(Text(item, "searchScope"), out var parsedIntent)
+                    ? parsedIntent : SearchScopeIntent.Unspecified;
+                steps.Add(new(kind, description!, kind == PlanStepKind.Search ? query : null, target, progress, intent));
             }
             if (steps.Count is 0 or > InteractionPlan.MaxSteps) return null;
             var corrections = value.GetProperty("correctedTerms").EnumerateArray().Select(x =>

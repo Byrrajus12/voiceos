@@ -18,12 +18,16 @@ public enum PlanStepKind
     Act
 }
 
+/// <summary>Which search surface a Search step is meant for. Unspecified means the broad, service-wide search.</summary>
+public enum SearchScopeIntent { Unspecified, Global, CurrentResource, InPage, Collection }
+
 /// <param name="Description">The operation in plain words; also what the decision model is asked to accomplish.</param>
 /// <param name="Query">Grounded search text (Search only).</param>
 /// <param name="Target">The described thing to find/open (Locate/Open, or Reach's site).</param>
 /// <param name="Progress">Short present-tense status shown to the user while the step runs.</param>
+/// <param name="ScopeIntent">Search only: the search surface the user meant.</param>
 public sealed record PlanStep(PlanStepKind Kind, string Description, string? Query = null,
-    string? Target = null, string? Progress = null);
+    string? Target = null, string? Progress = null, SearchScopeIntent ScopeIntent = SearchScopeIntent.Unspecified);
 
 /// <summary>
 /// The compiled form of one user request. <see cref="OriginalGoal"/> stays attached for the whole run;

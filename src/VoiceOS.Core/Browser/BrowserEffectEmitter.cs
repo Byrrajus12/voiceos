@@ -74,7 +74,7 @@ internal static class BrowserEffectEmitter
                 break;
 
             case InteractionActionKind.SetText or InteractionActionKind.TypeText:
-                effects.Add(TextSet(action, subject, after));
+                effects.Add(TextSet(action, subject, after, target is null ? null : BrowserDomFacts.SearchScopeOf(target)));
                 break;
 
             case InteractionActionKind.GoBack:
@@ -90,7 +90,7 @@ internal static class BrowserEffectEmitter
         => [new(EffectKind.NoEffect, EffectSource.CompanionResponse, EffectStrength.Observed, null,
             new Dictionary<string, string> { ["reason"] = code })];
 
-    private static Effect TextSet(InteractionAction action, TypedRef? subject, BrowserSnapshot after)
+    private static Effect TextSet(InteractionAction action, TypedRef? subject, BrowserSnapshot after, string? scope = null)
     {
         var replace = action.Kind == InteractionActionKind.SetText;
         var data = new Dictionary<string, string>
@@ -98,6 +98,7 @@ internal static class BrowserEffectEmitter
             ["mode"] = replace ? "replace" : "insert",
             ["value"] = action.Text ?? ""
         };
+        if (scope is not null) data["scope"] = scope;
         // Readback only when the field re-identifies unambiguously in the post-action snapshot.
         if (subject is not null)
         {
