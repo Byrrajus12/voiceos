@@ -26,8 +26,10 @@ public sealed class ExecutionScopeTests
         string relation = "NewTask", string goalShape = "ActionOnSurface",
         AppCandidate[]? apps = null, RecentTaskFrame? recent = null,
         string contextDependency = "SelfContained", string appChoice = "none",
-        string entity = "Uncertain", string returnTarget = "None")
+        string entity = "Uncertain", string returnTarget = "None", bool nameDestination = true)
     {
+        if (nameDestination && destination != "None" && !DestinationGrounding.Names(utterance, destination))
+            utterance += " " + destination;
         var gateway = new ScriptedGateway(route, destination, disposition, completeness, media, mediaOp,
             contextChoice, preference, endState, relation, goalShape, contextDependency, appChoice,
             entity, returnTarget);
@@ -85,7 +87,7 @@ public sealed class ExecutionScopeTests
     public async Task ExplicitDestinationSkipsContext(string utterance, string name, string url)
     {
         var result = await Run(utterance, destination: name,
-            tabs: [Tab(1, "https://www.youtube.com/", true)]);
+            tabs: [Tab(1, "https://news.example/", true)]);
         Assert.Equal(name, result.Route.DestinationName);
         Assert.Equal(ExecutionScopeKind.Browser, result.Scope.Kind);
         Assert.Equal(0, result.ContextCalls);
@@ -178,7 +180,7 @@ public sealed class ExecutionScopeTests
     public async Task BareEntitiesNeverReachContext(string utterance)
     {
         var result = await Run(utterance, completeness: "BareEntity");
-        Assert.Equal(ExecutionScopeKind.Clarify, result.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, result.Scope.Kind);
         Assert.Equal(0, result.ContextCalls);
     }
 
@@ -211,7 +213,7 @@ public sealed class ExecutionScopeTests
         var result = await Run("search React", tabs: [Tab(1, "https://www.google.com/", true)],
             foreground: Code, contextChoice: ContextualSurface.ActiveBrowserTab,
             relation: "Uncertain", contextDependency: "Uncertain");
-        Assert.Equal(ExecutionScopeKind.Clarify, result.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, result.Scope.Kind);
     }
 
     [Theory]
@@ -238,7 +240,7 @@ public sealed class ExecutionScopeTests
         Assert.Equal(ExecutionScopeKind.Browser, fallback.Scope.Kind);
         var explicitNative = await Run("show the desktop app", destination: "Spotify",
             preference: "Native", apps: []);
-        Assert.Equal(ExecutionScopeKind.Clarify, explicitNative.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, explicitNative.Scope.Kind);
     }
 
     [Fact]
@@ -264,14 +266,14 @@ public sealed class ExecutionScopeTests
             contextDependency: "Uncertain",
             tabs: [Tab(1, "https://news.example/", true), recentTab], recent: frame,
             contextChoice: ContextualSurface.Clarify);
-        Assert.Equal(ExecutionScopeKind.Clarify, continued.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, continued.Scope.Kind);
         Assert.Equal(1, continued.ContextCalls);
         Assert.NotEqual(7, continued.Scope.Browser?.TabId);
         var required = await Run("Go back to those results.", relation: "RequiresRecent",
             contextDependency: "Uncertain",
             tabs: [Tab(1, "https://news.example/", true), recentTab], recent: frame,
             contextChoice: ContextualSurface.Clarify);
-        Assert.Equal(ExecutionScopeKind.Clarify, required.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, required.Scope.Kind);
         Assert.Equal(1, required.ContextCalls);
         Assert.NotEqual(7, required.Scope.Browser?.TabId);
         var independent = await Run("Search for React.", relation: "ContinueRecent",
@@ -362,7 +364,7 @@ public sealed class ExecutionScopeTests
     {
         var result = await Run("use the current browser tab", disposition: "CurrentTab",
             tabs: [Tab(3, "https://example.org/")], foreground: Code);
-        Assert.Equal(ExecutionScopeKind.Clarify, result.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, result.Scope.Kind);
     }
 
     [Theory]
@@ -429,7 +431,7 @@ public sealed class ExecutionScopeTests
             contextDependency: "RequiresCurrentSurface",
             tabs: [Tab(3, "https://example.org/results", true),
                 Tab(4, "https://example.net/results", true)]);
-        Assert.Equal(ExecutionScopeKind.Clarify, result.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, result.Scope.Kind);
     }
 
     [Fact]
@@ -440,12 +442,12 @@ public sealed class ExecutionScopeTests
             VoiceOS.Core.Interaction.InteractionCompletionState.Complete, DateTimeOffset.UtcNow);
         var valid = await Run("Go back to those results.",
             relation: "RequiresRecent", contextDependency: "Uncertain", tabs: [tab], recent: frame);
-        Assert.Equal(ExecutionScopeKind.Clarify, valid.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, valid.Scope.Kind);
         Assert.Null(valid.Scope.Browser);
         Assert.Equal(0, valid.ContextCalls);
         var missing = await Run("Go back to those results.",
             relation: "RequiresRecent", contextDependency: "Uncertain", tabs: [tab]);
-        Assert.Equal(ExecutionScopeKind.Clarify, missing.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, missing.Scope.Kind);
         Assert.Null(missing.Scope.Browser);
     }
 
@@ -514,15 +516,15 @@ public sealed class ExecutionScopeTests
     public async Task RefutedNamedTabClaimWithoutCurrentSurfaceDependencyClarifies(string dependency)
     {
         var result = await ContentClaim(dependency);
-        Assert.Equal(ExecutionScopeKind.Clarify, result.Scope.Kind);
-        Assert.Equal("No open tab matches that name.", result.Scope.Detail);
+        Assert.Equal(ExecutionScopeKind.Unresolved, result.Scope.Kind);
+        Assert.Equal("I couldn't find that tab.", result.Scope.Detail);
     }
 
     [Fact]
     public async Task RefutedNamedTabClaimNeedsChromeVisiblyInFront()
     {
         var result = await ContentClaim(foreground: Code);
-        Assert.Equal(ExecutionScopeKind.Clarify, result.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, result.Scope.Kind);
     }
 
     [Fact]
@@ -530,14 +532,14 @@ public sealed class ExecutionScopeTests
     {
         var secondWindowActive = Tab(9, "https://news.ycombinator.com/", true) with { WindowId = 2 };
         var result = await ContentClaim(tabs: [ImdbActive, DocsTab, secondWindowActive]);
-        Assert.Equal(ExecutionScopeKind.Clarify, result.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, result.Scope.Kind);
     }
 
     [Fact]
     public async Task RefutedNamedTabClaimNeverRunsWithoutAnyWebTab()
     {
         var result = await ContentClaim(tabs: [Tab(4, "chrome://newtab/", true)]);
-        Assert.Equal(ExecutionScopeKind.Clarify, result.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, result.Scope.Kind);
     }
 
     [Fact]
@@ -800,7 +802,7 @@ public sealed class ExecutionScopeTests
     {
         var result = await Run("do the web task", foreground: Code, relation: "Uncertain",
             contextDependency: "Uncertain", contextChoice: ContextualSurface.ForegroundNativeWindow);
-        Assert.Equal(ExecutionScopeKind.Clarify, result.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, result.Scope.Kind);
         Assert.Equal(1, result.ContextCalls);
     }
 
@@ -828,7 +830,7 @@ public sealed class ExecutionScopeTests
             mediaOp: "Previous", returnTarget: "NavigationHistory", foreground: Code,
             connected: connected, tabs: []);
         Assert.Null(result.Route.MediaOperation);
-        Assert.Equal(ExecutionScopeKind.Clarify, result.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, result.Scope.Kind);
     }
 
     [Fact]
@@ -898,7 +900,7 @@ public sealed class ExecutionScopeTests
     {
         var result = await Run("open the service app", destination: "Instagram", entity: "NamedEntity",
             preference: "Native", endState: "SurfaceReady", goalShape: "SurfaceOnly", apps: [ChromeApp]);
-        Assert.Equal(ExecutionScopeKind.Clarify, result.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, result.Scope.Kind);
     }
 
     [Fact]
@@ -955,7 +957,7 @@ public sealed class ExecutionScopeTests
         var result = await Run("open the service app", destination: "Instagram", entity: "NamedEntity",
             preference: "Native", endState: "SurfaceReady", goalShape: "SurfaceOnly",
             apps: [ChromeApp, MoreApp], appChoice: MoreApp.Id);
-        Assert.Equal(ExecutionScopeKind.Clarify, result.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, result.Scope.Kind);
         Assert.Equal(0, result.AppCalls);
     }
 
@@ -1035,7 +1037,7 @@ public sealed class ExecutionScopeTests
             foreground: chromeForeground ? null : Code,
             tabs: hasTab ? [Tab(3, "https://www.reddit.com/", true)] : []);
         Assert.Null(result.Route.MediaOperation);
-        Assert.Equal(ExecutionScopeKind.Clarify, result.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, result.Scope.Kind);
         Assert.Equal(0, result.ContextCalls + result.AppCalls);
     }
 
@@ -1044,7 +1046,7 @@ public sealed class ExecutionScopeTests
     {
         var result = await Run("go back to the app", media: "Transport", mediaOp: "Previous",
             returnTarget: "Uncertain", entity: "NamedEntity", tabs: [Tab(3, "https://www.reddit.com/", true)]);
-        Assert.Equal(ExecutionScopeKind.Clarify, result.Scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, result.Scope.Kind);
     }
 
     [Fact]

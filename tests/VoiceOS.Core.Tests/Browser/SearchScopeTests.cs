@@ -109,7 +109,7 @@ public sealed class SearchScopeTests
             new Dictionary<string, string> { ["to"] = "https://example.org/results" }) { Id = "n", ActionId = "a2" };
         Effect Typed(string scope) => new(EffectKind.TextSet, EffectSource.CompanionResponse, EffectStrength.Observed, null,
             new Dictionary<string, string> { ["value"] = "Rust GUI framework", ["matched"] = "true", ["scope"] = scope }) { Id = "t", ActionId = "a1" };
-        var evaluator = new PlannedStepEvaluator(new BrowserGoal("x"), new BrowserProofEvaluator(new BrowserGoal("x")));
+        var evaluator = new PlannedStepEvaluator(new BrowserGoal("x"));
         var observation = new InteractionObservation(1, "k", "{}", []);
         Assert.Equal(ProofStatus.NotYet, evaluator.Evaluate(new(step, [Typed(SearchScopes.Collection), nav], submit, null, observation)).Status);
         Assert.Equal(ProofStatus.Proved, evaluator.Evaluate(new(step, [Typed(SearchScopes.Global), nav], submit, null, observation)).Status);

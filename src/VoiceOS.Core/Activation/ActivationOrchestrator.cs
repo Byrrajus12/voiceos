@@ -720,16 +720,22 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             return;
         }
 
-        if (executionScope.Kind is ExecutionScopeKind.TextTransform or ExecutionScopeKind.Clarify)
+        if (executionScope.Kind == ExecutionScopeKind.Clarify)
         {
+            // Only a question the user can actually answer.
             run.Outcome = "Clarify";
-            var status = executionScope.Kind == ExecutionScopeKind.TextTransform
-                ? "Text transformation is not part of the current literal dictation or browser stage."
-                : executionScope.Detail ?? route.Detail ?? "The command needs clarification.";
-            PublishSnapshot(new(ApplicationInteractionPhase.NeedsChoice, kind,
-                transcript, status,
-                [new InteractionChoice("retry", "Clarify request"), new InteractionChoice("cancel", "Cancel")],
-                InteractionCompletionState.Uncertain));
+            PublishSnapshot(new(ApplicationInteractionPhase.NeedsChoice, kind, transcript,
+                executionScope.Detail, [new InteractionChoice("cancel", "Cancel")], InteractionCompletionState.Uncertain));
+            return;
+        }
+        if (executionScope.Kind is ExecutionScopeKind.TextTransform or ExecutionScopeKind.Unresolved)
+        {
+            // Nothing is missing from the user's side: say what actually stopped the request.
+            run.Outcome = "Unresolved";
+            _logger.LogInformation("Request not actionable reason={Reason}", executionScope.Detail);
+            PublishSnapshot(new(ApplicationInteractionPhase.Failed, kind, transcript,
+                executionScope.Kind == ExecutionScopeKind.TextTransform
+                    ? "That kind of text rewriting isn't available yet." : executionScope.Detail));
             return;
         }
 

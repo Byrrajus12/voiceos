@@ -38,7 +38,7 @@ public sealed class ActivityMessageTests
     [Fact]
     public void InternalDetailsMapToGenericMessages()
     {
-        Assert.Equal("Could you clarify that request?", ActivityMessage.ForClarification("SESSION_MISMATCH: id=42"));
+        Assert.Equal("Which one did you mean?", ActivityMessage.ForClarification("SESSION_MISMATCH: id=42"));
         Assert.Equal("Couldn't complete that action.", ActivityMessage.ForFailure("System.Exception: secret"));
     }
 }

@@ -18,6 +18,8 @@ public enum TaskRelation { NewTask, ContinueRecent, RequiresRecent, Uncertain }
 public enum ContextDependency { Uncertain, SelfContained, RequiresCurrentSurface }
 /// <summary>What a back/previous request returns through; separates media Previous from navigation Back.</summary>
 public enum ReturnTarget { Uncertain, None, MediaPlayback, NavigationHistory }
+/// <summary>A request that is exactly one known page operation, framed by the router so no further model call is needed.</summary>
+public enum PageOperation { None, Back, Forward, ScrollDown, ScrollUp }
 /// <summary>The requested thing to open or use, independent of the surface that could host it.</summary>
 public enum RequestedEntityKind { Uncertain, None, BrowserItself, NamedEntity }
 public sealed record CommandRouteDecision(CommandRoute Route, double Confidence, string? Detail = null,
@@ -44,6 +46,10 @@ public sealed record CommandRouteDecision(CommandRoute Route, double Confidence,
     public bool CoarseBrowserCandidate { get; init; }
     public bool CoarseNonBrowserCandidate { get; init; }
     public ReturnTarget ReturnTarget { get; init; } = ReturnTarget.Uncertain;
+    /// <summary>The whole request is one history traversal or scroll of the current page.</summary>
+    public PageOperation PageOperation { get; init; }
+    /// <summary>A service the classifier proposed but the user did not name; never authoritative.</summary>
+    public string? SuggestedDestination { get; init; }
     /// <summary>A specific non-browser app, service, or site was requested. A generic browser
     /// host (e.g. Chrome itself) cannot satisfy it.</summary>
     public bool RequestsNamedEntity => RequestedEntity == RequestedEntityKind.NamedEntity
@@ -77,7 +83,10 @@ public sealed record BrowserElement(
     [property: JsonPropertyName("formAction")] string? FormAction = null,
     [property: JsonPropertyName("landmark")] string? Landmark = null,
     [property: JsonPropertyName("inList")] bool InList = false,
-    [property: JsonPropertyName("selected")] bool? Selected = null);
+    [property: JsonPropertyName("selected")] bool? Selected = null,
+    [property: JsonPropertyName("collection")] string? Collection = null,
+    [property: JsonPropertyName("position")] int? Position = null,
+    [property: JsonPropertyName("collectionSize")] int? CollectionSize = null);
 
 public sealed record BrowserViewport(
     [property: JsonPropertyName("width")] int Width,
@@ -114,7 +123,7 @@ public sealed record BrowserSnapshot(
 /// </summary>
 public sealed record BrowserActionSignals(string Navigation, string? SettleReason = null)
 {
-    public static bool IsMeaningfulFor(string protocolAction) => protocolAction is "CLICK" or "BACK" or "SUBMIT";
+    public static bool IsMeaningfulFor(string protocolAction) => protocolAction is "CLICK" or "BACK" or "FORWARD" or "SUBMIT";
 }
 
 public sealed record BrowserActionRequest(

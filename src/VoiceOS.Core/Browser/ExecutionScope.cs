@@ -30,7 +30,8 @@ public sealed record RecentTaskFrame(int TabId, string SessionId, string Url,
     string SemanticGoal, Interaction.InteractionCompletionState Completion,
     DateTimeOffset LastUsed);
 
-public enum ExecutionScopeKind { DirectCapability, Browser, NativeInteraction, TextTransform, Clarify }
+/// <summary>Clarify is only a question the human can answer; Unresolved is a meaningful failure with its own message.</summary>
+public enum ExecutionScopeKind { DirectCapability, Browser, NativeInteraction, TextTransform, Clarify, Unresolved }
 public enum BrowserScopeKind { ActiveTab, ExistingNamedTab, RecentOwnedTaskTab, NewTaskTab }
 
 public sealed record BrowserExecutionScope(BrowserScopeKind Kind, int? TabId = null,
@@ -49,10 +50,12 @@ public sealed record BrowserExecutionScope(BrowserScopeKind Kind, int? TabId = n
     /// <summary>Continuity with earlier VoiceOS work, only meaningful when <see cref="TaskRelationEstablished"/>.</summary>
     public TaskRelation TaskRelation { get; init; } = TaskRelation.Uncertain;
     public bool TaskRelationEstablished { get; init; }
+    /// <summary>When set, the whole request is this one operation and runs without any model call.</summary>
+    public PageOperation PageOperation { get; init; }
     public BrowserExecutionScope WithRouterSignals(CommandRouteDecision route) => this with
     {
         ContextDependency = route.ContextDependency, TaskRelation = route.TaskRelation,
-        TaskRelationEstablished = route.TaskRelationEstablished
+        TaskRelationEstablished = route.TaskRelationEstablished, PageOperation = route.PageOperation
     };
     public bool AcquiresSurface => Kind switch
     {
@@ -76,7 +79,13 @@ public sealed record NativeExecutionScope(nint WindowHandle, string ProcessName,
 
 public sealed record ExecutionScopeDecision(ExecutionScopeKind Kind,
     BrowserExecutionScope? Browser = null, string? Detail = null,
-    NativeExecutionScope? Native = null);
+    NativeExecutionScope? Native = null)
+{
+    /// <summary>Nothing the user can answer is missing: the request cannot proceed, and Detail says why.</summary>
+    public static ExecutionScopeDecision Unable(string message) => new(ExecutionScopeKind.Unresolved, Detail: message);
+    /// <summary>A real question only the user can settle.</summary>
+    public static ExecutionScopeDecision Ask(string question) => new(ExecutionScopeKind.Clarify, Detail: question);
+}
 
 /// <summary>Chooses a surface from typed intent and metadata. No DOM is read here.</summary>
 public sealed class ScopeResolver
@@ -93,7 +102,7 @@ public sealed class ScopeResolver
             finally { LatencyTrace.Current?.Record(name, timer.Elapsed.TotalMilliseconds); }
         }
         if (route.Reason == RoutingReason.IncompleteIntent)
-            return new(ExecutionScopeKind.Clarify, Detail: route.Detail);
+            return ExecutionScopeDecision.Unable("I didn't catch a complete command.");
         if (route.Route == CommandRoute.TextTransform)
             return new(ExecutionScopeKind.TextTransform);
         // The route describes the whole task. Context cannot turn an offered direct
@@ -101,7 +110,7 @@ public sealed class ScopeResolver
         if (route.Route == CommandRoute.DirectCapability)
             return new(ExecutionScopeKind.DirectCapability);
         if (route.Route == CommandRoute.Clarify && route.Reason == RoutingReason.RouterFailure)
-            return new(ExecutionScopeKind.Clarify, Detail: route.Detail);
+            return ExecutionScopeDecision.Unable("I couldn't understand that request.");
 
         var chromeForeground = context.BrowserConnected
             && context.ForegroundWindow?.ProcessName.Equals("chrome", StringComparison.OrdinalIgnoreCase) == true;
@@ -150,7 +159,13 @@ public sealed class ScopeResolver
         if (route.Reason == RoutingReason.UnresolvedReturn)
             return chromeForeground && active is not null && !route.RequestsNamedEntity
                 ? Browser(Select(active, BrowserScopeKind.ActiveTab))
-                : new(ExecutionScopeKind.Clarify, Detail: route.Detail);
+                : ExecutionScopeDecision.Unable("There is no browser page to go back on.");
+
+        // One history traversal or scroll acts on the page in front of the user, nowhere else.
+        if (route.PageOperation != PageOperation.None && route.TabDisposition == TabDisposition.Unspecified
+            && route.DestinationKind == SemanticDestinationKind.None)
+            return chromeForeground && active is not null ? Browser(Select(active, BrowserScopeKind.ActiveTab))
+                : ExecutionScopeDecision.Unable("There is no browser page in front to do that on.");
 
         var destination = route.ExplicitUrl
             ?? ServiceResolver.Resolve(route.DestinationName)?.WebOrigin;
@@ -186,12 +201,11 @@ public sealed class ScopeResolver
                     window?.Hwnd ?? 0, app.ProcessName ?? "", app.Id, route.EndState));
             }
             if (route.SurfacePreference == SurfacePreference.Native)
-                return new(ExecutionScopeKind.Clarify, Detail: "The requested native app is unavailable or ambiguous.");
+                return ExecutionScopeDecision.Unable("I couldn't find that app.");
         }
         if (route.ExplicitUrl is not null
             && route.TabDisposition is TabDisposition.CurrentTab or TabDisposition.ExistingNamedTab)
-            return new(ExecutionScopeKind.Clarify,
-                Detail: "An explicit URL cannot be combined safely with this tab selection yet.");
+            return ExecutionScopeDecision.Unable("I can't open a link inside an existing tab yet.");
         // An earlier, concrete thing VoiceOS established. The visible surface keeps precedence for
         // references that need it; otherwise a validated referent grounds the reference before any
         // wording-based inference. No usable referent falls through to the existing behavior unchanged.
@@ -228,7 +242,7 @@ public sealed class ScopeResolver
             switch (resolution.Kind)
             {
                 case ReferentResolutionKind.Ambiguous:
-                    return new(ExecutionScopeKind.Clarify, Detail: "More than one earlier item could be what you mean.");
+                    return ExecutionScopeDecision.Ask("Which earlier page did you mean?");
                 case ReferentResolutionKind.Selected when resolution.Candidate!.Referent is { Kind: ReferentKind.Page } page:
                     var pageTab = context.BrowserTabs.FirstOrDefault(t => t.TabId == page.TabId && t.Origin is not null);
                     if (pageTab is null) break;
@@ -246,7 +260,8 @@ public sealed class ScopeResolver
                     ? route.DestinationName : null));
         if (route.TabDisposition == TabDisposition.CurrentTab)
             return active is not null ? Browser(Select(active, BrowserScopeKind.ActiveTab, true))
-                : new(ExecutionScopeKind.Clarify, Detail: "Chrome does not have one identifiable active tab.");
+                : activeTabs.Length > 1 ? ExecutionScopeDecision.Ask("Which Chrome tab?")
+                : ExecutionScopeDecision.Unable("I couldn't find an open browser tab to use.");
         var weakNamedTab = false;
         if (route.TabDisposition == TabDisposition.ExistingNamedTab
             || route.DestinationKind == SemanticDestinationKind.NamedTab)
@@ -267,7 +282,7 @@ public sealed class ScopeResolver
                         ? Browser(Select(selectedTab, BrowserScopeKind.ActiveTab, true, focusOnly))
                         : Browser(Select(selectedTab, BrowserScopeKind.ExistingNamedTab, true, focusOnly));
                 case NamedTabSelectionKind.Ambiguous:
-                    return new(ExecutionScopeKind.Clarify, Detail: "More than one open tab matches that name.");
+                    return ExecutionScopeDecision.Ask("Which tab did you mean?");
                 case NamedTabSelectionKind.NoMatch:
                     // The claim is refuted. Only a request that itself requires the visible surface,
                     // with Chrome visibly in front and one identifiable active tab, runs there; it
@@ -277,12 +292,12 @@ public sealed class ScopeResolver
                         && route.SurfacePreference != SurfacePreference.Native
                         && chromeForeground && active is not null)
                         return Browser(Select(active, BrowserScopeKind.ActiveTab) with { TabClaimRefuted = true });
-                    return new(ExecutionScopeKind.Clarify, Detail: "No open tab matches that name.");
+                    return ExecutionScopeDecision.Unable("I couldn't find that tab.");
             }
             weakNamedTab = grounded && selection.Kind == NamedTabSelectionKind.Unavailable
                 && selection.Reason == "choice_confidence_below_threshold";
             if (!weakNamedTab)
-                return new(ExecutionScopeKind.Clarify, Detail: "The named tab was not uniquely identified.");
+                return ExecutionScopeDecision.Unable("I couldn't tell which tab you meant.");
         }
         // Current-surface dependence is its own dimension, independent of task relation: a new
         // task can still target what is visible now. A service destination alone does not
@@ -293,8 +308,7 @@ public sealed class ScopeResolver
         // acquiring that surface), or when no current browser surface is in view.
         if (uncertainBrowser && route.ContextDependency == ContextDependency.RequiresCurrentSurface
             && (!chromeForeground || active is null))
-            return new(ExecutionScopeKind.Clarify,
-                Detail: "The required current browser surface is unavailable or ambiguous.");
+            return ExecutionScopeDecision.Unable("I couldn't find a browser page to use.");
         if ((route.Route == CommandRoute.ComputerUse || uncertainBrowser && chromeForeground)
             && (route.TabDisposition == TabDisposition.Unspecified || weakNamedTab)
             && route.SurfacePreference != SurfacePreference.Native
@@ -302,8 +316,7 @@ public sealed class ScopeResolver
         {
             if (route.DestinationKind == SemanticDestinationKind.None)
                 return active is not null ? Browser(Select(active, BrowserScopeKind.ActiveTab))
-                    : new(ExecutionScopeKind.Clarify,
-                        Detail: "The required current browser surface is unavailable or ambiguous.");
+                    : ExecutionScopeDecision.Unable("I couldn't find a browser page to use.");
             if (route.DestinationKind == SemanticDestinationKind.KnownService && active is not null
                 && destination is not null
                 && route.SurfacePreference != SurfacePreference.Browser
@@ -324,6 +337,10 @@ public sealed class ScopeResolver
                 .OrderByDescending(t => t.LastUsedSequence).ToArray();
             if (owned.Length > 0 && (owned.Length == 1 || owned[0].LastUsedSequence > owned[1].LastUsedSequence))
                 return Browser(Select(owned[0], BrowserScopeKind.RecentOwnedTaskTab));
+            // The user already has the named destination in view and the request acts there: use it, never duplicate it.
+            if (route.ExplicitUrl is null && route.GoalShape == GoalShape.ActionOnSurface && chromeForeground
+                && active is not null && SameDestination(active, destination, false))
+                return Browser(Select(active, BrowserScopeKind.ActiveTab) with { NamedServiceHint = route.DestinationName });
             return Browser(new(BrowserScopeKind.NewTaskTab, Destination: destination,
                 NamedServiceHint: route.DestinationKind == SemanticDestinationKind.KnownService
                     ? route.DestinationName : null));
@@ -331,8 +348,7 @@ public sealed class ScopeResolver
         if ((route.TaskRelation is TaskRelation.ContinueRecent or TaskRelation.RequiresRecent)
             && route.ContextDependency != ContextDependency.SelfContained
             && !(grounded && chromeForeground && active is not null))
-            return new(ExecutionScopeKind.Clarify,
-                Detail: "The request depends on prior VoiceOS work without a safe current surface or destination.");
+            return ExecutionScopeDecision.Unable("I don't have earlier work to continue from.");
         // An independent browser goal needs either explicit acquisition of a named web
         // representation or corroborated browser results. A generic bounded/native/text goal
         // cannot use this path, and an executable safe direct offer retains precedence.
@@ -360,7 +376,7 @@ public sealed class ScopeResolver
                     window?.Hwnd ?? 0, app.ProcessName ?? "", app.Id, route.EndState));
             }
             if (route.SurfacePreference == SurfacePreference.Native)
-                return new(ExecutionScopeKind.Clarify, Detail: "No unique installed native app matched the request.");
+                return ExecutionScopeDecision.Unable("I couldn't find that app.");
         }
         // Content selection without a destination leaves its provider unnamed. When a usable
         // current browser surface exists, context judges whether it is that provider.
@@ -376,7 +392,7 @@ public sealed class ScopeResolver
             return Browser(new(BrowserScopeKind.NewTaskTab));
         // Only complete actions reach this point. Context can repair a preliminary route.
         if (contextual is null)
-            return new(ExecutionScopeKind.Clarify, Detail: "The execution surface is ambiguous.");
+            return ExecutionScopeDecision.Unable("I couldn't tell where to do that.");
         var offered = new List<ContextualSurface> { ContextualSurface.Clarify };
         var safeDirect = reconciliationOfferRead ? reconciliationOffer
             : directOffer is null ? null : await directOffer(cancellationToken).ConfigureAwait(false);
@@ -404,6 +420,14 @@ public sealed class ScopeResolver
         var selected = await Timed("scope_surface", () => contextual.SelectAsync(utterance, route, context, offered, cancellationToken))
             .ConfigureAwait(false);
         if (!offered.Contains(selected)) selected = ContextualSurface.Clarify;
+        // A picker that cannot settle placement is internal uncertainty, not a question for the user: a web task
+        // that needs the page in view goes there, any other web task gets its own tab.
+        if (selected == ContextualSurface.Clarify && route.Route == CommandRoute.ComputerUse && context.BrowserConnected
+            && route.SurfacePreference != SurfacePreference.Native && route.TabDisposition == TabDisposition.Unspecified
+            && route.ContextDependency is ContextDependency.SelfContained or ContextDependency.RequiresCurrentSurface
+            && !(route.TaskRelationEstablished && route.TaskRelation is TaskRelation.ContinueRecent or TaskRelation.RequiresRecent))
+            selected = route.ContextDependency == ContextDependency.RequiresCurrentSurface && offered.Contains(ContextualSurface.ActiveBrowserTab)
+                ? ContextualSurface.ActiveBrowserTab : ContextualSurface.NewBrowserTaskTab;
         // A picker that cannot settle placement is an internal uncertainty, not a question: an established fresh task
         // that names something to reach, with no dependence on the visible page, simply gets its own tab.
         if (selected == ContextualSurface.Clarify && route.Route == CommandRoute.ComputerUse && route.RequestsNamedEntity
@@ -419,7 +443,7 @@ public sealed class ScopeResolver
             ContextualSurface.NewBrowserTaskTab => Browser(new(BrowserScopeKind.NewTaskTab)),
             ContextualSurface.ForegroundNativeWindow when context.ForegroundWindow is { Hwnd: not 0 } window
                 => new(ExecutionScopeKind.NativeInteraction, Native: new(window.Hwnd, window.ProcessName)),
-            _ => new(ExecutionScopeKind.Clarify, Detail: "The context does not safely identify a surface.")
+            _ => ExecutionScopeDecision.Unable("I couldn't tell where to do that.")
         };
     }
 

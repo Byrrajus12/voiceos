@@ -19,16 +19,10 @@ public interface IBrowserStepCompiler
     ValueTask<CompiledBrowserTask?> CompileAsync(string utterance, CancellationToken cancellationToken = default);
 }
 
-/// <summary>Adapts a legacy single-shot normalizer to a one-step plan (tests and non-compiling hosts).</summary>
-public sealed class NormalizerStepCompiler(IBrowserGoalNormalizer normalizer) : IBrowserStepCompiler
+/// <summary>The model used by the browser's one-shot helpers (compile, repair, value resolution).</summary>
+public static class BrowserModel
 {
-    public async ValueTask<CompiledBrowserTask?> CompileAsync(string utterance, CancellationToken cancellationToken = default)
-    {
-        var normalized = await normalizer.NormalizeAsync(utterance, cancellationToken).ConfigureAwait(false);
-        return normalized is null ? null
-            : new(new InteractionPlan(utterance, normalized.Objective,
-                [new(PlanStepKind.Act, normalized.Objective)]), normalized);
-    }
+    public const string Id = "openai/gpt-6-luna";
 }
 
 /// <summary>
@@ -44,7 +38,7 @@ public static class SimpleStepFramer
 
     /// <summary>Router-level precheck used before the scope is known: no destination to reach, no new tab.</summary>
     public static bool MayBeSimple(CommandRouteDecision route, string utterance)
-        => route.DestinationKind == SemanticDestinationKind.None && route.ExplicitUrl is null
+        => route.PageOperation != PageOperation.None || route.DestinationKind == SemanticDestinationKind.None && route.ExplicitUrl is null
             && route.TabDisposition != TabDisposition.NewTab && route.GoalShape != GoalShape.SurfaceOnly
             && !route.RequestsNamedEntity && !HasSequencing(utterance);
 
@@ -71,7 +65,8 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
         "never a selector, script or element reference. Keep EVERY meaningful intermediate intent in order; never collapse 'A then B then C' into C. " +
         "Step kinds: Reach (get to a named site or page; at most one, first), Search (enter a query and apply it), " +
         "Locate (make a described target visible in the content now shown: a result, section or item), " +
-        "Open (activate a described target and follow it), Act (any other bounded in-page operation). " +
+        "Open (activate a described target and follow it), History (go back or forward one page; target is 'back' or 'forward'), Act (any other bounded in-page operation). " +
+        "Destinations are never guessed: set preferredService and Reach only when the user named that site or service; a request with no named site is a generic web task. " +
         "Use 1 to 5 steps. Scope each Search to where the user said: a site-wide search is one Search step with the exact query. " +
         "For Search also say which search surface the user meant in searchScope: Global (the service-wide search; the default), " +
         "CurrentResource (inside the repository/document/project that is open), InPage (find text on the current page) or Collection " +
@@ -132,7 +127,7 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         request.Content = JsonContent.Create(new
         {
-            model = OpenRouterBrowserGoalNormalizer.Model,
+            model = BrowserModel.Id,
             messages = new object[] { new { role = "system", content = Prompt }, new { role = "user", content = utterance } },
             response_format = new { type = "json_schema", json_schema = new { name = "browser_plan", strict = true, schema = Schema } },
             max_completion_tokens = 500,
@@ -187,6 +182,7 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
                     || target is not null && !SafeText(target, 120)) return null;
                 if (kind == PlanStepKind.Search && query is null) return null;
                 if (kind is PlanStepKind.Locate or PlanStepKind.Open && target is null) return null;
+                if (kind == PlanStepKind.History && target?.ToLowerInvariant() is not ("back" or "forward")) return null;
                 if (progress is not null && !SafeText(progress, 48)) progress = null;
                 var intent = kind == PlanStepKind.Search && Enum.TryParse<SearchScopeIntent>(Text(item, "searchScope"), out var parsedIntent)
                     ? parsedIntent : SearchScopeIntent.Unspecified;

@@ -22,13 +22,6 @@ public class VoiceOSConfig
     public bool DirectRescue { get; set; } = true;
     /// <summary>How long after routing a confident browser route waits for the speculative direct decision to be ready.</summary>
     public int DirectFirstGraceMs { get; set; } = 400;
-    /// <summary>
-    /// On (default): a proof from an active family (Surface, Activate) completes the browser step at once, with the
-    /// legacy completion path as fallback. Shadow evaluates and logs only; Off is exactly the legacy loop.
-    /// Override with VOICEOS_BROWSER_PROOF=Off|Shadow|On.
-    /// </summary>
-    public Interaction.ProofMode BrowserProofMode { get; set; } = Interaction.ProofMode.On;
-
     public void ApplyEnvironmentOverrides()
     {
         static bool Read(string name, bool fallback)
@@ -36,8 +29,6 @@ public class VoiceOSConfig
         FrontDoorGrounding = Read("VOICEOS_FRONT_DOOR_GROUNDING", FrontDoorGrounding);
         SpeculativeDirectDecision = Read("VOICEOS_SPECULATIVE_DIRECT_DECISION", SpeculativeDirectDecision);
         DirectRescue = Read("VOICEOS_DIRECT_RESCUE", DirectRescue);
-        if (Enum.TryParse<Interaction.ProofMode>(Environment.GetEnvironmentVariable("VOICEOS_BROWSER_PROOF"), true, out var proof))
-            BrowserProofMode = proof;
     }
 
     public TimeSpan HoldThreshold => TimeSpan.FromMilliseconds(HoldThresholdMs);

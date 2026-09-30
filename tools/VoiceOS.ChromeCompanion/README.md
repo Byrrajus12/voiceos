@@ -172,3 +172,14 @@ walks the real session history (including VoiceOS-generated entries and the user
 pages in an adopted tab), and succeed only on an observed traversal. `chrome.tabs.goBack()`
 is used only when the page cannot be scripted. Only a genuine new child tab (opened by a
 VoiceOS action) with no same-tab history falls back to returning to its opener.
+
+## Known Alpha limitation: Chrome's toolbar Back button
+
+VOS "Go back" / "Go forward" call the page's own `history.back()` / `history.forward()`,
+which work in adopted user tabs and VOS-owned tabs alike. Chromium's history-manipulation
+intervention marks session-history entries created by scripted (untrusted, synthetic)
+clicks as skippable for its own Back/Forward UI. After VOS has clicked through a site, the
+toolbar Back button can therefore look enabled yet do nothing, while the long-press history
+menu still lists the entries. This is Chrome behavior, not lost history; VOS voice Back is
+unaffected. The Alpha does not work around it: no `chrome.debugger`, CDP, OS-level mouse
+input or OCR is used for this purpose.

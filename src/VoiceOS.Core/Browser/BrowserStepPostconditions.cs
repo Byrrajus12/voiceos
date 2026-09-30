@@ -74,7 +74,7 @@ internal static class BrowserEvidence
 /// effects or of the fresh observation: never whether the whole request looks done, never a model. A wrongly
 /// chosen target is a binding failure and is not corrected here.
 /// </summary>
-internal sealed class PlannedStepEvaluator(BrowserGoal goal, IProofEvaluator legacy) : IProofEvaluator
+internal sealed class PlannedStepEvaluator(BrowserGoal goal) : IProofEvaluator
 {
     private static readonly HashSet<string> GenericTargetWords = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -83,14 +83,27 @@ internal sealed class PlannedStepEvaluator(BrowserGoal goal, IProofEvaluator leg
         "article", "video", "content", "one", "it", "that", "this", "its"
     };
 
-    public ProofVerdict Evaluate(ProofInput input) => !input.Step.WithinPlan ? legacy.Evaluate(input) : input.Step.Family switch
+    public ProofVerdict Evaluate(ProofInput input) => !input.Step.WithinPlan ? ProofVerdict.NotYet(input.Step.Family, "not_a_plan_step") : input.Step.Family switch
     {
         ProofFamily.Surface => Reach(input),
         ProofFamily.Find => Search(input),
         ProofFamily.Locate => Locate(input),
         ProofFamily.Activate => Open(input),
-        _ => ProofVerdict.NotYet(ProofFamily.Reach, "legacy_completion")
+        _ => Act(input)
     };
+
+    // -- Act: one bounded operation ran and the browser reports it took effect -----------------
+
+    private static ProofVerdict Act(ProofInput input)
+    {
+        const ProofFamily family = ProofFamily.Reach;
+        if (input.LastAction is not { } action) return ProofVerdict.NotYet(family, "no_action");
+        var last = input.Effects.Where(e => StringComparer.Ordinal.Equals(e.ActionId, action.Id)).ToArray();
+        if (last.Any(static e => e.Kind == EffectKind.NoEffect)) return ProofVerdict.NotYet(family, "no_effect");
+        // The engine turns a "successful" action that changed nothing into a NoEffect, so an effect here is a real one.
+        return last.Length == 0 ? ProofVerdict.NotYet(family, "no_effect")
+            : ProofVerdict.Proved(family, "act_applied", last.Select(static e => e.Id).ToArray());
+    }
 
     // -- Reach: the intended site is actually the current page -------------------------
 

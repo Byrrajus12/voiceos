@@ -174,6 +174,10 @@ public sealed class BrowserSurface : IInteractionSurface
         if (element.Submit) entry["Submit"] = true;
         if (facts.Landmark is not null) entry["Landmark"] = facts.Landmark;
         if (facts.Selected is { } selected) entry["Selected"] = selected;
+        if (element.Position is { } position)
+        {
+            entry["Collection"] = element.Collection; entry["Position"] = position; entry["CollectionSize"] = element.CollectionSize;
+        }
         return entry;
     }
 
@@ -202,6 +206,7 @@ public sealed class BrowserSurface : IInteractionSurface
             InteractionActionKind.TypeText => "INSERT_TEXT",
             InteractionActionKind.Scroll => "SCROLL",
             InteractionActionKind.GoBack => "BACK",
+            InteractionActionKind.GoForward => "FORWARD",
             InteractionActionKind.PressKey => "SUBMIT",
             _ => null
         };
@@ -223,7 +228,7 @@ public sealed class BrowserSurface : IInteractionSurface
             var adopted = next.TabId != snapshot.TabId;
             if (adopted)
             {
-                var returned = action.Kind == InteractionActionKind.GoBack
+                var returned = action.Kind is InteractionActionKind.GoBack
                     && next.ReturnedFromTabId == snapshot.TabId;
                 if (!returned && (action.Kind != InteractionActionKind.Activate
                         || next.AdoptedFromTabId != snapshot.TabId)
@@ -301,7 +306,9 @@ public sealed class BrowserSurface : IInteractionSurface
                 + (fact.SearchScope is { } scope ? $" scope='{scope}'" : "")
                 + (fact.Selected is { } selected ? $" selected={selected.ToString().ToLowerInvariant()}" : "")
                 + (fact.Landmark is "navigation" ? " region='navigation'" : "")
-                + (fact.InList && element.Role == "link" ? " result_item=true" : "");
+                + (fact.InList && element.Role == "link" ? " result_item=true" : "")
+                + (element.Position is { } position && element.CollectionSize is { } size
+                    ? $" collection='{element.Collection}' position={position}/{size}" : "");
             var actions = new List<InteractionAction>();
             if (element.Editable)
             {
@@ -323,8 +330,9 @@ public sealed class BrowserSurface : IInteractionSurface
             new($"r{revision}:scroll:down", InteractionActionKind.Scroll, Direction: "down"),
             new($"r{revision}:scroll:up", InteractionActionKind.Scroll, Direction: "up")
         ]));
-        if (snapshot.CanGoBack)
-            result.Add(new("history", "Task-tab history", [new($"r{revision}:back", InteractionActionKind.GoBack)]));
+        // The page's own history hint is unreliable; the companion's traversal attempt is the authority.
+        result.Add(new("history", "Tab history", [new($"r{revision}:back", InteractionActionKind.GoBack),
+            new($"r{revision}:forward", InteractionActionKind.GoForward)]));
         return result;
     }
 }

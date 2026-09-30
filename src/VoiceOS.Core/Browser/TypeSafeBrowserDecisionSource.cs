@@ -47,7 +47,7 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
     {
         var planStep = context.Goal.Step is { WithinPlan: true } && Plan is not null ? Plan.Current : null;
         // A step whose completion is observed in code never asks the model whether the goal looks done.
-        var stepMode = planStep is not null && context.Goal.Step!.Family != ProofFamily.Reach;
+        var stepMode = planStep is not null;
         if (stepMode && StepShortcut(planStep!, context) is { } shortcut) return shortcut;
         var bindStep = (_bindHead || stepMode) && context.Goal.Step is { Family: ProofFamily.Activate } activateStep ? activateStep : null;
         var space = BrowserDecisionSpace.From(context.Observation, context.RecentHistory, bindStep, planStep, stepMode);
@@ -159,7 +159,7 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
 
             if (action is null)
                 return Exit("unoffered_operation", "The selected browser operation is unavailable.");
-            if (_effectAwareRepeat ? RepeatsEarlierElement(action, context) : RepeatsEarlierActivation(action, context))
+            if (_effectAwareRepeat || stepMode ? RepeatsEarlierElement(action, context) : RepeatsEarlierActivation(action, context))
                 return Exit("repeated_action",
                     "The next step would repeat an earlier click on this page without reaching the goal.", ProgressChoices());
 
@@ -674,7 +674,6 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                     InteractionActionKind.SetText or InteractionActionKind.TypeText => "TYPE_TEXT",
                     InteractionActionKind.Scroll when action.Direction == "down" => "SCROLL_DOWN",
                     InteractionActionKind.Scroll when action.Direction == "up" => "SCROLL_UP",
-                    InteractionActionKind.GoBack => "BACK",
                     _ => null
                 };
                 if (operation is null) continue;
@@ -697,7 +696,6 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                     "TYPE_TEXT" => "Enter text into a writable field; determine the value after choosing the field.",
                     "SCROLL_DOWN" => "Scroll the page down.",
                     "SCROLL_UP" => "Scroll the page up.",
-                    "BACK" => "Go back in task-tab history.",
                     _ => "Use an offered browser control."
                 };
             if (!deterministicCompletion)
@@ -743,7 +741,8 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                     $"Descriptor of the target the user wants opened or used: \"{bindStep.What.Phrase}\". Choose the single offered control " +
                     "that IS that target, or NONE. A control that only advances toward it (search box or button, category, menu, pagination, " +
                     "a different item) is NOT the target. Judge from role, name, href, context and section in the shared observation; " +
-                    "this head is independent of the chosen operation.", labels);
+                    "When the request names a position (first, second, last), use each control's collection position (position=n/size) within the one collection that holds the results or items meant. " +
+                    "This head is independent of the chosen operation.", labels);
             }
             return space;
         }

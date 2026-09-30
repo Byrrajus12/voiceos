@@ -79,6 +79,7 @@ internal static class ActivityMessage
                 _ => "Scrolling…"
             };
         if (activity.Operation == InteractionActionKind.GoBack) return "Going back…";
+        if (activity.Operation == InteractionActionKind.GoForward) return "Going forward…";
         if (activity.OpeningTab)
         {
             if (SafeLabel(activity.Query) is { } query) return $"Searching for {query}…";
@@ -115,16 +116,10 @@ internal static class ActivityMessage
 
     public static string ForClarification(string? detail) => detail switch
     {
-        "Chrome does not have one identifiable active tab." => "Which Chrome tab?",
-        "The named tab was not uniquely identified." => "Which tab did you mean?",
-        "The requested native app is unavailable or ambiguous." => "Which app did you mean?",
-        "No unique installed native app matched the request." => "Which app did you mean?",
-        "The execution surface is ambiguous." => "Where should I do that?",
-        "The context does not safely identify a surface." => "Where should I do that?",
         "Media intent needs clarification before controlling current playback." => "What should I play?",
         // A question the runtime composed from a genuine ambiguity in the request is shown as is.
         { Length: > 0 and <= 140 } question when question.EndsWith('?') => question,
-        _ => "Could you clarify that request?"
+        _ => "Which one did you mean?"
     };
 
     public static string ForFailure(string? detail) => detail switch
@@ -137,6 +132,8 @@ internal static class ActivityMessage
         "Chrome is no longer the foreground application." => "Chrome lost focus.",
         "Chrome lost foreground focus before browser observation." => "Chrome lost focus.",
         _ when BrowserStepMessages.IsUserFacing(detail) => detail!,
+        { Length: > 0 and <= 120 } sentence when sentence.StartsWith("I ", StringComparison.Ordinal)
+            || sentence.StartsWith("There ", StringComparison.Ordinal) => sentence,
         _ => "Couldn't complete that action."
     };
 }

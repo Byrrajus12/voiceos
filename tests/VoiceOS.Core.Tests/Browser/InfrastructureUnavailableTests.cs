@@ -24,26 +24,6 @@ public sealed class InfrastructureUnavailableTests
     }
 
     [Theory]
-    [InlineData("http500")] [InlineData("missingKey")] [InlineData("timeout")] [InlineData("envelope")]
-    public async Task Normalizer_ProviderFailure_ThrowsUnavailable(string failure)
-    {
-        var n = new OpenRouterBrowserGoalNormalizer(new HttpClient(new HttpResponse(
-            status: failure == "http500" ? HttpStatusCode.InternalServerError : HttpStatusCode.OK,
-            timeout: failure == "timeout")), failure == "missingKey" ? null : "placeholder");
-        var ex = await Assert.ThrowsAsync<InfrastructureUnavailableException>(() => n.NormalizeAsync("search").AsTask());
-        Assert.Equal(UnavailableReason.BrowserGoalService, ex.Reason);
-        Assert.DoesNotContain("placeholder", ex.ToString());
-    }
-
-    [Fact]
-    public async Task Normalizer_InvalidContent_ReturnsNull()
-    {
-        var n = new OpenRouterBrowserGoalNormalizer(new HttpClient(new HttpResponse(
-            JsonSerializer.Serialize(new { choices = new[] { new { message = new { content = "invalid json" } } } }))), "test");
-        Assert.Null(await n.NormalizeAsync("search"));
-    }
-
-    [Theory]
     [InlineData(true)] [InlineData(false)]
     public async Task DirectEngine_TransportOrEnvelopeFailure_SetsProviderFailed(bool http)
     {
@@ -110,9 +90,9 @@ public sealed class InfrastructureUnavailableTests
     public async Task InteractionEngine_PropagatesUnavailable_FromDecideOrExecute(bool decide)
         => await Assert.ThrowsAsync<InfrastructureUnavailableException>(() => new InteractionEngine().RunAsync(new("click"), new LoopSurface(), new LoopDecision(decide)).AsTask());
 
-    private sealed class Normalizer(bool fail) : IBrowserGoalNormalizer
+    private sealed class Normalizer(bool fail) : NormalizingCompiler
     {
-        public ValueTask<BrowserGoalNormalization?> NormalizeAsync(string u, CancellationToken ct = default)
+        public override ValueTask<BrowserGoalNormalization?> NormalizeAsync(string u, CancellationToken ct = default)
             => fail ? throw Unavailable(UnavailableReason.BrowserGoalService) : ValueTask.FromResult<BrowserGoalNormalization?>(new("search", "x", null, null, null, ["x"], "results", [], SemanticEndState.ResultsVisible));
     }
     private sealed class Transport(string? actionError = null, bool observeError = false, bool selectError = false) : IChromeCompanionTransport

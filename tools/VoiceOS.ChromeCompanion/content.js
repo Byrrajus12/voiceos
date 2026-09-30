@@ -338,6 +338,7 @@
 
   // Structural facts only (form ownership, landmark, list membership, state); no site knowledge.
   const formIds = new WeakMap();
+  const collectionIds = new WeakMap();
   function structuralFacts(element) {
     const facts = {};
     try {
@@ -358,8 +359,23 @@
         facts.landmark = role ?? (tag === "nav" ? "navigation" : tag === "header" ? "banner" : tag === "footer" ? "contentinfo"
           : tag === "aside" ? "complementary" : tag);
       }
-      if (typeof element.closest === "function"
-        && element.closest("li, [role='listitem'], article, [role='article'], tr, [role='row']")) facts.inList = true;
+      const ITEM = "li, [role='listitem'], article, [role='article'], tr, [role='row']";
+      const item = typeof element.closest === "function" ? element.closest(ITEM) : null;
+      if (item) {
+        facts.inList = true;
+        // Order within the item's own collection (DOM order), so "the first result" has a structural meaning.
+        const container = item.parentElement;
+        if (container) {
+          if (!collectionIds.has(container)) collectionIds.set(container, `c${collectionIds.size + 1}`);
+          const siblings = Array.from(container.children).filter((child) => child.matches(ITEM));
+          const index = siblings.indexOf(item);
+          if (index >= 0) {
+            facts.collection = collectionIds.get(container);
+            facts.position = index + 1;
+            facts.collectionSize = siblings.length;
+          }
+        }
+      }
       const state = element.getAttribute("aria-selected") ?? element.getAttribute("aria-checked") ?? element.getAttribute("aria-pressed");
       if (state === "true" || state === "false") facts.selected = state === "true";
       else if (element instanceof HTMLInputElement && (element.type === "checkbox" || element.type === "radio")) facts.selected = element.checked;

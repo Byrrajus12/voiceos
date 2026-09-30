@@ -98,7 +98,7 @@ public sealed class OpenRouterBrowserTextValueResolver(HttpClient http, string? 
         httpRequest.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         httpRequest.Content = JsonContent.Create(new
         {
-            model = OpenRouterBrowserGoalNormalizer.Model,
+            model = BrowserModel.Id,
             messages = new object[]
             {
                 new { role = "system", content = Prompt },

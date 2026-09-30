@@ -112,7 +112,7 @@ public sealed class BrowserStepRunnerTests
     {
         var site = new Site();
         var gateway = TauriGateway();
-        var service = new BrowserInteractionService(site, gateway, compiler: new Compiler(Plan), proofMode: ProofMode.On);
+        var service = new BrowserInteractionService(site, gateway, compiler: new Compiler(Plan));
 
         var outcome = await service.RunAsync("Go to GitHub, search for a Rust GUI framework and open the Tauri repository.",
             scope: NewGitHubTab);
@@ -148,7 +148,7 @@ public sealed class BrowserStepRunnerTests
     private static PlannedStepEvaluator Evaluator() => new(new BrowserGoal("x") with
     {
         Normalization = new("g", null, null, "GitHub", "https://github.com/", [], "g", [])
-    }, new BrowserProofEvaluator(new BrowserGoal("x")));
+    });
 
     [Fact]
     public void Search_NeedsTheQueryInTheField_ASubmitAndAChangedPage()
@@ -242,7 +242,7 @@ public sealed class StepRecoveryTests
         EndState: SemanticEndState.ResourceOpened, GoalShape: GoalShape.ActionOnSurface);
 
     private static BrowserInteractionService Service(Page page, IBrowserStepRepair? repair)
-        => new(page, new Gateway(), proofMode: ProofMode.On, repair: repair, compiler: new OpenRouterCompilerStub());
+        => new(page, new Gateway(), repair: repair, compiler: new OpenRouterCompilerStub());
 
     private sealed class OpenRouterCompilerStub : IBrowserStepCompiler
     {

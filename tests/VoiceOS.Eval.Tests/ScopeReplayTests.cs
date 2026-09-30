@@ -257,7 +257,9 @@ public sealed class ScopeReplayTests(ITestOutputHelper output)
         Assert.Equal(["dest.installed-web-app-sheets#0"],
             All.Value.Where(r => NeedsUnrecordedInstalledApps(r.Case)).Select(r => r.Case.Key));
         var mismatches = All.Value.Where(r => !r.Case.NamedTabClaim && !NeedsUnrecordedInstalledApps(r.Case))
-            .Where(r => Recorded(r.Case.RecordedScope) != Recorded(r.Scope))
+            // A recorded Clarify that named nothing the user could answer is now a specific failure (Unresolved).
+            .Where(r => Recorded(r.Case.RecordedScope) != Recorded(r.Scope)
+                && !(r.Case.RecordedScope?.Kind == ExecutionScopeKind.Clarify && r.Scope.Kind == ExecutionScopeKind.Unresolved))
             .Select(r => $"{r.Case.Key}: recorded {Recorded(r.Case.RecordedScope)} replayed {Recorded(r.Scope)}")
             .ToArray();
         Assert.True(mismatches.Length == 0, string.Join(Environment.NewLine, mismatches));

@@ -88,7 +88,7 @@ public sealed class OpenRouterBrowserStepRepair(HttpClient http, string? apiKey)
         message.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         message.Content = JsonContent.Create(new
         {
-            model = OpenRouterBrowserGoalNormalizer.Model,
+            model = BrowserModel.Id,
             messages = new object[] { new { role = "system", content = Prompt }, new { role = "user", content = payload } },
             response_format = new { type = "json_schema", json_schema = new { name = "step_repair", strict = true, schema = Schema } },
             max_completion_tokens = 300,

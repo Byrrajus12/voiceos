@@ -66,12 +66,12 @@ public sealed class FrontDoorWiringTests
     }
 
     [Fact]
-    public async Task DirectRescueFlagOff_ClarifiesAsBefore()
+    public async Task DirectRescueFlagOff_DoesNotInventAQuestion()
     {
         var engine = new Engine(); var volume = new Volume();
         using var orchestrator = Create(new(CommandRoute.Clarify), engine, volume, rescue: false);
         var run = await orchestrator.RunTranscriptAsync("A bit louder");
-        Assert.Equal(ApplicationInteractionPhase.NeedsChoice, run.TerminalSnapshot!.Phase);
+        Assert.Equal(ApplicationInteractionPhase.Failed, run.TerminalSnapshot!.Phase);
         Assert.Equal(0, volume.Calls);
         Assert.False(run.SpeculativeDirectUsed);
     }

@@ -23,6 +23,12 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
     public async ValueTask<CommandRouteDecision> RouteAsync(
         string transcript, RecentTaskFrame? recentTask, FrontDoorContext? context,
         CancellationToken cancellationToken = default, bool earlierReferentsAvailable = false)
+        => RouteInvariants.Apply(await RouteCoreAsync(transcript, recentTask, context, cancellationToken,
+            earlierReferentsAvailable).ConfigureAwait(false));
+
+    private async ValueTask<CommandRouteDecision> RouteCoreAsync(
+        string transcript, RecentTaskFrame? recentTask, FrontDoorContext? context,
+        CancellationToken cancellationToken, bool earlierReferentsAvailable)
     {
         var criteria = new Dictionary<string, string>
         {
@@ -67,13 +73,23 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
                         ["Previous"] = "Go to the previous item."
                     }),
                 ["return_target"] = new("choice",
-                    "Independently classify what a request to go back, return, or go to the previous thing moves through. Judge the whole utterance, not the verb alone.",
+                    "Independently classify what a request to go back or forward, return, or go to the previous or next thing moves through. Judge the whole utterance, not the verb alone.",
                     new Dictionary<string, string>
                     {
                         ["None"] = "No going back, returning, or previous-item request.",
                         ["MediaPlayback"] = "The previous track, song, episode, video, or other item in media playback.",
-                        ["NavigationHistory"] = "The previous page, screen, or location in browser or app navigation history.",
+                        ["NavigationHistory"] = "The previous or next page, screen, or location in browser or app navigation history.",
                         ["Uncertain"] = "Going back is requested, but whether media playback or navigation is meant cannot be established."
+                    }),
+                ["page_operation"] = new("choice",
+                    "Is the ENTIRE request exactly one of these operations on the page already in view? Back and Forward are one step through browser history ('go back', 'go forward', 'go back one more time'). ScrollDown and ScrollUp scroll the page once. A request that also names a target, destination, query, or a second action is None.",
+                    new Dictionary<string, string>
+                    {
+                        ["None"] = "Anything else.",
+                        ["Back"] = "Exactly one step back in history.",
+                        ["Forward"] = "Exactly one step forward in history.",
+                        ["ScrollDown"] = "Exactly one scroll down the current page.",
+                        ["ScrollUp"] = "Exactly one scroll up the current page."
                     }),
                 ["requested_entity"] = new("choice",
                     "Independently identify what the user wants opened, focused, or used, regardless of surface preference, tab wording, or whether it is installed or listed anywhere.",
@@ -142,7 +158,11 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
         var literalUrl = ExtractLiteralUrl(transcript);
         var destinationAnswer = answers.TryGetValue("destination", out var da) && da.QuestionType == "choice"
             && da.Confidence >= confidenceThreshold ? da.SelectedChoice : null;
-        var service = ServiceResolver.Resolve(destinationAnswer);
+        var suggested = ServiceResolver.Resolve(destinationAnswer);
+        // A destination is authoritative only when the user's own words name it (or a literal URL does).
+        var service = DestinationGrounding.Names(transcript, suggested) ? suggested : null;
+        if (suggested is not null && service is null)
+            logger?.LogInformation("Destination suggested={Suggested} grounded=false: not named by the user, ignored", suggested.CanonicalName);
         var disposition = answers.TryGetValue("tab_disposition", out var td) && td.QuestionType == "choice"
             && td.Confidence >= confidenceThreshold && Enum.TryParse<TabDisposition>(td.SelectedChoice, out var parsed)
             ? parsed : TabDisposition.Unspecified;
@@ -163,6 +183,7 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
                 && alternative.QuestionType == "choice"
                 && alternative.SelectedChoice is "DIRECT_CAPABILITY" or "NATIVE_INTERACTION" or "TEXT_TRANSFORM",
             ReturnTarget = ChoiceEnum<ReturnTarget>(answers, "return_target", confidenceThreshold),
+            PageOperation = ChoiceEnum<PageOperation>(answers, "page_operation", confidenceThreshold),
             ReferencesEarlier = answers.TryGetValue("earlier_reference", out var earlier)
                 && earlier.QuestionType == "choice" && earlier.Confidence >= Math.Max(confidenceThreshold, .6)
                 && earlier.SelectedChoice == "Earlier",
@@ -171,6 +192,7 @@ public sealed class TypeSafeCommandRouter(IJevGateway gateway, double confidence
                 && Enum.TryParse<TaskRelation>(relation.SelectedChoice, out var taskRelation)
                 && Enum.IsDefined(taskRelation),
             DestinationKind = destinationKind, DestinationName = destinationName,
+            SuggestedDestination = service is null ? suggested?.CanonicalName : null,
             ExplicitUrl = literalUrl, TabDisposition = disposition,
             SurfacePreference = ChoiceEnum<SurfacePreference>(answers, "surface_preference", confidenceThreshold),
             EndState = ChoiceEnum<SemanticEndState>(answers, "end_state", confidenceThreshold),

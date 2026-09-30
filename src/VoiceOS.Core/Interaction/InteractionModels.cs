@@ -16,6 +16,7 @@ public enum InteractionActionKind
     Scroll,
     PressKey,
     GoBack,
+    GoForward,
     Wait,
     Complete
 }

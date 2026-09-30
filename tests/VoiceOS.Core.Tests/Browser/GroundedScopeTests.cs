@@ -40,7 +40,7 @@ public sealed class GroundedScopeTests
         var scope = await new ScopeResolver().ResolveAsync("snap it", Route, new(Explorer, [Explorer], true, []), picker,
             directOffer: _ => ValueTask.FromResult(safe ? Offer : null));
         Assert.Equal(safe, picker.Offered.Contains(ContextualSurface.DirectCapability));
-        Assert.Equal(safe ? ExecutionScopeKind.DirectCapability : ExecutionScopeKind.Clarify, scope.Kind);
+        Assert.Equal(safe ? ExecutionScopeKind.DirectCapability : ExecutionScopeKind.Unresolved, scope.Kind);
     }
 
     [Fact]
@@ -84,7 +84,7 @@ public sealed class GroundedScopeTests
             Route = CommandRoute.ComputerUse, TaskRelation = TaskRelation.ContinueRecent },
             new(visible ? Chrome : Explorer, [Chrome], true, [Tab()]), picker);
         Assert.Equal(visible ? 1 : 0, picker.Calls);
-        Assert.Equal(visible ? ExecutionScopeKind.Browser : ExecutionScopeKind.Clarify, scope.Kind);
+        Assert.Equal(visible ? ExecutionScopeKind.Browser : ExecutionScopeKind.Unresolved, scope.Kind);
         if (visible) Assert.Equal(BrowserScopeKind.ActiveTab, scope.Browser?.Kind);
     }
 
@@ -109,7 +109,7 @@ public sealed class GroundedScopeTests
             directOffer: _ => ValueTask.FromResult<DirectOffer?>(Offer));
         Assert.Contains(ContextualSurface.DirectCapability, picker.Offered);
         Assert.Contains(ContextualSurface.ActiveBrowserTab, picker.Offered);
-        Assert.Equal(ExecutionScopeKind.Clarify, scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, scope.Kind);
     }
 
     [Fact]
@@ -138,7 +138,7 @@ public sealed class GroundedScopeTests
         var picker = new Picker(ContextualSurface.ActiveBrowserTab);
         var scope = await new ScopeResolver().ResolveAsync("continue", Route with { TaskRelation = TaskRelation.ContinueRecent },
             new(Chrome, [Chrome], true, [Tab()]), picker, grounded: false);
-        Assert.Equal(ExecutionScopeKind.Clarify, scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, scope.Kind);
         Assert.Equal(0, picker.Calls);
     }
 }

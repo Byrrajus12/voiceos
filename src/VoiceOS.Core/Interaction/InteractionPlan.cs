@@ -14,6 +14,8 @@ public enum PlanStepKind
     Locate,
     /// <summary>Activate a described target and follow it.</summary>
     Open,
+    /// <summary>One history traversal; Target is "back" or "forward".</summary>
+    History,
     /// <summary>Any other bounded in-page operation (scroll, click a control, go back, media...).</summary>
     Act
 }

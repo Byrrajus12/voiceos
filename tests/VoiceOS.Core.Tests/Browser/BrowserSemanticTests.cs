@@ -165,7 +165,7 @@ public sealed class BrowserSemanticTests
             ("media_request_kind", Choice("None", .9)), ("destination", Choice(destination, .9)),
             ("surface_preference", Choice("Browser", .9)), ("requested_entity", Choice(entity, .9)),
             ("goal_shape", Choice("SurfaceOnly", .9)), ("end_state", Choice("SurfaceReady", .9))));
-        var route = await new TypeSafeCommandRouter(gateway).RouteAsync("open it on the web");
+        var route = await new TypeSafeCommandRouter(gateway).RouteAsync($"open {(destination == "None" ? "it" : destination)} on the web");
         Assert.Equal(expected, route.Route);
     }
 
@@ -571,7 +571,7 @@ public sealed class BrowserSemanticTests
                 new FakeGateway((_, _) => Answers(("operation", Choice("DONE", .99)), ("goal_achieved", Noul(.99)))),
                 normalizer, foregroundVerifier: _ => true);
             var result = await service.RunAsync(utterance, scope: scope.Browser with { TabClaimRefuted = refuted });
-            Assert.Equal(InteractionCompletionState.Uncertain, result.Completion);
+            Assert.Equal(InteractionCompletionState.Incomplete, result.Completion);
             Assert.Equal(0, result.Actions);
             Assert.Equal(0, transport.Opens);
             Assert.Equal(new[] { 42 }, transport.SelectedTabs);
@@ -825,7 +825,7 @@ public sealed class BrowserSemanticTests
         };
         var gateway = new FakeGateway((_, _) => Answers(("operation", Choice("BLOCKED", .99)), ("stuck", Noul(.99))));
         var service = new BrowserInteractionService(transport, gateway, normalizer);
-        await service.RunAsync("open the service", scope: new(BrowserScopeKind.NewTaskTab,
+        await service.RunAsync("open Reddit", scope: new(BrowserScopeKind.NewTaskTab,
             EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly,
             DestinationPending: true));
         Assert.Equal(0, transport.NormalTabs);
@@ -945,16 +945,6 @@ public sealed class BrowserSemanticTests
         var result = await service.RunAsync("Find the Ripcrap repository on github");
         Assert.Equal(InteractionCompletionState.Incomplete, result.Completion);
         Assert.Equal(0, transport.Opens);
-    }
-
-    [Fact]
-    public async Task MalformedProviderResponse_FailsWithoutLeakingCredential()
-    {
-        var handler = new StubHttpHandler();
-        var normalizer = new OpenRouterBrowserGoalNormalizer(new HttpClient(handler), "placeholder-credential");
-        var result = await normalizer.NormalizeAsync("find a repository on a service");
-        Assert.Null(result);
-        Assert.Equal(1, handler.Requests);
     }
 
     private sealed class StubHttpHandler : HttpMessageHandler
@@ -1105,8 +1095,8 @@ public sealed class BrowserSemanticTests
         var result = await service.RunAsync(utterance, scope: new(BrowserScopeKind.ActiveTab, 42, "https://www.google.com/",
             EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly));
         Assert.Equal(1, normalizer.Calls);
-        Assert.Equal(InteractionCompletionState.Uncertain, result.Completion);
-        Assert.Equal("Nothing was done on the current page yet.", result.Detail);
+        Assert.Equal(InteractionCompletionState.Incomplete, result.Completion);
+        Assert.Equal("I couldn't do that on this page.", result.Detail);
         Assert.Equal(0, result.Actions);
         Assert.Equal(0, transport.Opens);
     }
@@ -1165,7 +1155,7 @@ public sealed class BrowserSemanticTests
         private sealed class NullScope : IDisposable { public static NullScope Instance { get; } = new(); public void Dispose() { } }
     }
 
-    private sealed class FakeNormalizer : IBrowserGoalNormalizer
+    private sealed class FakeNormalizer : NormalizingCompiler
     {
         public static BrowserGoalNormalization Normalized => new(
             "view the ripgrep repository on GitHub", "ripgrep", "repository", "GitHub",
@@ -1174,7 +1164,7 @@ public sealed class BrowserSemanticTests
         public int Calls { get; private set; }
         public bool Fail { get; set; }
         public BrowserGoalNormalization Result { get; set; } = Normalized;
-        public ValueTask<BrowserGoalNormalization?> NormalizeAsync(string utterance, CancellationToken cancellationToken = default)
+        public override ValueTask<BrowserGoalNormalization?> NormalizeAsync(string utterance, CancellationToken cancellationToken = default)
         {
             Calls++;
             return ValueTask.FromResult<BrowserGoalNormalization?>(Fail ? null : Result);

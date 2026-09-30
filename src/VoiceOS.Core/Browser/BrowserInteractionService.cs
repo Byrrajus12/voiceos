@@ -10,11 +10,10 @@ public interface IBrowserInteractionService
 {
     ValueTask<BrowserInteractionOutcome> RunAsync(string utterance, CancellationToken cancellationToken = default,
         string? activationId = null, BrowserExecutionScope? scope = null);
-    ValueTask<BrowserInteractionOutcome> ResumeAsync(string choiceId, CancellationToken cancellationToken = default);
     /// <summary>
     /// Starts goal normalization for an activation before the caller knows whether it will land
     /// on a browser scope at all. <see cref="RunAsync"/> consumes the result only when the same
-    /// activation id and utterance are later passed in; otherwise it normalizes inline as before.
+    /// activation id and utterance are later passed in; otherwise it compiles inline.
     /// No-op by default so non-browser-capable implementations need not care.
     /// </summary>
     void PrefetchNormalization(string utterance, string activationId, CancellationToken cancellationToken = default) { }
@@ -33,25 +32,18 @@ public sealed record BrowserActivity(InteractionActionKind? Operation = null,
 public sealed class BrowserInteractionService(
     IChromeCompanionTransport transport,
     Decision.IJevGateway gateway,
-    IBrowserGoalNormalizer? normalizer = null,
+    IBrowserStepCompiler? compiler = null,
     ILogger<BrowserInteractionService>? logger = null,
     IBrowserTextValueResolver? textValues = null,
     Func<nint, bool>? foregroundVerifier = null,
     double preparedFreshnessThresholdMs = 150,
-    ProofMode proofMode = ProofMode.Off,
-    ProofThresholds? proofThresholds = null,
-    IReadOnlySet<ProofFamily>? activeProofFamilies = null,
-    IBrowserStepCompiler? compiler = null,
     IBrowserStepRepair? repair = null) : IBrowserInteractionService, IBrowserActivitySource
 {
-    private readonly IBrowserStepCompiler? _compiler = compiler ?? (normalizer is null ? null : new NormalizerStepCompiler(normalizer));
-    // Plans execute one semantic step at a time only for a real compiler; a bare normalizer keeps the flat legacy loop.
-    private readonly bool _stepRuntime = compiler is not null;
+    private readonly IBrowserStepCompiler? _compiler = compiler;
     private volatile string? _stepText;
     private static readonly InteractionBudget StepBudget = new(10, 8, 3, 12, TimeSpan.FromSeconds(50));
     public event Action<BrowserActivity>? ActionStarting;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private PendingRun? _pending;
     private (string ActivationId, string Utterance, Task<CompiledBrowserTask?> Task, Stopwatch Clock)? _prefetch;
     private readonly double _preparedFreshnessThresholdMs = preparedFreshnessThresholdMs;
 
@@ -125,6 +117,10 @@ public sealed class BrowserInteractionService(
                 selectionTask = RunSelectAndVerifyAsync(scope, sessionId, overlapTab, cancellationToken);
             }
 
+            // One known page operation (Back, Forward, scroll) is executed once, directly: no compile, no decision model.
+            if (scope is { PageOperation: not PageOperation.None, TabId: not null } && selectionTask is not null)
+                return await RunPageOperationAsync(goal, scope, sessionId, selectionTask, cancellationToken).ConfigureAwait(false);
+
             var normalizationTimer = Stopwatch.StartNew();
             if (scope?.IsSurfaceOnly != true)
             {
@@ -197,10 +193,9 @@ public sealed class BrowserInteractionService(
                 : ServiceResolver.Resolve(goal.Normalization?.PreferredService) is not null ? "normalized_service"
                 : BrowserGoal.NormalizedServiceRoot(goal.Normalization) is not null ? "normalized_service_url"
                 : "web_discovery");
-            var decisions = new TypeSafeBrowserDecisionSource(gateway, goal, logger: logger, bindHead: proofMode != ProofMode.Off,
-                effectAwareRepeat: proofMode == ProofMode.On, textValues: textValues);
+            var decisions = new TypeSafeBrowserDecisionSource(gateway, goal, logger: logger, textValues: textValues);
             if (scope?.TabId is not null)
-                ActionStarting?.Invoke(ActivityFor(goal, scope, null));
+                ActionStarting?.Invoke(ActivityFor(goal, scope, null) with { OpeningTab = false, StepText = goal.Plan?.Current.Progress });
             var surface = CreateSurface(goal, scope, decisions, sessionId, scope?.TabId, scope?.ExpectedUrl);
             if (scope?.IsSurfaceOnly == true)
             {
@@ -218,7 +213,6 @@ public sealed class BrowserInteractionService(
         }
         catch (InfrastructureUnavailableException ex)
         {
-            _pending = null;
             return new(InteractionCompletionState.Incomplete, ex.Message, null, null, null, Unavailable: ex.Reason);
         }
         catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
@@ -229,11 +223,62 @@ public sealed class BrowserInteractionService(
         catch (ChromeCompanionException ex)
         {
             logger?.LogWarning("Browser task exit reason=companion_error code={Code}", ex.Code);
-            _pending = null;
             return new(InteractionCompletionState.Incomplete, $"Chrome companion unavailable: {ex.Message}", null, null, null,
                 Unavailable: ex.Code == "TRANSPORT_DISCONNECTED" ? UnavailableReason.ChromeCompanion : null);
         }
         finally { _gate.Release(); }
+    }
+
+    /// <summary>
+    /// Executes exactly one history traversal or one scroll on the intended tab, observes the real result and stops.
+    /// Nothing decides afterwards whether to do it again.
+    /// </summary>
+    private async ValueTask<BrowserInteractionOutcome> RunPageOperationAsync(BrowserGoal goal, BrowserExecutionScope scope,
+        string sessionId, Task<SelectionOutcome> selectionTask, CancellationToken cancellationToken)
+    {
+        var timer = Stopwatch.StartNew();
+        var selection = await selectionTask.ConfigureAwait(false);
+        if (!selection.Success)
+            return new(InteractionCompletionState.Incomplete, selection.FailureDetail, null, null, null);
+        var operation = scope.PageOperation;
+        var surface = CreateSurface(goal, scope, new TypeSafeBrowserDecisionSource(gateway, goal, logger: logger),
+            sessionId, scope.TabId, scope.ExpectedUrl);
+        var observation = await surface.ObserveAsync(cancellationToken).ConfigureAwait(false);
+        var kind = operation switch
+        {
+            PageOperation.Back => InteractionActionKind.GoBack,
+            PageOperation.Forward => InteractionActionKind.GoForward,
+            _ => InteractionActionKind.Scroll
+        };
+        var direction = operation == PageOperation.ScrollDown ? "down" : operation == PageOperation.ScrollUp ? "up" : null;
+        var action = observation.Candidates.SelectMany(static c => c.Actions)
+            .FirstOrDefault(a => a.Kind == kind && a.Direction == direction);
+        if (action is null)
+            return new(InteractionCompletionState.Incomplete, "I couldn't do that on this page.", null, null, null);
+        logger?.LogInformation("Browser compile=skipped reason=page_operation operation={Operation}", operation);
+        var scrollBefore = surface.LatestSnapshot?.Viewport.ScrollY;
+        var result = await surface.ExecuteAsync(action, observation, cancellationToken).ConfigureAwait(false);
+        timer.Stop();
+        LatencyTrace.Current?.Record($"page_operation_{operation.ToString().ToLowerInvariant()}", timer.Elapsed.TotalMilliseconds);
+        var snapshot = surface.LatestSnapshot;
+        var done = result.Succeeded && (kind != InteractionActionKind.Scroll || snapshot?.Viewport.ScrollY != scrollBefore);
+        string? detail = done ? null : result.Status switch
+        {
+            InteractionResultStatus.StaleTarget => "The page changed before I could use that control.",
+            InteractionResultStatus.TopologyAmbiguous => "The browser changed tabs unexpectedly.",
+            _ when kind == InteractionActionKind.Scroll && result.Succeeded => "This page can't scroll any further.",
+            _ when (result.Effects ?? []).Any(static e => e.Kind == EffectKind.NoEffect && e.Get("reason") == "NO_HISTORY")
+                => kind == InteractionActionKind.GoForward ? "That tab has no next page." : "That tab has no previous page.",
+            InteractionResultStatus.NoEffect => BrowserStepMessages.NoChange,
+            _ => "The browser action didn't change the page."
+        };
+        logger?.LogInformation("Browser page operation={Operation} outcome={Outcome} detail={Detail} ms={Ms:F0}",
+            operation, done ? "Complete" : "Incomplete", detail ?? "-", timer.Elapsed.TotalMilliseconds);
+        var completion = done ? InteractionCompletionState.Complete : InteractionCompletionState.Incomplete;
+        return new(completion, detail, null, snapshot?.Url, snapshot?.Title, 0, 1, surface.TabId, surface.SessionId,
+            goal.OriginalUtterance,
+            Referents: ReferentPopulator.FromBrowserRun(result.Effects, completion, surface.TabId, surface.SessionId,
+                snapshot?.Url, snapshot?.Title, DateTimeOffset.UtcNow));
     }
 
     /// <summary>
@@ -320,14 +365,13 @@ public sealed class BrowserInteractionService(
             : BrowserGoal.NormalizedServiceRoot(goal.Normalization) is not null ? "normalized_service_url"
             : "web_discovery");
 
-        var decisions = new TypeSafeBrowserDecisionSource(gateway, goal, logger: logger, textValues: textValues,
-            bindHead: proofMode != ProofMode.Off, effectAwareRepeat: proofMode == ProofMode.On);
+        var decisions = new TypeSafeBrowserDecisionSource(gateway, goal, logger: logger, textValues: textValues);
         var surface = CreateSurface(goal, scope, decisions, sessionId, tabId: null, expectedFirstUrl: null);
         // The page kept hydrating while normalization ran; only reuse the startup snapshot as the
         // first observation when it finished at (or after) normalization, within a small margin.
         var reuse = startupDoneAtMs is not { } doneAt || (normalizationDoneAtMs - doneAt) <= _preparedFreshnessThresholdMs;
         surface.Prepare(startupSnapshot, reuse);
-        ActionStarting?.Invoke(ActivityFor(goal, scope, null));
+        ActionStarting?.Invoke(ActivityFor(goal, scope, null) with { StepText = goal.Plan?.Current.Progress });
         return await RunSurfaceAsync(goal, surface, decisions, cancellationToken, scope, activationId).ConfigureAwait(false);
     }
 
@@ -411,6 +455,10 @@ public sealed class BrowserInteractionService(
         if (scope?.GoalShape == GoalShape.ActionOnSurface && compiled.Normalization?.EndState == SemanticEndState.SurfaceReady)
             return new(InteractionCompletionState.Incomplete,
                 "The request needs an action, but I only found a site to open.", null, null, null);
+        // Only a destination the user named may constrain the task; a model's suggestion is dropped here, once.
+        compiled = DestinationGrounding.Ground(compiled, goal.OriginalUtterance,
+            destinationKnown: scope?.Destination is not null || ServiceResolver.Resolve(scope?.NamedServiceHint) is not null
+                || goal.ExplicitUrl is not null);
         applied = goal with { Normalization = compiled.Normalization, Plan = compiled.Plan };
         if (compiled.Normalization is { } normalized)
             logger?.LogInformation("Browser normalization=used reason={Reason} objective={Objective} end_state={EndState} resource_type={ResourceType} service={Service} entity={Entity} queries={Queries} corrections={Corrections} steps={Steps}",
@@ -486,86 +534,13 @@ public sealed class BrowserInteractionService(
         return surface;
     }
 
-    public async ValueTask<BrowserInteractionOutcome> ResumeAsync(
-        string choiceId, CancellationToken cancellationToken = default)
-    {
-        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
-        try
-        {
-            if (_pending is null)
-                return new(InteractionCompletionState.Incomplete, "There is no suspended browser interaction.", null, null, null);
-            if (choiceId == "cancel")
-            {
-                _pending = null;
-                return new(InteractionCompletionState.Incomplete, "Browser interaction cancelled.", null, null, null);
-            }
-            if (_pending.Surface.TabId is int ownedTabId)
-                await transport.FocusTaskTabAsync(_pending.Surface.SessionId, ownedTabId, cancellationToken).ConfigureAwait(false);
-            if (choiceId == "complete")
-            {
-                var accepted = _pending.Surface.LatestSnapshot;
-                _pending = null;
-                return new(InteractionCompletionState.Complete, "The user accepted the current result.", null,
-                    accepted?.Url, accepted?.Title);
-            }
-            if (choiceId.StartsWith("browser:", StringComparison.Ordinal))
-            {
-                var targetId = choiceId.Split(':').LastOrDefault();
-                var candidate = _pending.Result.Observation.Candidates.FirstOrDefault(item => item.Id == targetId);
-                var action = candidate?.Actions.FirstOrDefault(static item => item.Kind == InteractionActionKind.Activate);
-                if (action is null)
-                    return Current("The selected browser choice is no longer available.");
-                var execution = await _pending.Surface.ExecuteAsync(action, _pending.Result.Observation, cancellationToken).ConfigureAwait(false);
-                if (!execution.Succeeded)
-                    return Current(execution.Detail);
-            }
-            else if (choiceId != "continue")
-                return Current("Unknown browser choice.");
-
-            var pending = _pending;
-            return await RunSurfaceAsync(pending.Goal, pending.Surface, pending.Decisions, cancellationToken).ConfigureAwait(false);
-        }
-        finally { _gate.Release(); }
-
-        BrowserInteractionOutcome Current(string? detail)
-            => new(InteractionCompletionState.Incomplete, detail, null,
-                _pending?.Surface.LatestSnapshot?.Url, _pending?.Surface.LatestSnapshot?.Title);
-    }
-
-    private async ValueTask<BrowserInteractionOutcome> RunSurfaceAsync(
+    private ValueTask<BrowserInteractionOutcome> RunSurfaceAsync(
         BrowserGoal goal, BrowserSurface surface, TypeSafeBrowserDecisionSource decisions,
         CancellationToken cancellationToken, BrowserExecutionScope? scope = null, string? turnId = null)
-    {
-        if (_stepRuntime && goal.Plan is not null)
-            return await RunPlanAsync(goal, surface, decisions, cancellationToken, scope, turnId).ConfigureAwait(false);
-        // Observational framing: the step rides on the goal but no decision or completion consults it yet.
-        var plan = goal.Normalization is null ? null : BrowserStepFramer.Frame(goal, turnId ?? surface.SessionId, scope);
-        if (plan is not null)
-            logger?.LogInformation("Browser step framed id={StepId} family={Family} descriptor_reliable={Reliable} has_query={HasQuery}",
-                plan.Only.Id, plan.Only.Family, plan.Only.DescriptorReliable, plan.Only.What.Query is not null);
-        var engine = new InteractionEngine(plan is null ? null : new BrowserProofEvaluator(goal, proofThresholds), proofMode,
-            activeProofFamilies ?? DefaultActiveProofFamilies);
-        var result = await engine.RunAsync(new(goal.OriginalUtterance, plan?.Only), surface, decisions,
-            new InteractionBudget(30, 24, 3, 30, TimeSpan.FromSeconds(90)), cancellationToken).ConfigureAwait(false);
-        if (scope is { Kind: BrowserScopeKind.ActiveTab, ExplicitSelection: false }
-            && result.Completion == InteractionCompletionState.Complete && result.Progress.Actions == 0)
-            result = result with { Completion = InteractionCompletionState.Uncertain,
-                Detail = "Nothing was done on the current page yet.", Choices = [new("cancel", "Cancel")] };
-        foreach (var effect in result.Effects ?? [])
-            logger?.LogInformation("Browser effect id={EffectId} {Effect}", effect.Id, effect.Summarize());
-        LogProof(result);
-        _pending = result.Completion == InteractionCompletionState.Uncertain
-            ? new(goal, surface, decisions, result) : null;
-        logger?.LogInformation("Browser task outcome={Outcome} resumable={Resumable} detail={Detail} decisions={Decisions} actions={Actions} origin={Origin}",
-            result.Completion, _pending is not null, result.Detail,
-            result.Progress.Decisions, result.Progress.Actions, BrowserSurface.LogOrigin(surface.LatestSnapshot?.Url));
-        return new(result.Completion, UserDetail(result.Detail, plan?.Only.Family), result.Choices,
-            surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title,
-            result.Progress.Decisions, result.Progress.Actions, surface.TabId, surface.SessionId,
-            goal.Normalization?.Objective,
-            Referents: ReferentPopulator.FromBrowserRun(result.Effects, result.Completion, surface.TabId,
-                surface.SessionId, surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title, DateTimeOffset.UtcNow));
-    }
+        => goal.Plan is null
+            ? ValueTask.FromResult(new BrowserInteractionOutcome(InteractionCompletionState.Incomplete,
+                BrowserStepMessages.NotUnderstood, null, null, null))
+            : RunPlanAsync(goal, surface, decisions, cancellationToken, scope, turnId);
 
     /// <summary>
     /// Runs the compiled plan one semantic step at a time. Each step is decided against only itself, observed in code,
@@ -576,8 +551,7 @@ public sealed class BrowserInteractionService(
         CancellationToken cancellationToken, BrowserExecutionScope? scope, string? turnId)
     {
         var plan = goal.Plan!;
-        var engine = new InteractionEngine(new PlannedStepEvaluator(goal, new BrowserProofEvaluator(goal, proofThresholds)),
-            ProofMode.On);
+        var engine = new InteractionEngine(new PlannedStepEvaluator(goal), ProofMode.On);
         using var overall = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         overall.CancelAfter(TimeSpan.FromSeconds(120));
         InteractionObservation? carry = null;
@@ -637,10 +611,8 @@ public sealed class BrowserInteractionService(
             _ => final.Detail is "Nothing was done on the current page yet." ? final.Detail
                 : BrowserStepMessages.Failure(plan, final.ReasonCode, final.Detail, final.Observation, lastRepairReason)
         };
-        _pending = final.Completion == InteractionCompletionState.Uncertain
-            ? new(goal, surface, decisions, final) : null;
         logger?.LogInformation("Browser task outcome={Outcome} resumable={Resumable} detail={Detail} decisions={Decisions} actions={Actions} steps_done={Done}/{Total} origin={Origin}",
-            final.Completion, _pending is not null, final.Detail, decisionsTotal, actionsTotal,
+            final.Completion, false, final.Detail, decisionsTotal, actionsTotal,
             plan.CurrentStepIndex + (final.Completion == InteractionCompletionState.Complete ? 1 : 0), goal.Plan!.Steps.Count,
             BrowserSurface.LogOrigin(surface.LatestSnapshot?.Url));
         return new(final.Completion, userDetail, final.Choices,
@@ -659,6 +631,21 @@ public sealed class BrowserInteractionService(
 
     private static bool Recoverable(InteractionRunResult result)
         => result.Completion != InteractionCompletionState.Complete && result.ReasonCode is { } code && RecoverableCodes.Contains(code);
+
+    /// <summary>Returns the one offered history traversal, once. A second request means the first had no effect.</summary>
+    private sealed class HistoryDecisions(string? direction) : IInteractionDecisionSource
+    {
+        private int _used;
+        public ValueTask<InteractionDecision> DecideAsync(InteractionDecisionContext context, CancellationToken cancellationToken = default)
+        {
+            var kind = string.Equals(direction, "forward", StringComparison.OrdinalIgnoreCase)
+                ? InteractionActionKind.GoForward : InteractionActionKind.GoBack;
+            var action = context.Observation.Candidates.SelectMany(static c => c.Actions).FirstOrDefault(a => a.Kind == kind);
+            return ValueTask.FromResult(Interlocked.Exchange(ref _used, 1) == 0 && action is not null
+                ? InteractionDecision.Act(action)
+                : InteractionDecision.Unsure(BrowserStepMessages.NoChange, reasonCode: "no_action"));
+        }
+    }
 
     /// <summary>A decision source that first returns one fixed decision (the repaired action), then defers.</summary>
     private sealed class OneShotDecisions(InteractionDecision first, IInteractionDecisionSource inner) : IInteractionDecisionSource
@@ -686,6 +673,9 @@ public sealed class BrowserInteractionService(
                 .AsTask();
         }
 
+        // A history step is one traversal: a fixed decision, never recovered, never repeated.
+        if (plan.Current.Kind == PlanStepKind.History)
+            return (await Run(plan, new HistoryDecisions(plan.Current.Target), carry).ConfigureAwait(false), plan, null);
         var result = await Run(plan, decisions, carry).ConfigureAwait(false);
         if (!Recoverable(result)) return (result, plan, null);
 
@@ -770,44 +760,6 @@ public sealed class BrowserInteractionService(
             : null;
         return InteractionDecision.Act(offered) with { TargetBinding = binding };
     }
-
-    /// <summary>Families a proof may complete when proof is On. Find stays shadow-only (25% shadow coverage), Reach is legacy.</summary>
-    internal static readonly IReadOnlySet<ProofFamily> DefaultActiveProofFamilies =
-        new HashSet<ProofFamily> { ProofFamily.Surface, ProofFamily.Activate };
-
-    /// <summary>Proof outcomes carry an engine rule id; the user sees a plain sentence instead.</summary>
-    internal static string? UserDetail(string? detail, ProofFamily? family)
-    {
-        if (detail is null) return null;
-        if (detail.StartsWith("proof_refuted:", StringComparison.Ordinal))
-            return family == ProofFamily.Find ? "The results shown do not match what was searched for."
-                : "The page that opened is not the one that was requested.";
-        if (!detail.StartsWith("proof:", StringComparison.Ordinal)) return detail;
-        return family switch
-        {
-            ProofFamily.Surface => "The requested site is open.",
-            ProofFamily.Find => "The search results are showing.",
-            _ => "The requested page is open."
-        };
-    }
-
-    private void LogProof(InteractionRunResult result)
-    {
-        if (result.Proof is not { Count: > 0 } records) return;
-        foreach (var record in records)
-            logger?.LogInformation("Browser proof mode={Mode} family={Family} after_actions={Actions} status={Status} rule={Rule} binding={TargetBinding} detail={Detail} effects={Effects}",
-                proofMode, record.Verdict.Family, record.Actions, record.Verdict.Status, record.Verdict.Rule,
-                record.TargetBinding is null ? "none" : $"{record.TargetBinding.Method}:{record.TargetBinding.ElementRef}@r{record.TargetBinding.ObservationRevision}",
-                record.Verdict.Detail ?? "-", string.Join(',', record.Verdict.EffectIds ?? []));
-        var proved = records.FirstOrDefault(static r => r.Verdict.Status == ProofStatus.Proved);
-        var refuted = records.FirstOrDefault(static r => r.Verdict.Status == ProofStatus.Refuted);
-        logger?.LogInformation("Browser proof summary mode={Mode} family={Family} first_proved_actions={ProvedAt} proved_rule={Rule} refuted_rule={Refuted} final_completion={Completion} final_actions={Actions} final_decisions={Decisions} final_detail={Detail}",
-            proofMode, records[0].Verdict.Family, proved?.Actions.ToString() ?? "none", proved?.Verdict.Rule ?? "-",
-            refuted?.Verdict.Rule ?? "-", result.Completion, result.Progress.Actions, result.Progress.Decisions, result.Detail);
-    }
-
-    private sealed record PendingRun(BrowserGoal Goal, BrowserSurface Surface,
-        TypeSafeBrowserDecisionSource Decisions, InteractionRunResult Result);
 
     private async ValueTask SelectPreparedTabAsync(BrowserExecutionScope scope, string sessionId,
         int tabId, bool requireActive, CancellationToken cancellationToken)

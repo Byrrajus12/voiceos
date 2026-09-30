@@ -100,7 +100,7 @@ public sealed class ReferentScopeTests
         var scope = await new ScopeResolver().ResolveAsync("continue that", Route(),
             Context(Notepad, [Tab(1, false)], DunePage(1, "A", 1)), chooser);
         // Legacy: prior-work dependence without a safe current surface clarifies.
-        Assert.Equal(ExecutionScopeKind.Clarify, scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, scope.Kind);
         Assert.Equal(1, chooser.ReferentCalls);
     }
 
@@ -123,7 +123,7 @@ public sealed class ReferentScopeTests
         var scope = await new ScopeResolver().ResolveAsync("continue", Route(),
             Context(Notepad, [Tab(1, false)]), chooser);
         Assert.Equal(0, chooser.ReferentCalls);
-        Assert.Equal(ExecutionScopeKind.Clarify, scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, scope.Kind);
     }
 
     [Fact]
@@ -152,7 +152,7 @@ public sealed class ReferentScopeTests
         var scope = await new ScopeResolver().ResolveAsync("bring that back", Route(),
             Context(Notepad, [Tab(1, false)], DunePage(9, "Closed", 1)), chooser);
         Assert.NotEqual(9, scope.Browser?.TabId);
-        Assert.Equal(ExecutionScopeKind.Clarify, scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, scope.Kind);
     }
 
     [Fact]

@@ -17,7 +17,7 @@ public static class BrowserStepMessages
 
     private static readonly string[] Known =
         [NoSearchControl, NoChange, NoMatch, Stalled, TooLong, NotUnderstood,
-            "There is no earlier page in this tab.", "Nothing was done on the current page yet."];
+            "There is no earlier page in this tab.", "That tab has no previous page.", "That tab has no next page.", "Nothing was done on the current page yet."];
 
     /// <summary>True for a message this class already worded for the user (shown as is).</summary>
     public static bool IsUserFacing(string? detail)
@@ -35,6 +35,8 @@ public static class BrowserStepMessages
         var target = Short(step.Target);
         switch (step.Kind)
         {
+            case PlanStepKind.History:
+                return "The browser action didn't change the page.";
             case PlanStepKind.Reach:
                 return target is null ? "I couldn't reach that site." : $"I couldn't reach {target}.";
             case PlanStepKind.Search:

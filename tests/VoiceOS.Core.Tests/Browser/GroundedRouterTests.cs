@@ -77,7 +77,7 @@ public sealed class GroundedRouterTests
         await router.RouteAsync("close it");
         var old = gateway.Questions;
         await router.RouteAsync("close it", null, new FrontDoorContext(null, [], new(false, 0, null, []), null));
-        Assert.Equal(13, gateway.Questions.Count);
+        Assert.Equal(14, gateway.Questions.Count);
         Assert.Equal(old.Keys.Order(), gateway.Questions.Keys.Order());
         Assert.DoesNotContain("surface", gateway.Questions.Keys);
         Assert.DoesNotContain("app", gateway.Questions.Keys);

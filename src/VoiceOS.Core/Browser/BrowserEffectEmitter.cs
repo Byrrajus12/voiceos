@@ -77,12 +77,12 @@ internal static class BrowserEffectEmitter
                 effects.Add(TextSet(action, subject, after, target is null ? null : BrowserDomFacts.SearchScopeOf(target)));
                 break;
 
-            case InteractionActionKind.GoBack:
+            case InteractionActionKind.GoBack or InteractionActionKind.GoForward:
                 // Returning to the opener tab is reported as SurfaceAcquired(mode=returned_to_opener)
                 // by the next observation; only a same-tab traversal is HistoryMoved.
                 if (!adopted)
                     effects.Add(new(EffectKind.HistoryMoved, EffectSource.CompanionResponse, EffectStrength.Observed, null,
-                        WithSignal(new() { ["direction"] = "back", ["from"] = before.Url, ["to"] = after.Url }, signal)));
+                        WithSignal(new() { ["direction"] = action.Kind == InteractionActionKind.GoForward ? "forward" : "back", ["from"] = before.Url, ["to"] = after.Url }, signal)));
                 break;
         }
         return effects;

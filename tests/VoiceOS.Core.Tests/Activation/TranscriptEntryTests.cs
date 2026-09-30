@@ -43,15 +43,15 @@ public sealed class TranscriptEntryTests
         Assert.Equal(["open the thing"], router.Transcripts);
         Assert.Equal(ActivationSource.InjectedTranscript, run.Source);
         Assert.Equal("Clarify", run.Lane);
-        Assert.Equal("Clarify", run.Outcome);
-        Assert.Equal(ExecutionScopeKind.Clarify, run.Scope?.Kind);
+        Assert.Equal("Unresolved", run.Outcome);
+        Assert.Equal(ExecutionScopeKind.Unresolved, run.Scope?.Kind);
         Assert.Equal(CommandRoute.Clarify, run.Route?.Route);
-        Assert.Equal(ApplicationInteractionPhase.NeedsChoice, run.TerminalSnapshot?.Phase);
+        Assert.Equal(ApplicationInteractionPhase.Failed, run.TerminalSnapshot?.Phase);
         Assert.Equal(["context", "decision_prep", "route", "scope", "front_door"], run.Trace!.Stages.Select(static s => s.Name));
         Assert.NotNull(run.CompletedAt);
         Assert.Null(run.Failure);
         Assert.Equal(ProductUiPhase.Understanding, ui[0]);
-        Assert.Contains(ProductUiPhase.Clarify, ui);
+        Assert.Contains(ProductUiPhase.Error, ui);
         Assert.Equal(ActivationState.Idle, states[^1]);
     }
 

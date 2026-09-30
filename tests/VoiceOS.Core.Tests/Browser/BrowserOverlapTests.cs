@@ -28,7 +28,7 @@ public sealed class BrowserOverlapTests
         normalizer.Complete(ControlledNormalizer.Result);
         var outcome = await runTask;
 
-        Assert.Equal(InteractionCompletionState.Uncertain, outcome.Completion);
+        Assert.Equal(InteractionCompletionState.Incomplete, outcome.Completion);
         Assert.Equal(0, transport.Closes);
     }
 
@@ -48,7 +48,7 @@ public sealed class BrowserOverlapTests
         normalizer.Complete(ControlledNormalizer.Result);
         await runTask;
 
-        Assert.Equal(0, transport.Observes);
+        Assert.Equal(1, transport.Observes); // only the recovery observation; the startup snapshot was reused
     }
 
     [Fact]
@@ -67,7 +67,7 @@ public sealed class BrowserOverlapTests
         normalizer.Complete(ControlledNormalizer.Result);
         await runTask;
 
-        Assert.Equal(1, transport.Observes);
+        Assert.Equal(2, transport.Observes);
     }
 
     [Fact]
@@ -154,7 +154,7 @@ public sealed class BrowserOverlapTests
 
         normalizer.Complete(ControlledNormalizer.Result);
         await runTask;
-        Assert.Equal(1, transport.Observes);
+        Assert.Equal(2, transport.Observes);
     }
 
     [Fact]
@@ -186,7 +186,7 @@ public sealed class BrowserOverlapTests
         normalizer.Complete(ControlledNormalizer.Result);
         var outcome = await service.RunAsync("search for something", activationId: "activation-1", scope: scope);
 
-        Assert.Equal(InteractionCompletionState.Uncertain, outcome.Completion);
+        Assert.Equal(InteractionCompletionState.Incomplete, outcome.Completion);
         Assert.Equal(1, normalizer.Calls);
     }
 
@@ -202,7 +202,7 @@ public sealed class BrowserOverlapTests
         normalizer.Complete(ControlledNormalizer.Result);
         var outcome = await service.RunAsync("search for something", activationId: "activation-2", scope: scope);
 
-        Assert.Equal(InteractionCompletionState.Uncertain, outcome.Completion);
+        Assert.Equal(InteractionCompletionState.Incomplete, outcome.Completion);
         Assert.Equal(2, normalizer.Calls);
     }
 
@@ -218,7 +218,7 @@ public sealed class BrowserOverlapTests
         normalizer.Complete(ControlledNormalizer.Result);
         var outcome = await service.RunAsync("search for something", activationId: "activation-1", scope: scope);
 
-        Assert.Equal(InteractionCompletionState.Uncertain, outcome.Completion);
+        Assert.Equal(InteractionCompletionState.Incomplete, outcome.Completion);
         Assert.Equal(2, normalizer.Calls);
     }
 
@@ -245,7 +245,7 @@ public sealed class BrowserOverlapTests
             => Task.FromResult(answer(state, questions));
     }
 
-    private sealed class ControlledNormalizer : IBrowserGoalNormalizer
+    private sealed class ControlledNormalizer : NormalizingCompiler
     {
         public static BrowserGoalNormalization Result => new(
             "view the ripgrep repository on GitHub", "ripgrep", "repository", "GitHub",
@@ -258,7 +258,7 @@ public sealed class BrowserOverlapTests
         public void Complete(BrowserGoalNormalization? result) => _tcs.TrySetResult(result);
         public void Fail() => Complete(null);
 
-        public ValueTask<BrowserGoalNormalization?> NormalizeAsync(
+        public override ValueTask<BrowserGoalNormalization?> NormalizeAsync(
             string utterance, CancellationToken cancellationToken = default)
         {
             Calls++;

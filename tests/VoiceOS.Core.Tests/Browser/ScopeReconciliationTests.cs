@@ -180,7 +180,7 @@ public sealed class ScopeReconciliationTests
         var gateway = new Gateway { CoarseRoute = coarse, Preference = "Browser", Entity = "NamedEntity",
             EndState = "SurfaceReady", Shape = "SurfaceOnly" };
         var scope = await new ScopeResolver().ResolveAsync("Open QuasarDesk in the browser", await Route(gateway), Context());
-        Assert.Equal(ExecutionScopeKind.Clarify, scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, scope.Kind);
     }
 
     [Theory]
@@ -192,7 +192,7 @@ public sealed class ScopeReconciliationTests
     {
         var route = await Route(new Gateway { Dependency = "RequiresCurrentSurface" });
         var scope = await new ScopeResolver().ResolveAsync("Open the cobalt entry", route, Context(connected, foreground, count));
-        Assert.Equal(ExecutionScopeKind.Clarify, scope.Kind);
+        Assert.Equal(ExecutionScopeKind.Unresolved, scope.Kind);
     }
 
     [Theory]
@@ -203,7 +203,7 @@ public sealed class ScopeReconciliationTests
         var gateway = new Gateway { Destination = "Spotify", Entity = "NamedEntity", Preference = preference,
             EndState = "SurfaceReady", Shape = "SurfaceOnly" };
         var context = Context() with { InstalledApps = [new AppCandidate("service-app", "Spotify", "fixture-app")] };
-        var scope = await new ScopeResolver().ResolveAsync("Open Spotify", await Route(gateway), context);
+        var scope = await new ScopeResolver().ResolveAsync("Open Spotify", await Route(gateway, "Open Spotify"), context);
         Assert.Equal(ExecutionScopeKind.NativeInteraction, scope.Kind);
         Assert.Equal("service-app", scope.Native?.AppCandidateId);
     }
