@@ -318,6 +318,11 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
         }
         // An Open whose target is clearly absent from the controls on screen scrolls in code: no model call is spent
         // deciding "scroll again". The binder runs once a plausible control is visible (or when code cannot tell).
+        if (step.Kind == PlanStepKind.Open && _logger is not null && TargetEvidence.From(step.Target ?? step.Description) is { Informative: true } probe)
+            _logger.LogInformation("Browser target evidence numbers=[{Numbers}] terms=[{Terms}] ordinal={Ordinal} plausible=[{Plausible}]",
+                string.Join(',', probe.Numbers), string.Join(',', probe.Terms), probe.Ordinal,
+                string.Join(" | ", elements.Where(e => e.Enabled && TargetEvidence.Matches(probe, e)).Take(3)
+                    .Select(e => $"{e.Id}:{(e.Name ?? "")[..Math.Min((e.Name ?? "").Length, 40)]}")));
         if (step.Kind == PlanStepKind.Open && BrowserEvidence.CanScrollDown(context.Observation.Evidence)
             && context.RecentHistory.Count(h => h.Action.Kind == InteractionActionKind.Scroll) < 6
             && !TargetEvidence.AnyPlausible(TargetEvidence.From(step.Target ?? step.Description),

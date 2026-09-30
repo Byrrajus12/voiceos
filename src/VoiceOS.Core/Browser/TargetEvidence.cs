@@ -49,9 +49,13 @@ internal static class TargetEvidence
     public static bool Matches(Query query, EvidenceElement element)
     {
         if (query.Ordinal is { } ordinal) return element.Position == ordinal;
-        var words = BrowserCompletionEvidence.Tokens(element.Name + " " + PathWords(element.Href)).Select(Singular).ToHashSet();
-        if (query.Numbers.Count > 0) return query.Numbers.All(words.Contains);
-        return query.Terms.Count > 0 && query.Terms.Count(words.Contains) >= (query.Terms.Count + 1) / 2;
+        var labelTokens = BrowserCompletionEvidence.Tokens(element.Name).Select(Singular).ToArray();
+        var words = labelTokens.Concat(BrowserCompletionEvidence.Tokens(PathWords(element.Href)).Select(Singular)).ToHashSet();
+        var termsMatched = query.Terms.Count > 0 && query.Terms.Count(words.Contains) >= (query.Terms.Count + 1) / 2;
+        // A number only identifies a control when it is in the control's own label and the label is terse (a page number, a tab, a step) or also shares the
+        // described words; a long label that merely contains the digit (a headline, a date) is not evidence.
+        if (query.Numbers.Count > 0) return query.Numbers.All(labelTokens.Contains) && (labelTokens.Length <= 5 || termsMatched);
+        return termsMatched;
     }
 
     /// <summary>
