@@ -20,6 +20,7 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
     private readonly bool _bindHead;
     private readonly bool _effectAwareRepeat;
     private bool _proposedCompletion;
+    private static readonly ProofThresholds _thresholds = new();
 
     /// <summary>The compiled plan being executed; its current step is what each decision is asked to accomplish.</summary>
     public InteractionPlan? Plan { get; set; }
@@ -49,7 +50,7 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
         // A step whose completion is observed in code never asks the model whether the goal looks done.
         var stepMode = planStep is not null;
         if (stepMode && StepShortcut(planStep!, context) is { } shortcut) return shortcut;
-        var bindStep = (_bindHead || stepMode) && context.Goal.Step is { Family: ProofFamily.Activate } activateStep ? activateStep : null;
+        var bindStep = (_bindHead || stepMode) && context.Goal.Step is { Family: ProofFamily.Activate or ProofFamily.Reach } activateStep ? activateStep : null;
         var space = BrowserDecisionSpace.From(context.Observation, context.RecentHistory, bindStep, planStep, stepMode);
         string? correction = null;
         for (var retry = 0; retry <= 1; retry++)
@@ -84,8 +85,8 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             _logger?.LogInformation("Browser completion evidence page={Page} evidence={Evidence} reason={Reason} threshold={Threshold:F2} goal_achieved={Goal:F2}",
                 PageSummary(context.Observation), evidence.Strength, evidence.Reason, completionThreshold, achieved);
             var proposed = answers.GetValueOrDefault("operation")?.SelectedChoice;
-            // An Open whose target is not among the controls on screen looks further down the page first (bounded);
-            // it never clicks a control that is not the target, and needs no separate Locate step to do it.
+            // The binder judged nothing on screen to be the target although something looked plausible: look further
+            // down (bounded) rather than click a control that is not the target.
             if (stepMode && planStep!.Kind == PlanStepKind.Open && binding is null
                 && BrowserEvidence.CanScrollDown(context.Observation.Evidence)
                 && context.RecentHistory.Count(h => h.Action.Kind == InteractionActionKind.Scroll) < 6
@@ -175,6 +176,18 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             if (_effectAwareRepeat || stepMode ? RepeatsEarlierElement(action, context) : RepeatsEarlierActivation(action, context))
                 return Exit("repeated_action",
                     "The next step would repeat an earlier click on this page without reaching the goal.", ProgressChoices());
+
+            // An Act click needs an established binding to the control it clicks: a candidate merely existing, or the page
+            // changing afterwards, is not evidence that this was the intended target.
+            if (stepMode && planStep!.Kind == PlanStepKind.Act && action.Kind == InteractionActionKind.Activate)
+            {
+                var boundElement = binding is null ? null : BrowserEvidence.Elements(context.Observation.Evidence)
+                    .FirstOrDefault(e => e.Id == binding.ElementRef);
+                if (!TargetEvidence.Established(binding, boundElement, planStep.Target ?? planStep.Description, _thresholds)
+                    || !space.Targets.TryGetValue("CLICK", out var clicks) || !clicks.TryGetValue(binding!.ElementRef, out var boundClick))
+                    return Exit("weak_target", "No control on the page is established as the target of this step.");
+                action = boundClick;
+            }
 
             if (operation.SelectedChoice == "TYPE_TEXT")
             {
@@ -302,6 +315,19 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                 _logger?.LogInformation("Browser step shortcut=scroll_to_locate");
                 return InteractionDecision.Act(down);
             }
+        }
+        // An Open whose target is clearly absent from the controls on screen scrolls in code: no model call is spent
+        // deciding "scroll again". The binder runs once a plausible control is visible (or when code cannot tell).
+        if (step.Kind == PlanStepKind.Open && BrowserEvidence.CanScrollDown(context.Observation.Evidence)
+            && context.RecentHistory.Count(h => h.Action.Kind == InteractionActionKind.Scroll) < 6
+            && !TargetEvidence.AnyPlausible(TargetEvidence.From(step.Target ?? step.Description),
+                elements.Where(e => e.Enabled && Offered(e.Id, InteractionActionKind.Activate) is not null))
+            && context.Observation.Candidates.SelectMany(c => c.Actions)
+                .FirstOrDefault(a => a.Kind == InteractionActionKind.Scroll && a.Direction == "down") is { } scrollDown
+            && !AlreadyFailed(scrollDown))
+        {
+            _logger?.LogInformation("Browser step shortcut=scroll_target_absent");
+            return InteractionDecision.Act(scrollDown);
         }
         if (step.Kind == PlanStepKind.Open && NormalizeName(step.Target) is { Length: > 0 } target)
         {

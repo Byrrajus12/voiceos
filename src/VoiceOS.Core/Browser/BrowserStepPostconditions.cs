@@ -5,7 +5,8 @@ namespace VoiceOS.Core.Browser;
 
 /// <summary>One element as the observation evidence reports it (only what postconditions and shortcuts need).</summary>
 internal sealed record EvidenceElement(string Id, string? Role, string? Name, string? Href, string? Value, bool Editable,
-    bool Enabled, bool InViewport, string? Kind, string? SearchScope, string? SubmitRef, string? Form = null, bool Submit = false);
+    bool Enabled, bool InViewport, string? Kind, string? SearchScope, string? SubmitRef, string? Form = null, bool Submit = false,
+    int? Position = null);
 
 internal static class BrowserEvidence
 {
@@ -25,7 +26,8 @@ internal static class BrowserEvidence
                 bool Flag(string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.True;
                 if (Text("id") is not { } id) continue;
                 list.Add(new(id, Text("Role"), Text("Name"), Text("Href"), Text("Value"), Flag("Editable"), Flag("Enabled"),
-                    Flag("InViewport"), Text("Kind"), Text("SearchScope"), Text("SubmitRef"), Text("Form"), Flag("Submit")));
+                    Flag("InViewport"), Text("Kind"), Text("SearchScope"), Text("SubmitRef"), Text("Form"), Flag("Submit"),
+                    e.TryGetProperty("Position", out var position) && position.ValueKind == JsonValueKind.Number ? position.GetInt32() : null));
             }
         }
         catch { }
@@ -100,6 +102,19 @@ internal sealed class PlannedStepEvaluator(BrowserGoal goal) : IProofEvaluator
         if (input.LastAction is not { } action) return ProofVerdict.NotYet(family, "no_action");
         var last = input.Effects.Where(e => StringComparer.Ordinal.Equals(e.ActionId, action.Id)).ToArray();
         if (last.Any(static e => e.Kind == EffectKind.NoEffect)) return ProofVerdict.NotYet(family, "no_effect");
+        if (action.Kind == InteractionActionKind.Activate)
+        {
+            // A click proves nothing by itself: the control must be the one deliberately bound for this step, and
+            // activating it must have a consequence.
+            var subject = last.FirstOrDefault(static e => e.Kind == EffectKind.Activated)?.Subject;
+            if (input.TargetBinding is not { } binding || subject?.ElementRef is null) return ProofVerdict.NotYet(family, "no_binding");
+            if (!StringComparer.Ordinal.Equals(binding.ElementRef, subject.ElementRef)
+                || binding.ObservationRevision != subject.ObservationRevision) return ProofVerdict.Inconclusive(family, "target_mismatch");
+            return last.Any(static e => e.Kind is EffectKind.Navigated or EffectKind.ContentChanged
+                    || e.Kind == EffectKind.SurfaceAcquired && e.Get("mode") == "adopted")
+                ? ProofVerdict.Proved(family, "bound_act_with_effect", last.Select(static e => e.Id).ToArray())
+                : ProofVerdict.NotYet(family, "no_consequence");
+        }
         // The engine turns a "successful" action that changed nothing into a NoEffect, so an effect here is a real one.
         return last.Length == 0 ? ProofVerdict.NotYet(family, "no_effect")
             : ProofVerdict.Proved(family, "act_applied", last.Select(static e => e.Id).ToArray());

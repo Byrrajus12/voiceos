@@ -34,6 +34,7 @@ public static class BrowserStepMessages
                 ? $"I looked, but couldn't determine {wanted}." : "I couldn't find the information that step needed.";
         if (code == "impossible" && SafeReason(repairReason) is { } reason) return reason;
         var step = plan.Current;
+        if (code == "weak_target" && step.Kind == PlanStepKind.Act) return "I couldn't find a clear match for that on this page.";
         var afterSearch = plan.Completed.Any(static s => s.Kind == PlanStepKind.Search);
         var target = Short(step.Target);
         switch (step.Kind)

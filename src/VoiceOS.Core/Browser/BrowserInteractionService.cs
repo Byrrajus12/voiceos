@@ -677,7 +677,7 @@ public sealed class BrowserInteractionService(
     {
         "low_operation_confidence", "unoffered_operation", "invalid_target", "repeated_action", "blocked",
         "unconfirmed_completion", "unestablished_completion", "unconfirmed_block", "text_value_unresolved",
-        "text_value_error", "correction_exhausted", "completion_unconfirmed", "repeated_failure", "no_action"
+        "text_value_error", "weak_target", "correction_exhausted", "completion_unconfirmed", "repeated_failure", "no_action"
     };
 
     private static bool Recoverable(InteractionRunResult result)
@@ -805,7 +805,7 @@ public sealed class BrowserInteractionService(
             offered = offered with { Text = text.Trim() };
         }
         // A deliberately chosen control is a binding: the Open postcondition then decides from its observed effect.
-        TargetBinding? binding = kind == InteractionActionKind.Activate && step.Kind == PlanStepKind.Open
+        TargetBinding? binding = kind == InteractionActionKind.Activate && step.Kind is PlanStepKind.Open or PlanStepKind.Act
             ? new(candidate.Id, fresh.Revision, BindingMethod.JevChoice,
                 fresh.Candidates.Count(c => c.Actions.Any(a => a.Kind == InteractionActionKind.Activate)), .9, .5, candidate.Label)
             : null;
