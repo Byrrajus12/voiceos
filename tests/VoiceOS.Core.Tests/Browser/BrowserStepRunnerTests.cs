@@ -119,14 +119,14 @@ public sealed class BrowserStepRunnerTests
 
         Assert.Equal(InteractionCompletionState.Complete, outcome.Completion);
         Assert.Equal("https://github.com/tauri-apps/tauri", outcome.Url);
-        // Reach is already satisfied, the query is typed and submitted by code (no model call), Locate is satisfied by the
-        // results, and only the Open step needed one model decision.
+        // Reach is already satisfied, the query is typed and submitted by code (no model call), the redundant Locate was
+        // collapsed into Open, and only the Open step needed one model decision.
         Assert.Equal(["REPLACE_TEXT:e1:Rust GUI framework", "CLICK:e2:", "CLICK:e1:"], site.Actions);
         var decision = Assert.Single(gateway.States);
         Assert.DoesNotContain(gateway.Heads, heads => heads.Contains("goal_achieved") || heads.Contains("stuck"));
         // That one decision saw the current step, what was already done, and the preserved original request.
         Assert.Equal("Open", decision.GetProperty("current_step").GetProperty("kind").GetString());
-        Assert.Equal(3, decision.GetProperty("completed_steps").GetArrayLength());
+        Assert.Equal(2, decision.GetProperty("completed_steps").GetArrayLength());
         Assert.Contains("Tauri", decision.GetProperty("original_goal").GetString());
     }
 

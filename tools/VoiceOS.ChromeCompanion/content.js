@@ -181,6 +181,7 @@
       title: redactObservationText(document.title),
       visibleText: bodyText.slice(0, MAX_VISIBLE_TEXT),
       truncated: bodyText.length > MAX_VISIBLE_TEXT,
+      pageText: bodyText.slice(0, 12_000),
       viewport: {
         width: window.innerWidth,
         height: window.innerHeight,

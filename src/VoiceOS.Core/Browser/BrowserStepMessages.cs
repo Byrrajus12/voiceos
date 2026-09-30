@@ -29,6 +29,9 @@ public static class BrowserStepMessages
         string? repairReason = null)
     {
         if (code == "no_history") return "There is no earlier page in this tab.";
+        if (code == "no_value")
+            return Short(plan.Current.Target ?? plan.Current.Description) is { } wanted
+                ? $"I looked, but couldn't determine {wanted}." : "I couldn't find the information that step needed.";
         if (code == "impossible" && SafeReason(repairReason) is { } reason) return reason;
         var step = plan.Current;
         var afterSearch = plan.Completed.Any(static s => s.Kind == PlanStepKind.Search);

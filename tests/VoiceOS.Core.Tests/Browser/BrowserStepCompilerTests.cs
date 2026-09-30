@@ -25,10 +25,10 @@ public sealed class BrowserStepCompilerTests
     {
         var compiled = OpenRouterBrowserStepCompiler.Parse(GitHubPlan, "Go to GitHub, search for a Rust GUI framework and open the Tauri repository.");
         Assert.NotNull(compiled);
-        Assert.Equal([PlanStepKind.Reach, PlanStepKind.Search, PlanStepKind.Locate, PlanStepKind.Open],
+        Assert.Equal([PlanStepKind.Reach, PlanStepKind.Search, PlanStepKind.Open],
             compiled!.Plan.Steps.Select(s => s.Kind));
         Assert.Equal("Rust GUI framework", compiled.Plan.Steps[1].Query);
-        Assert.Contains("Tauri", compiled.Plan.Steps[3].Target);
+        Assert.Contains("Tauri", compiled.Plan.Steps[2].Target);
         Assert.Equal("Go to GitHub, search for a Rust GUI framework and open the Tauri repository.", compiled.Plan.OriginalGoal);
         // The flat typed goal still derives from the plan for bootstrap and completion evidence.
         Assert.Equal(["Rust GUI framework"], compiled.Normalization!.SearchQueries);

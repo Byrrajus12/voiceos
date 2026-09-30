@@ -114,7 +114,9 @@ public sealed record BrowserSnapshot(
     [property: JsonPropertyName("ownedByVoiceOS")] bool? OwnedByVoiceOs = null,
     [property: JsonPropertyName("adopted")] bool? Adopted = null,
     [property: JsonPropertyName("openerTabId")] int? OpenerTabId = null,
-    [property: JsonPropertyName("documentId")] string? DocumentId = null);
+    [property: JsonPropertyName("documentId")] string? DocumentId = null,
+    // Longer body text than VisibleText, used only to read a value a later plan step needs.
+    [property: JsonPropertyName("pageText")] string? PageText = null);
 
 /// <summary>
 /// Navigation signal the companion reported alongside an ACT snapshot (<c>timings.signal</c>:

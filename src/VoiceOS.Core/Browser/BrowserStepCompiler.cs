@@ -71,7 +71,11 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
         "For Search also say which search surface the user meant in searchScope: Global (the service-wide search; the default), " +
         "CurrentResource (inside the repository/document/project that is open), InPage (find text on the current page) or Collection " +
         "(a bounded list such as the user's own items); use null for other step kinds. " +
-        "Open follows Locate when the user names a specific target. Give each step a short description, a query (Search only), " +
+        "Never emit Locate immediately before an Open or Act on the same target ('page 7', 'the third result'): Open already finds its own target. " +
+        "Locate is only for finding or identifying something that is itself the answer, or something a later step needs. " +
+        "When a later step needs a value the page must first reveal (a name, title or number, such as 'the character ranked second'), make that a Locate step, " +
+        "set produces to a short lowercase name (letters, digits, underscore) and write later steps' query/target/description with ${name}; never restate the unresolved description in a later query. Otherwise produces is null. " +
+        "Give each step a short description, a query (Search only), " +
         "a target (Locate/Open, or the site for Reach) and a two-to-four word present-tense progress phrase such as 'Searching GitHub'. " +
         "Correct likely speech-recognition errors only when context strongly supports it, and report each with confidence; preserve uncertain terms as heard. " +
         "Also state the final desired end state, the resource type, and the preferred service (a named service may have its well-known HTTPS home origin, never a guessed deep link). " +
@@ -100,9 +104,10 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
                         query = new { type = new[] { "string", "null" } },
                         target = new { type = new[] { "string", "null" } },
                         progress = new { type = new[] { "string", "null" } },
-                        searchScope = new { type = new[] { "string", "null" }, @enum = new object?[] { "Global", "CurrentResource", "InPage", "Collection", null } }
+                        searchScope = new { type = new[] { "string", "null" }, @enum = new object?[] { "Global", "CurrentResource", "InPage", "Collection", null } },
+                        produces = new { type = new[] { "string", "null" } }
                     },
-                    required = new[] { "kind", "description", "query", "target", "progress", "searchScope" }
+                    required = new[] { "kind", "description", "query", "target", "progress", "searchScope", "produces" }
                 }
             },
             correctedTerms = new
@@ -186,8 +191,18 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
                 if (progress is not null && !SafeText(progress, 48)) progress = null;
                 var intent = kind == PlanStepKind.Search && Enum.TryParse<SearchScopeIntent>(Text(item, "searchScope"), out var parsedIntent)
                     ? parsedIntent : SearchScopeIntent.Unspecified;
-                steps.Add(new(kind, description!, kind == PlanStepKind.Search ? query : null, target, progress, intent));
+                var produces = Text(item, "produces");
+                if (produces is not null && (kind != PlanStepKind.Locate || !System.Text.RegularExpressions.Regex.IsMatch(produces, "^[a-z][a-z0-9_]{0,31}$"))) return null;
+                steps.Add(new(kind, description!, kind == PlanStepKind.Search ? query : null, target, progress, intent, produces));
             }
+            // A reference must name a value an earlier step produces; anything else cannot be resolved at run time.
+            var produced = new HashSet<string>();
+            foreach (var step in steps)
+            {
+                if (InteractionPlan.References(step).Any(name => !produced.Contains(name))) return null;
+                if (step.Produces is not null) produced.Add(step.Produces);
+            }
+            steps = CollapseRedundantLocates(steps);
             if (steps.Count is 0 or > InteractionPlan.MaxSteps) return null;
             var corrections = value.GetProperty("correctedTerms").EnumerateArray().Select(x =>
                 new BrowserCorrectedTerm(x.GetProperty("heard").GetString() ?? "",
@@ -215,6 +230,36 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
         catch (OperationCanceledException) { throw; }
         catch { return null; }
     }
+
+    /// <summary>
+    /// A Locate that produces nothing and is followed by an Open/Act on the same target adds no information: Open
+    /// finds its own target. The pair collapses to the Open/Act.
+    /// </summary>
+    internal static List<PlanStep> CollapseRedundantLocates(List<PlanStep> steps)
+    {
+        var result = new List<PlanStep>();
+        for (var i = 0; i < steps.Count; i++)
+        {
+            if (steps[i] is { Kind: PlanStepKind.Locate, Produces: null } locate && i + 1 < steps.Count
+                && steps[i + 1].Kind is PlanStepKind.Open or PlanStepKind.Act && SameTarget(locate, steps[i + 1]))
+                continue;
+            result.Add(steps[i]);
+        }
+        return result;
+    }
+
+    private static bool SameTarget(PlanStep locate, PlanStep next)
+    {
+        var a = Distinctive(locate.Target ?? locate.Description);
+        var b = Distinctive(next.Target ?? next.Description);
+        return a.Count > 0 && b.Count > 0 && (a.IsSubsetOf(b) || b.IsSubsetOf(a));
+    }
+
+    private static readonly HashSet<string> Filler = new(StringComparer.OrdinalIgnoreCase)
+    { "the", "a", "an", "of", "to", "go", "open", "click", "find", "locate", "show", "control", "button", "link", "on", "in", "for", "results", "result" };
+
+    private static HashSet<string> Distinctive(string text)
+        => BrowserCompletionEvidence.Tokens(text).Where(t => !Filler.Contains(t)).ToHashSet();
 
     private static string? Text(JsonElement element, string name)
         => element.TryGetProperty(name, out var item) && item.ValueKind == JsonValueKind.String ? item.GetString()?.Trim() : null;

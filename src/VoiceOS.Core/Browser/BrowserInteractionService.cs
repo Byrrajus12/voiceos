@@ -37,7 +37,8 @@ public sealed class BrowserInteractionService(
     IBrowserTextValueResolver? textValues = null,
     Func<nint, bool>? foregroundVerifier = null,
     double preparedFreshnessThresholdMs = 150,
-    IBrowserStepRepair? repair = null) : IBrowserInteractionService, IBrowserActivitySource
+    IBrowserStepRepair? repair = null,
+    IBrowserValueExtractor? extractor = null) : IBrowserInteractionService, IBrowserActivitySource
 {
     private readonly IBrowserStepCompiler? _compiler = compiler;
     private volatile string? _stepText;
@@ -563,14 +564,34 @@ public sealed class BrowserInteractionService(
         {
             while (true)
             {
+                // Values earlier steps produced are filled in before this step is framed or decided.
+                var before = plan.Current;
+                var (rendered, missing) = plan.ResolveCurrent();
+                if (missing is not null)
+                {
+                    last = Unresolved(carry ?? await surface.ObserveAsync(overall.Token).ConfigureAwait(false), "no_value");
+                    break;
+                }
+                plan = rendered;
                 var step = plan.Current;
+                if (!ReferenceEquals(before, step))
+                    logger?.LogInformation("Browser step rendered index={Index} kind={Kind} query={Query} target={Target} description={Description}",
+                        plan.CurrentStepIndex + 1, step.Kind, step.Query ?? "-", step.Target ?? "-", step.Description);
                 decisions.Plan = plan;
                 _stepText = step.Progress;
                 if (plan.CurrentStepIndex > 0 || step.Progress is not null)
                     ActionStarting?.Invoke(new(StepText: step.Progress));
                 var stepTimer = Stopwatch.StartNew();
                 InteractionRunResult result;
-                (result, plan, var repairReason) = await RunStepAsync(engine, plan, goal, scope, turnId ?? surface.SessionId,
+                string? repairReason;
+                if (step.Kind == PlanStepKind.Locate && step.Produces is { } produced && plan.IsConsumed(produced))
+                {
+                    // A data-producing step is done only when it holds a concrete value for what it promised.
+                    (result, plan) = await ProduceAsync(plan, produced, goal, surface, carry, overall.Token).ConfigureAwait(false);
+                    repairReason = null;
+                }
+                else
+                    (result, plan, repairReason) = await RunStepAsync(engine, plan, goal, scope, turnId ?? surface.SessionId,
                     surface, decisions, carry, overall.Token).ConfigureAwait(false);
                 step = plan.Current;
                 lastRepairReason = repairReason;
@@ -620,6 +641,36 @@ public sealed class BrowserInteractionService(
             goal.Normalization?.Objective ?? plan.FinalGoal,
             Referents: ReferentPopulator.FromBrowserRun(effects, final.Completion, surface.TabId,
                 surface.SessionId, surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title, DateTimeOffset.UtcNow));
+    }
+
+    private static InteractionRunResult Unresolved(InteractionObservation observation, string code)
+        => new(InteractionCompletionState.Incomplete, observation, [], new(0, 0, 0, 0), null, ReasonCode: code);
+
+    /// <summary>
+    /// Captures the value a producer step promised from the page in front of it: one bounded extraction, and only
+    /// an answer the page itself states is accepted. Nothing concrete means the step has not happened.
+    /// </summary>
+    private async ValueTask<(InteractionRunResult Result, InteractionPlan Plan)> ProduceAsync(InteractionPlan plan, string name,
+        BrowserGoal goal, BrowserSurface surface, InteractionObservation? carry, CancellationToken cancellationToken)
+    {
+        var observation = carry is not null && carry.Revision == surface.CurrentRevision
+            ? carry : await surface.ObserveAsync(cancellationToken).ConfigureAwait(false);
+        var step = plan.Current;
+        var page = surface.LatestSnapshot;
+        string? value = null;
+        if (page is not null && extractor is not null)
+        {
+            var raw = await extractor.ExtractAsync(new(goal.OriginalUtterance, step.Target ?? step.Description, page), cancellationToken)
+                .ConfigureAwait(false);
+            value = ValueGrounding.Validate(raw, page);
+            logger?.LogInformation("Browser step output name={Name} goal={Goal} raw={Raw} accepted={Accepted}",
+                name, step.Target ?? step.Description, raw ?? "-", value is not null);
+        }
+        if (value is null) return (Unresolved(observation, "no_value"), plan);
+        logger?.LogInformation("Browser step output captured name={Name} value={Value}", name, value);
+        var done = new InteractionRunResult(InteractionCompletionState.Complete, observation, [], new(0, 0, 0, 0),
+            $"output:{name}");
+        return (done, plan.WithOutput(name, value));
     }
 
     private static readonly HashSet<string> RecoverableCodes = new(StringComparer.Ordinal)

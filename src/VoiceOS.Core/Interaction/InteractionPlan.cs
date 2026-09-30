@@ -28,8 +28,10 @@ public enum SearchScopeIntent { Unspecified, Global, CurrentResource, InPage, Co
 /// <param name="Target">The described thing to find/open (Locate/Open, or Reach's site).</param>
 /// <param name="Progress">Short present-tense status shown to the user while the step runs.</param>
 /// <param name="ScopeIntent">Search only: the search surface the user meant.</param>
+/// <param name="Produces">Locate only: names a value this step must find and hand to later steps as <c>${name}</c>.</param>
 public sealed record PlanStep(PlanStepKind Kind, string Description, string? Query = null,
-    string? Target = null, string? Progress = null, SearchScopeIntent ScopeIntent = SearchScopeIntent.Unspecified);
+    string? Target = null, string? Progress = null, SearchScopeIntent ScopeIntent = SearchScopeIntent.Unspecified,
+    string? Produces = null);
 
 /// <summary>
 /// The compiled form of one user request. <see cref="OriginalGoal"/> stays attached for the whole run;
@@ -39,6 +41,39 @@ public sealed record InteractionPlan(string OriginalGoal, string FinalGoal, IRea
     int CurrentStepIndex = 0)
 {
     public const int MaxSteps = 6;
+
+    /// <summary>Values earlier steps of this execution produced, by name. Lives only for this run.</summary>
+    public IReadOnlyDictionary<string, string> Outputs { get; init; } = new Dictionary<string, string>();
+
+    private static readonly System.Text.RegularExpressions.Regex Reference =
+        new(@"\$\{([a-z][a-z0-9_]{0,31})\}", System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>The output names a step's text refers to.</summary>
+    public static IReadOnlyList<string> References(PlanStep step)
+        => new[] { step.Description, step.Query, step.Target, step.Progress }
+            .SelectMany(static t => t is null ? [] : Reference.Matches(t).Select(static m => m.Groups[1].Value)).Distinct().ToArray();
+
+    /// <summary>True when a later step needs the value this step produces; only then is it worth resolving.</summary>
+    public bool IsConsumed(string name) => Remaining.Any(s => References(s).Contains(name));
+
+    public InteractionPlan WithOutput(string name, string value)
+        => this with { Outputs = new Dictionary<string, string>(Outputs) { [name] = value } };
+
+    /// <summary>The current step with every <c>${name}</c> replaced by its captured value; Missing names an unresolved reference.</summary>
+    public (InteractionPlan Plan, string? Missing) ResolveCurrent()
+    {
+        var step = Current;
+        string? missing = null;
+        string? Fill(string? text) => text is null ? null : Reference.Replace(text, m =>
+        {
+            if (Outputs.TryGetValue(m.Groups[1].Value, out var value)) return value;
+            missing ??= m.Groups[1].Value;
+            return m.Value;
+        });
+        var resolved = step with { Description = Fill(step.Description)!, Query = Fill(step.Query),
+            Target = Fill(step.Target), Progress = Fill(step.Progress) };
+        return (missing is null && resolved != step ? WithCurrent(resolved) : this, missing);
+    }
 
     public PlanStep Current => Steps[CurrentStepIndex];
     public bool IsLastStep => CurrentStepIndex >= Steps.Count - 1;
