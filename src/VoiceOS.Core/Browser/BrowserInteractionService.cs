@@ -273,7 +273,7 @@ public sealed class BrowserInteractionService(
         }
         catch (ChromeCompanionException ex)
         {
-            logger?.LogWarning("Browser task exit reason=companion_error code={Code}", ex.Code);
+            logger?.LogWarning("Browser task exit reason=companion_error code={Code} message={Message}", ex.Code, ex.Message);
             return new(InteractionCompletionState.Incomplete, ex.IsInfrastructure ? ActivityMessage.ForUnavailable(UnavailableReason.ChromeCompanion) : $"Chrome companion unavailable: {ex.Message}", null, null, null,
                 Unavailable: ex.IsInfrastructure ? UnavailableReason.ChromeCompanion : null);
         }
@@ -447,7 +447,7 @@ public sealed class BrowserInteractionService(
             if (ex.IsInfrastructure)
                 throw new InfrastructureUnavailableException(UnavailableReason.ChromeCompanion,
                     ActivityMessage.ForUnavailable(UnavailableReason.ChromeCompanion), ex);
-            logger?.LogWarning("Browser task exit reason=companion_error code={Code}", ex.Code);
+            logger?.LogWarning("Browser task exit reason=companion_error code={Code} message={Message}", ex.Code, ex.Message);
             selectTimer.Stop();
             LatencyTrace.Current?.Record("tab_select", selectTimer.Elapsed.TotalMilliseconds);
             return new(false, $"Chrome companion unavailable: {ex.Message}");

@@ -19,7 +19,7 @@
     "preconditions": [ { "kind": "companionConnected" }, { "kind": "foregroundProcess", "process": "chrome" }, { "kind": "activeTabOrigin", "contains": "localhost:18777" } ],
     "cleanup": [ { "kind": "closeNewTabs" } ], "timeoutSeconds": 120,
     "turns": [
-      { "transcript": "Open Hello, then open its lyrics.", "expect": { "outcome": "Clarify", "newTabs": { "max": 0 } } },
+      { "transcript": "Click the Hello link, then click Lyrics.", "expect": { "outcome": "Clarify", "newTabs": { "max": 0 } } },
       { "choose": "Adele", "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "/validate/track/adele/lyrics" } } }
     ]
   },
@@ -30,7 +30,7 @@
     "preconditions": [ { "kind": "companionConnected" }, { "kind": "foregroundProcess", "process": "chrome" }, { "kind": "activeTabOrigin", "contains": "localhost:18777" } ],
     "cleanup": [ { "kind": "closeNewTabs" } ], "timeoutSeconds": 120,
     "turns": [
-      { "transcript": "Open pricing, then stop.", "expect": { "outcome": "Clarify", "newTabs": { "max": 0 } } },
+      { "transcript": "Click See the plans, then stop.", "expect": { "outcome": "Clarify", "newTabs": { "max": 0 } } },
       { "choose": "over 18", "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "/validate/gate/pricing" } } }
     ]
   },
@@ -40,7 +40,7 @@
     "setup": [ { "kind": "startProcess", "file": "chrome.exe", "args": "http://localhost:18777/validate/gate?page=aged" }, { "kind": "wait", "ms": 3000 }, { "kind": "focusWindow", "process": "chrome" }, { "kind": "wait", "ms": 500 } ],
     "preconditions": [ { "kind": "companionConnected" }, { "kind": "foregroundProcess", "process": "chrome" }, { "kind": "activeTabOrigin", "contains": "localhost:18777" } ],
     "cleanup": [ { "kind": "closeNewTabs" } ], "timeoutSeconds": 120,
-    "transcript": "Dismiss the age check, then open pricing.",
+    "transcript": "Dismiss the age check, then click See the plans.",
     "expect": { "outcome": "Complete", "maxActions": 1, "final": { "activeTabUrlContains": "/validate/gate/pricing" } }
   },
   {

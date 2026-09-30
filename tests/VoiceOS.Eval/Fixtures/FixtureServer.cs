@@ -215,10 +215,10 @@ public sealed class FixtureServer(int port) : IDisposable
             // The gate is shown until a choice was made; ?page=aged renders the page as it is after a previous visit.
             "/validate/gate" => Page("Shop", (query == "aged" ? "" :
                 "<div id=\"gate\" role=\"dialog\" aria-label=\"Age check\"><p>Are you over 18?</p><button id=\"over\" type=\"button\">I am over 18</button> <button id=\"under\" type=\"button\">I am under 18</button></div>") +
-                "<h1>Shop</h1><a href=\"/validate/gate/pricing\">Pricing</a>",
+                "<div id=\"content\"" + (query == "aged" ? "" : " hidden") + "><h1>Shop</h1><a href=\"/validate/gate/pricing\">See the plans</a></div>",
                 "<script>document.addEventListener('DOMContentLoaded',()=>{const g=document.getElementById('gate');if(!g)return;" +
-                "document.getElementById('over').onclick=()=>g.remove();document.getElementById('under').onclick=()=>{g.textContent='Sorry, this site is for adults.';};});</script>"),
-            "/validate/gate/pricing" => Page("Pricing", "<h1>Pricing</h1><p>Plans.</p>"),
+                "document.getElementById('over').onclick=()=>{g.remove();document.getElementById('content').hidden=false;};document.getElementById('under').onclick=()=>{g.textContent='Sorry, this site is for adults.';};});</script>"),
+            "/validate/gate/pricing" => Page("Plans overview", "<h1>Plans overview</h1><p>Plans.</p>"),
             "/validate/paginated" => Page("Clips", $"<h1>Clips - page {query ?? "1"}</h1><ul>" +
                 "<li><a href=\"/item/1\">Harbor timelapse <span>4:08</span></a></li><li><a href=\"/item/2\">Bakery tour <span>4:00</span></a></li>" +
                 "<li><a href=\"/item/3\">Lighthouse story</a> <span>4 reviews</span></li>" +

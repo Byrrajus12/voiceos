@@ -62,7 +62,7 @@ public static class SimpleStepFramer
 public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKey,
     Microsoft.Extensions.Logging.ILogger? logger = null) : IBrowserStepCompiler
 {
-    public static readonly TimeSpan CompileTimeout = TimeSpan.FromSeconds(8);
+    public static readonly TimeSpan CompileTimeout = TimeSpan.FromSeconds(14);
 
     public const string Prompt =
         "Compile the user's browser request into an ordered plan of semantic steps. Each step is one desired operation or outcome, " +
@@ -72,6 +72,7 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
         "Open (activate a described control, link or result and follow it: a page number, a tab, the third result, a button), History (go back or forward one page; target is 'back' or 'forward'), Act (only an operation with no described target, such as scrolling or a media action). " +
         "Destinations are never guessed: set preferredService and Reach only when the user named that site or service; a request with no named site is a generic web task. " +
         "A named final destination does not own the earlier discovery: a fact needed for it (an actor, a title) may be found by any suitable search, and only the last step must reach the destination. " +
+        "Set preferredService and Reach only when the user's FIRST action belongs on that service. When a service is only where the final result should be opened, leave preferredService null, find facts with general web searches, then Search for the thing together with the service name and Open the matching result. " +
         "Locate is also how a concrete thing is identified when it is the answer or an input for a later step; a later step that uses it writes ${name} and the Locate that finds it MUST set produces to that name. " +
         "Use 1 to 5 steps. Scope each Search to where the user said: a site-wide search is one Search step with the exact query. " +
         "For Search also say which search surface the user meant in searchScope: Global (the service-wide search; the default), " +
@@ -141,7 +142,8 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
             model = BrowserModel.Id,
             messages = new object[] { new { role = "system", content = Prompt }, new { role = "user", content = utterance } },
             response_format = new { type = "json_schema", json_schema = new { name = "browser_plan", strict = true, schema = Schema } },
-            max_completion_tokens = 500,
+            // Reasoning tokens count against this: a six-step plan with dataflow was cut off mid-JSON at 500.
+            max_completion_tokens = 1200,
             reasoning = new { effort = "low" }
         });
         string content;
@@ -169,8 +171,8 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
         foreach (var repair in diagnostics.Repairs)
             logger?.LogInformation("Browser compile structural repair {Repair}", repair);
         if (compiled is null)
-            logger?.LogWarning("Browser compile rejected reason={Reason} {Detail} plan={Plan}", diagnostics.Reason ?? "malformed",
-                diagnostics.Detail ?? "-", diagnostics.Plan ?? (content.Length > 600 ? content[..600] : content));
+            logger?.LogWarning("Browser compile rejected reason={Reason} {Detail} length={Length} plan={Plan}", diagnostics.Reason ?? "malformed",
+                diagnostics.Detail ?? "-", content.Length, diagnostics.Plan ?? (content.Length > 600 ? content[..600] : content));
         return compiled;
     }
 

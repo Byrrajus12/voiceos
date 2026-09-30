@@ -193,6 +193,14 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                 action = boundClick;
             }
 
+            // A means-click (nothing was bound as the target) on a control that expresses a preference or commits the user
+            // (an age, yes/no, accept/reject) is never made on their behalf: the step is stalled and the blocker assessment
+            // decides whether that is a question for the user.
+            if (stepMode && planStep!.Kind == PlanStepKind.Open && binding is null && action.Kind == InteractionActionKind.Activate
+                && BrowserEvidence.Elements(context.Observation.Evidence).FirstOrDefault(e => e.Id == action.TargetId) is { } means
+                && !BlockerPolicy.IsLowConsequence(means.Name ?? ""))
+                return Exit("blocked", "A control that expresses a preference is not chosen for the user.");
+
             if (operation.SelectedChoice == "TYPE_TEXT")
             {
                 var field = context.Observation.Candidates.Single(candidate => candidate.Id == action.TargetId);

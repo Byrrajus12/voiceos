@@ -74,5 +74,19 @@
   "expect": {
    "outcome": "Complete"
   }
+ },
+ {
+  "id": "df.dean-other-show", "name": "Informational dataflow: actor, then a different show; stop when identified", "family": "alpha-dataflow",
+  "tags": ["alpha-dataflow", "browser", "chrome"], "preconditions": [ { "kind": "companionConnected" } ], "timeoutSeconds": 180,
+  "cleanup": [ { "kind": "closeNewTabs" } ],
+  "transcript": "Find out who played Dean in Supernatural and find me a different show he's part of.",
+  "expect": { "outcome": "Complete" }
+ },
+ {
+  "id": "df.sam-imdb", "name": "Dataflow into a final destination: actor, recent show, open it on IMDb", "family": "alpha-dataflow",
+  "tags": ["alpha-dataflow", "browser", "chrome"], "preconditions": [ { "kind": "companionConnected" } ], "timeoutSeconds": 240,
+  "cleanup": [ { "kind": "closeNewTabs" } ],
+  "transcript": "Find out who played Sam in Supernatural, find me a recent show he's part of, and open that show on IMDb.",
+  "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "imdb.com" } }
  }
 ]

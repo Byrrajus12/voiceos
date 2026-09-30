@@ -42,11 +42,14 @@ public sealed class OpenRouterBrowserBlockerAssessor(HttpClient http, string? ap
 {
     public const string Prompt =
         "A step of a browser plan could not advance. Judge what, if anything, stands in the way, from the page evidence. " +
+        "Decide in this order: human_required, then user_choice, then resolvable_action, then already_satisfied, then no_blocker. " +
+        "First look at the controls on screen: if they pose a question or offer alternatives the step's target is not among (an age check, a consent choice, several same-named items), that is user_choice. " +
         "You receive the original request, the plan, the current step, the page (url, title, visible text), the offered controls (each with an id) " +
         "and recent actions with their effects. Return exactly one outcome. " +
         "no_blocker: nothing interrupts the page; the step just cannot be done here (for example the target is not on the page). " +
         "already_satisfied: the state this step is meant to establish ALREADY holds on the page now, shown by positive evidence, never by the mere absence of a control " +
         "(the content that was behind a gate is accessible, a section it would expand is already expanded, the search results it would produce are already shown, the surface it would reach is already reached). " +
+        "If the page is showing a question, gate or dialog that offers controls, the outcome is user_choice or human_required, never already_satisfied. " +
         "Give evidence: a short phrase copied VERBATIM from the page (url, title, visible text or a control name) that shows the state holds. " +
         "resolvable_action: ONE offered control clears an interruption without expressing the user's preference or making a commitment " +
         "(close an overlay, dismiss an informational notice, continue past a neutral interruption); give its id in candidateIds. " +
@@ -156,7 +159,7 @@ internal static class BlockerPolicy
 {
     // A control that commits the user to something, or expresses a preference, is never clicked on the user's behalf.
     private static readonly Regex Consequential = new(
-        @"\b(buy|purchase|pay|order|checkout|check\s*out|subscribe|delete|remove|sign\s*in|sign\s*up|log\s*in|register|confirm|submit|send|post|publish|download|install|accept|agree|allow|reject|decline|deny|yes|no)\b",
+        @"\b(over|under)\s+\d{1,2}\b|\bi\s+(am|agree|accept)\b|\b(buy|purchase|pay|order|checkout|check\s*out|subscribe|delete|remove|sign\s*in|sign\s*up|log\s*in|register|confirm|submit|send|post|publish|download|install|accept|agree|allow|reject|decline|deny|yes|no)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
     public static string HumanMessage(string? humanKind) => humanKind switch
@@ -187,7 +190,8 @@ internal static class BlockerPolicy
     {
         var step = plan.Current;
         if (plan.IsLastStep || step.Kind is PlanStepKind.Reach or PlanStepKind.History or PlanStepKind.Locate) return false;
-        if (step.Kind == PlanStepKind.Search && !string.IsNullOrWhiteSpace(step.Query) && SearchApplied(step.Query, observation)) return true;
+        // A search is applied only when the page shows its query; a quoted phrase cannot vouch for that.
+        if (step.Kind == PlanStepKind.Search) return !string.IsNullOrWhiteSpace(step.Query) && SearchApplied(step.Query, observation);
         return EvidenceShown(quotedEvidence, observation) && !OnlyRestates(quotedEvidence!, step);
     }
 
