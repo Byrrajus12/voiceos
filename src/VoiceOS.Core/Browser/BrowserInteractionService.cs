@@ -40,19 +40,21 @@ public sealed class BrowserInteractionService(
     double preparedFreshnessThresholdMs = 150,
     ProofMode proofMode = ProofMode.Off,
     ProofThresholds? proofThresholds = null,
-    IReadOnlySet<ProofFamily>? activeProofFamilies = null) : IBrowserInteractionService, IBrowserActivitySource
+    IReadOnlySet<ProofFamily>? activeProofFamilies = null,
+    IBrowserStepCompiler? compiler = null) : IBrowserInteractionService, IBrowserActivitySource
 {
+    private readonly IBrowserStepCompiler? _compiler = compiler ?? (normalizer is null ? null : new NormalizerStepCompiler(normalizer));
     public event Action<BrowserActivity>? ActionStarting;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private PendingRun? _pending;
-    private (string ActivationId, string Utterance, Task<BrowserGoalNormalization?> Task, Stopwatch Clock)? _prefetch;
+    private (string ActivationId, string Utterance, Task<CompiledBrowserTask?> Task, Stopwatch Clock)? _prefetch;
     private readonly double _preparedFreshnessThresholdMs = preparedFreshnessThresholdMs;
 
     public void PrefetchNormalization(string utterance, string activationId, CancellationToken cancellationToken = default)
     {
-        if (normalizer is null) return;
+        if (_compiler is null) return;
         var clock = Stopwatch.StartNew();
-        var task = NormalizeAsync(utterance, cancellationToken);
+        var task = CompileAsync(utterance, cancellationToken);
         _prefetch = (activationId, utterance, task, clock);
     }
 
@@ -121,9 +123,14 @@ public sealed class BrowserInteractionService(
             var normalizationTimer = Stopwatch.StartNew();
             if (scope?.IsSurfaceOnly != true)
             {
-                var (normalizationTask, normalizationCts) = BeginNormalization(
-                    goal.OriginalUtterance, activationId, cancellationToken);
-                BrowserGoalNormalization? normalized = null;
+                // One simple operation on an already-fixed surface needs no generative compile.
+                var simple = SimpleStepFramer.TryFrame(goal.OriginalUtterance, scope);
+                var (normalizationTask, normalizationCts) = simple is not null
+                    ? (Task.FromResult<CompiledBrowserTask?>(simple), null)
+                    : BeginNormalization(goal.OriginalUtterance, activationId, cancellationToken);
+                if (simple is not null)
+                    logger?.LogInformation("Browser compile=skipped reason=simple_step kind={Kind}", simple.Plan.Current.Kind);
+                CompiledBrowserTask? compiled = null;
                 if (selectionTask is not null)
                 {
                     var winner = await Task.WhenAny(selectionTask, normalizationTask).ConfigureAwait(false);
@@ -141,7 +148,7 @@ public sealed class BrowserInteractionService(
                 }
                 try
                 {
-                    normalized = await normalizationTask.ConfigureAwait(false);
+                    compiled = await normalizationTask.ConfigureAwait(false);
                 }
                 catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
                 catch (InfrastructureUnavailableException)
@@ -157,23 +164,8 @@ public sealed class BrowserInteractionService(
                     if (!selection.Success)
                         return new(InteractionCompletionState.Incomplete, selection.FailureDetail, null, null, null);
                 }
-                if (normalized is null)
-                {
-                    logger?.LogWarning("Browser normalization=failed");
-                    return new(InteractionCompletionState.Uncertain,
-                        "I could not safely clarify the browser goal. Please rephrase the destination and what to find.",
-                        [new("cancel", "Cancel")], null, null);
-                }
-                if (scope?.GoalShape == GoalShape.ActionOnSurface
-                    && normalized.EndState == SemanticEndState.SurfaceReady)
-                    return new(InteractionCompletionState.Uncertain,
-                        "The semantic goal still requires an action, but normalization identified only a surface.",
-                        [new("cancel", "Cancel")], null, null);
-                goal = goal with { Normalization = normalized };
-                logger?.LogInformation("Browser normalization=used reason={Reason} objective={Objective} end_state={EndState} resource_type={ResourceType} service={Service} entity={Entity} queries={Queries} corrections={Corrections}",
-                    "semantic_goal", normalized.Objective, normalized.EndState, normalized.ResourceType, normalized.PreferredService,
-                    normalized.Entity, string.Join(" | ", normalized.SearchQueries),
-                    string.Join(" | ", normalized.CorrectedTerms.Select(x => $"{x.Heard}->{x.Interpreted} ({x.Confidence:F2})")));
+                if (Apply(goal, scope, compiled, out var compiledGoal) is { } rejected) return rejected;
+                goal = compiledGoal;
             }
             else
             {
@@ -266,12 +258,12 @@ public sealed class BrowserInteractionService(
 
         var normalizationTimer = Stopwatch.StartNew();
         var (normalizationTask, normalizationCts) = BeginNormalization(goal.OriginalUtterance, activationId, cancellationToken);
-        BrowserGoalNormalization? normalized = null;
+        CompiledBrowserTask? compiled = null;
         try
         {
             try
             {
-                normalized = await normalizationTask.ConfigureAwait(false);
+                compiled = await normalizationTask.ConfigureAwait(false);
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
             catch (InfrastructureUnavailableException)
@@ -291,26 +283,12 @@ public sealed class BrowserInteractionService(
         normalizationTimer.Stop();
         LatencyTrace.Current?.Record("normalization", normalizationTimer.Elapsed.TotalMilliseconds);
 
-        if (normalized is null)
-        {
-            logger?.LogWarning("Browser normalization=failed");
-            await CleanupStartupAsync(startupTask, sessionId).ConfigureAwait(false);
-            return new(InteractionCompletionState.Uncertain,
-                "I could not safely clarify the browser goal. Please rephrase the destination and what to find.",
-                [new("cancel", "Cancel")], null, null);
-        }
-        if (scope.GoalShape == GoalShape.ActionOnSurface && normalized.EndState == SemanticEndState.SurfaceReady)
+        if (Apply(goal, scope, compiled, out var compiledGoal) is { } rejected)
         {
             await CleanupStartupAsync(startupTask, sessionId).ConfigureAwait(false);
-            return new(InteractionCompletionState.Uncertain,
-                "The semantic goal still requires an action, but normalization identified only a surface.",
-                [new("cancel", "Cancel")], null, null);
+            return rejected;
         }
-        goal = goal with { Normalization = normalized };
-        logger?.LogInformation("Browser normalization=used reason={Reason} objective={Objective} end_state={EndState} resource_type={ResourceType} service={Service} entity={Entity} queries={Queries} corrections={Corrections}",
-            "semantic_goal", normalized.Objective, normalized.EndState, normalized.ResourceType, normalized.PreferredService,
-            normalized.Entity, string.Join(" | ", normalized.SearchQueries),
-            string.Join(" | ", normalized.CorrectedTerms.Select(x => $"{x.Heard}->{x.Interpreted} ({x.Confidence:F2})")));
+        goal = compiledGoal;
         var normalizationDoneAtMs = raceClock.Elapsed.TotalMilliseconds;
 
         // If the startup transport call throws (e.g. ChromeCompanionException), let it propagate
@@ -386,7 +364,7 @@ public sealed class BrowserInteractionService(
     /// Resolves the normalization source for this run: a matching prefetch started by the
     /// orchestrator before scope resolution, or a fresh call under a cancellable linked token.
     /// </summary>
-    private (Task<BrowserGoalNormalization?> Task, CancellationTokenSource? Cts) BeginNormalization(
+    private (Task<CompiledBrowserTask?> Task, CancellationTokenSource? Cts) BeginNormalization(
         string utterance, string? activationId, CancellationToken cancellationToken)
     {
         var prefetch = _prefetch;
@@ -398,17 +376,48 @@ public sealed class BrowserInteractionService(
             return (ObservePrefetchAsync(p.Task, p.Clock), null);
         }
         logger?.LogInformation("Browser normalization prefetch=miss");
-        if (normalizer is null)
-            return (Task.FromResult<BrowserGoalNormalization?>(null), null);
+        if (_compiler is null)
+            return (Task.FromResult<CompiledBrowserTask?>(null), null);
         var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        return (NormalizeAsync(utterance, cts.Token), cts);
+        return (CompileAsync(utterance, cts.Token), cts);
     }
 
-    private async Task<BrowserGoalNormalization?> NormalizeAsync(string utterance, CancellationToken token)
-        => await normalizer!.NormalizeAsync(utterance, token).ConfigureAwait(false);
+    private async Task<CompiledBrowserTask?> CompileAsync(string utterance, CancellationToken token)
+    {
+        var timer = Stopwatch.StartNew();
+        try { return await _compiler!.CompileAsync(utterance, token).ConfigureAwait(false); }
+        finally { logger?.LogInformation("Browser compile_ms={Ms:F0}", timer.Elapsed.TotalMilliseconds); }
+    }
 
-    private async Task<BrowserGoalNormalization?> ObservePrefetchAsync(
-        Task<BrowserGoalNormalization?> task, Stopwatch clock)
+    /// <summary>
+    /// Attaches a compiled task to the goal, or returns the outcome that ends the run. A compile that produced
+    /// nothing usable is a failure with a specific message, not a question for the user.
+    /// </summary>
+    private BrowserInteractionOutcome? Apply(BrowserGoal goal, BrowserExecutionScope? scope,
+        CompiledBrowserTask? compiled, out BrowserGoal applied)
+    {
+        applied = goal;
+        if (compiled is null)
+        {
+            logger?.LogWarning("Browser normalization=failed");
+            return new(InteractionCompletionState.Incomplete, "I couldn't work out the steps for that request.",
+                null, null, null);
+        }
+        if (scope?.GoalShape == GoalShape.ActionOnSurface && compiled.Normalization?.EndState == SemanticEndState.SurfaceReady)
+            return new(InteractionCompletionState.Incomplete,
+                "The request needs an action, but I only found a site to open.", null, null, null);
+        applied = goal with { Normalization = compiled.Normalization, Plan = compiled.Plan };
+        if (compiled.Normalization is { } normalized)
+            logger?.LogInformation("Browser normalization=used reason={Reason} objective={Objective} end_state={EndState} resource_type={ResourceType} service={Service} entity={Entity} queries={Queries} corrections={Corrections} steps={Steps}",
+                "semantic_goal", normalized.Objective, normalized.EndState, normalized.ResourceType, normalized.PreferredService,
+                normalized.Entity, string.Join(" | ", normalized.SearchQueries),
+                string.Join(" | ", normalized.CorrectedTerms.Select(x => $"{x.Heard}->{x.Interpreted} ({x.Confidence:F2})")),
+                string.Join(" > ", compiled.Plan.Steps.Select(x => $"{x.Kind}:{x.Description}")));
+        return null;
+    }
+
+    private async Task<CompiledBrowserTask?> ObservePrefetchAsync(
+        Task<CompiledBrowserTask?> task, Stopwatch clock)
     {
         try { return await task.ConfigureAwait(false); }
         finally

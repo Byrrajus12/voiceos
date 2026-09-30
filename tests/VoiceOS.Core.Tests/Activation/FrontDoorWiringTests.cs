@@ -24,12 +24,13 @@ public sealed class FrontDoorWiringTests
     private sealed class Router(CommandRoute route) : ICommandRouter
     {
         public Func<Task>? Handler;
+        public SemanticEndState EndState;
         public async ValueTask<CommandRouteDecision> RouteAsync(string transcript, CancellationToken cancellationToken = default)
         {
             if (Handler is not null) await Handler();
             return new(route, .3, Reason: RoutingReason.LowConfidence, MediaRequestKind: MediaRequestKind.None,
                 DestinationKind: route == CommandRoute.ComputerUse ? SemanticDestinationKind.KnownService : SemanticDestinationKind.None,
-                DestinationName: route == CommandRoute.ComputerUse ? "YouTube" : null);
+                DestinationName: route == CommandRoute.ComputerUse ? "YouTube" : null, EndState: EndState);
         }
     }
     private sealed class Volume : IVolumeService
@@ -76,14 +77,25 @@ public sealed class FrontDoorWiringTests
     }
 
     [Fact]
-    public async Task ComputerUseRoute_WithDirectProgram_IsNotRescued()
+    public async Task ComputerUseRoute_WithBrowserContentSignal_IsNotRescued()
     {
         var engine = new Engine(); var volume = new Volume();
-        using var orchestrator = Create(new(CommandRoute.ComputerUse), engine, volume);
+        using var orchestrator = Create(new(CommandRoute.ComputerUse) { EndState = SemanticEndState.ResourceOpened }, engine, volume);
         var run = await orchestrator.RunTranscriptAsync("Open YouTube");
         Assert.Equal(ExecutionScopeKind.Browser, run.Scope!.Kind);
         Assert.Equal(0, volume.Calls);
         Assert.False(run.SpeculativeDirectUsed);
+    }
+
+    [Fact]
+    public async Task ConfidentComputerUseRoute_WithoutBrowserContent_YieldsToGroundedDirectProgram()
+    {
+        var engine = new Engine(); var volume = new Volume();
+        using var orchestrator = Create(new(CommandRoute.ComputerUse) { EndState = SemanticEndState.StateChanged }, engine, volume);
+        var run = await orchestrator.RunTranscriptAsync("A bit louder");
+        Assert.Equal(ExecutionScopeKind.DirectCapability, run.Scope!.Kind);
+        Assert.Equal(1, volume.Calls);
+        Assert.Equal(1, engine.Calls);
     }
 
     [Fact]

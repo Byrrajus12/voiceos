@@ -9,7 +9,8 @@ public sealed record BrowserGoal(
     Uri? ExplicitUrl = null,
     string? NamedServiceHint = null,
     BrowserGoalNormalization? Normalization = null,
-    Uri? ScopedDestination = null)
+    Uri? ScopedDestination = null,
+    Interaction.InteractionPlan? Plan = null)
 {
     public static BrowserGoal FromUtterance(string utterance)
     {

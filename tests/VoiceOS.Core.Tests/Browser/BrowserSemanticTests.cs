@@ -943,7 +943,7 @@ public sealed class BrowserSemanticTests
             new FakeGateway((_, _) => throw new Exception("Jev should not be called")),
             new FakeNormalizer { Fail = true });
         var result = await service.RunAsync("Find the Ripcrap repository on github");
-        Assert.Equal(InteractionCompletionState.Uncertain, result.Completion);
+        Assert.Equal(InteractionCompletionState.Incomplete, result.Completion);
         Assert.Equal(0, transport.Opens);
     }
 

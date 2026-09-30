@@ -20,6 +20,8 @@ public class VoiceOSConfig
     public bool FrontDoorGrounding { get; set; } = true;
     public bool SpeculativeDirectDecision { get; set; } = true;
     public bool DirectRescue { get; set; } = true;
+    /// <summary>How long after routing a confident browser route waits for the speculative direct decision to be ready.</summary>
+    public int DirectFirstGraceMs { get; set; } = 400;
     /// <summary>
     /// On (default): a proof from an active family (Surface, Activate) completes the browser step at once, with the
     /// legacy completion path as fallback. Shadow evaluates and logs only; Off is exactly the legacy loop.

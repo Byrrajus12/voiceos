@@ -130,15 +130,16 @@ public sealed class VoiceOSProduct : IDisposable
                 PooledConnectionLifetime = TimeSpan.FromMinutes(15)
             };
             browserInteraction = new BrowserInteractionService(chromeCompanion, gateway,
-                new OpenRouterBrowserGoalNormalizer(
-                    new HttpClient(openRouterHandler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(15) },
-                    Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")),
-                loggerFactory.CreateLogger<BrowserInteractionService>(),
-                new BrowserTextValueResolver(new GroundedBrowserTextValueResolver(),
+                normalizer: null,
+                logger: loggerFactory.CreateLogger<BrowserInteractionService>(),
+                textValues: new BrowserTextValueResolver(new GroundedBrowserTextValueResolver(),
                     new OpenRouterBrowserTextValueResolver(
                         new HttpClient(openRouterHandler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(15) },
                         Environment.GetEnvironmentVariable("OPENROUTER_API_KEY"))),
-                proofMode: config.BrowserProofMode);
+                proofMode: config.BrowserProofMode,
+                compiler: new OpenRouterBrowserStepCompiler(
+                    new HttpClient(openRouterHandler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(15) },
+                    Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")));
         }
         else
         {

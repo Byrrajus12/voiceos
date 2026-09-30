@@ -567,9 +567,15 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         {
             // A valid, grounded direct Windows program beats a coarse browser opinion; direct was already
             // started speculatively alongside routing, so this waits on work in flight rather than adding a call.
-            var direct = await GetDirect().ConfigureAwait(false);
-            if (Evaluate(direct, directFirst: true).Kind == FrontDoorVerdictKind.RescueDirect)
-                Rescue(direct!, FrontDoorVerdictKind.RescueDirect);
+            // Bounded: a slow direct decision must never delay a genuine browser task, so it only counts when it
+            // is ready within the grace window after routing.
+            if (run.SpeculativeTask is { } inFlight
+                && await Task.WhenAny(inFlight, Task.Delay(_config.DirectFirstGraceMs, _shutdown.Token)).ConfigureAwait(false) == inFlight)
+            {
+                var direct = await GetDirect().ConfigureAwait(false);
+                if (Evaluate(direct, directFirst: true).Kind == FrontDoorVerdictKind.RescueDirect)
+                    Rescue(direct!, FrontDoorVerdictKind.RescueDirect);
+            }
         }
         _logger.LogInformation("Command route heads destination_kind={DestinationKind} destination={Destination} tab_disposition={TabDisposition} context_dependency={ContextDependency} task_relation={TaskRelation} surface_preference={SurfacePreference} goal_shape={GoalShape} end_state={EndState}",
             route.DestinationKind, route.DestinationName ?? "-", route.TabDisposition, route.ContextDependency,
@@ -588,7 +594,9 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         // discovered, even when reaching it is the whole goal.
         if (route.Route == CommandRoute.ComputerUse && route.SurfacePreference != SurfacePreference.Native
             && (route.GoalShape != GoalShape.SurfaceOnly
-                || route.RequestsNamedEntity && route.DestinationKind == SemanticDestinationKind.None))
+                || route.RequestsNamedEntity && route.DestinationKind == SemanticDestinationKind.None)
+            // A simple operation on the current page is framed in code; compiling it would only add a call.
+            && !SimpleStepFramer.MayBeSimple(route, transcript))
             _browserInteraction?.PrefetchNormalization(transcript, activationId, _shutdown.Token);
 
         executionContext = collected.Snapshot with

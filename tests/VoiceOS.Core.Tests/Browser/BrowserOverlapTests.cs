@@ -83,7 +83,7 @@ public sealed class BrowserOverlapTests
         normalizer.Fail();
         var outcome = await runTask;
 
-        Assert.Equal(InteractionCompletionState.Uncertain, outcome.Completion);
+        Assert.Equal(InteractionCompletionState.Incomplete, outcome.Completion);
         Assert.Equal(1, transport.Opens);
         Assert.Equal(1, transport.Closes);
     }
@@ -135,7 +135,7 @@ public sealed class BrowserOverlapTests
         var runTask = service.RunAsync("Find the Ripcrap repository on github").AsTask();
         normalizer.Fail();
         var result = await runTask;
-        Assert.Equal(InteractionCompletionState.Uncertain, result.Completion);
+        Assert.Equal(InteractionCompletionState.Incomplete, result.Completion);
         Assert.Equal(0, transport.Opens);
     }
 
@@ -148,7 +148,7 @@ public sealed class BrowserOverlapTests
         var scope = new BrowserExecutionScope(BrowserScopeKind.ActiveTab, 7, "https://example.com/",
             ExplicitSelection: true);
 
-        var runTask = service.RunAsync("update this page", scope: scope).AsTask();
+        var runTask = service.RunAsync("update this page and then review it", scope: scope).AsTask();
         Assert.Equal(1, transport.Selections);
         Assert.Equal(0, transport.Observes);
 
@@ -167,7 +167,7 @@ public sealed class BrowserOverlapTests
         var scope = new BrowserExecutionScope(BrowserScopeKind.ActiveTab, 7, "https://example.com/",
             ExplicitSelection: true);
 
-        var outcome = await service.RunAsync("update this page", scope: scope);
+        var outcome = await service.RunAsync("update this page and then review it", scope: scope);
 
         Assert.Equal(InteractionCompletionState.Incomplete, outcome.Completion);
         Assert.Contains("Chrome companion unavailable", outcome.Detail);

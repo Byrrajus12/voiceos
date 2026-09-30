@@ -154,7 +154,7 @@ public sealed class InfrastructureUnavailableTests
         var service = new BrowserInteractionService(transport, new Gateway(), new Normalizer(true));
         var scope = scoped ? new BrowserExecutionScope(BrowserScopeKind.ActiveTab, TabId: 1, ExpectedUrl: "https://example.com/")
             : new BrowserExecutionScope(BrowserScopeKind.NewTaskTab, Destination: new("https://example.com/"));
-        var outcome = await service.RunAsync("search", scope: scope);
+        var outcome = await service.RunAsync("search and then open the first result", scope: scope);
         Assert.Equal(UnavailableReason.BrowserGoalService, outcome.Unavailable);
         Assert.Equal(InteractionCompletionState.Incomplete, outcome.Completion);
         Assert.Null(outcome.Choices); Assert.Equal(scoped ? 0 : 1, transport.Closes);
