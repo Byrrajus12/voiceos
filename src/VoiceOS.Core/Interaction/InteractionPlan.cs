@@ -29,9 +29,11 @@ public enum SearchScopeIntent { Unspecified, Global, CurrentResource, InPage, Co
 /// <param name="Progress">Short present-tense status shown to the user while the step runs.</param>
 /// <param name="ScopeIntent">Search only: the search surface the user meant.</param>
 /// <param name="Produces">Locate only: names a value this step must find and hand to later steps as <c>${name}</c>.</param>
+/// <param name="Reveal">Locate only: the target is a section of the page to bring into view. It is complete when the
+/// section is in view and never activates a control.</param>
 public sealed record PlanStep(PlanStepKind Kind, string Description, string? Query = null,
     string? Target = null, string? Progress = null, SearchScopeIntent ScopeIntent = SearchScopeIntent.Unspecified,
-    string? Produces = null);
+    string? Produces = null, bool Reveal = false);
 
 /// <summary>
 /// The compiled form of one user request. <see cref="OriginalGoal"/> stays attached for the whole run;

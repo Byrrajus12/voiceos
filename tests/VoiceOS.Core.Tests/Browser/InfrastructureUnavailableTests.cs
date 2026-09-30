@@ -192,7 +192,7 @@ public sealed class InfrastructureUnavailableTests
     [Theory]
     [InlineData(UnavailableReason.IntentService, "Can't reach the command service.")]
     [InlineData(UnavailableReason.BrowserGoalService, "Browser help is unavailable right now.")]
-    [InlineData(UnavailableReason.ChromeCompanion, "Chrome companion isn't connected.")]
+    [InlineData(UnavailableReason.ChromeCompanion, "I lost the connection to Chrome.")]
     public void ForUnavailable_MessagesAreSpecific(UnavailableReason reason, string message)
         => Assert.Equal(message, ActivityMessage.ForUnavailable(reason));
 

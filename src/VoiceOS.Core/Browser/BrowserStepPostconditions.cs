@@ -6,7 +6,7 @@ namespace VoiceOS.Core.Browser;
 /// <summary>One element as the observation evidence reports it (only what postconditions and shortcuts need).</summary>
 internal sealed record EvidenceElement(string Id, string? Role, string? Name, string? Href, string? Value, bool Editable,
     bool Enabled, bool InViewport, string? Kind, string? SearchScope, string? SubmitRef, string? Form = null, bool Submit = false,
-    int? Position = null);
+    int? Position = null, string? Landmark = null, string? Context = null);
 
 internal static class BrowserEvidence
 {
@@ -27,11 +27,32 @@ internal static class BrowserEvidence
                 if (Text("id") is not { } id) continue;
                 list.Add(new(id, Text("Role"), Text("Name"), Text("Href"), Text("Value"), Flag("Editable"), Flag("Enabled"),
                     Flag("InViewport"), Text("Kind"), Text("SearchScope"), Text("SubmitRef"), Text("Form"), Flag("Submit"),
-                    e.TryGetProperty("Position", out var position) && position.ValueKind == JsonValueKind.Number ? position.GetInt32() : null));
+                    e.TryGetProperty("Position", out var position) && position.ValueKind == JsonValueKind.Number ? position.GetInt32() : null,
+                    Text("Landmark"), Text("Context")));
             }
         }
         catch { }
         return list;
+    }
+
+    /// <summary>A heading/labelled region of the page (whole page, not only what is in view).</summary>
+    internal sealed record EvidenceSection(string Id, string Text, bool InViewport);
+
+    internal static IReadOnlyList<EvidenceSection>? Sections(string? evidence)
+    {
+        try
+        {
+            if (evidence is null) return null;
+            using var document = JsonDocument.Parse(evidence);
+            if (!document.RootElement.TryGetProperty("headings", out var headings) || headings.ValueKind != JsonValueKind.Array) return null;
+            var list = new List<EvidenceSection>();
+            foreach (var h in headings.EnumerateArray())
+                if (h.ValueKind == JsonValueKind.Object && h.TryGetProperty("id", out var id) && id.GetString() is { } key
+                    && h.TryGetProperty("text", out var text) && text.GetString() is { } words)
+                    list.Add(new(key, words, h.TryGetProperty("inViewport", out var v) && v.ValueKind == JsonValueKind.True));
+            return list;
+        }
+        catch { return null; }
     }
 
     public static string? VisibleText(string? evidence)
@@ -186,8 +207,35 @@ internal sealed class PlannedStepEvaluator(BrowserGoal goal) : IProofEvaluator
         var terms = TargetTerms(input.Step.What.Phrase);
         // A target that names nothing distinctive ("the first result") has nothing to look for; binding decides later.
         if (terms.Length == 0) return ProofVerdict.Proved(family, "no_distinctive_target");
+        if (input.Step.What.Reveal) return Reveal(input, terms);
         return FindTarget(input.Observation.Evidence, terms) is { } found
             ? ProofVerdict.Proved(family, "target_present", detail: found) : ProofVerdict.NotYet(family, "target_not_present");
+    }
+
+    /// <summary>
+    /// Reveal: a section that carries the target's words is in view. A control that merely shares the name (a "4 Reviews"
+    /// link) is not the section, and a section somewhere on the page is not yet reached. A page that reports no sections at all
+    /// (an older companion) falls back to the words the page shows.
+    /// </summary>
+    private static ProofVerdict Reveal(ProofInput input, string[] terms)
+    {
+        const ProofFamily family = ProofFamily.Locate;
+        if (BrowserEvidence.Sections(input.Observation.Evidence) is not { } sections)
+        {
+            var shown = BrowserCompletionEvidence.Tokens(BrowserEvidence.VisibleText(input.Observation.Evidence)).Select(Singular).ToHashSet();
+            return terms.All(shown.Contains) ? ProofVerdict.Proved(family, "target_text_present", detail: "text")
+                : ProofVerdict.NotYet(family, "section_not_found");
+        }
+        var named = sections.Where(s => HasAll(s.Text, terms)).ToArray();
+        if (named.FirstOrDefault(static s => s.InViewport) is { } seen)
+            return ProofVerdict.Proved(family, "section_in_view", detail: seen.Id);
+        return ProofVerdict.NotYet(family, named.Length > 0 ? "section_not_in_view" : "section_not_found");
+    }
+
+    internal static bool HasAll(string? text, string[] terms)
+    {
+        var words = BrowserCompletionEvidence.Tokens(text).Select(Singular).ToHashSet();
+        return terms.All(words.Contains);
     }
 
     internal static string[] TargetTerms(string? target)

@@ -30,8 +30,14 @@ public sealed class PlanDataflowTests
     }
 
     [Fact]
-    public void ReferenceToAnUnproducedValue_IsRejectedAtCompile()
-        => Assert.Null(OpenRouterBrowserStepCompiler.Parse(Plan.Replace("\"produces\":\"character\"", "\"produces\":null"), "x"));
+    public void ReferenceToAnUnproducedValue_IsRepairedOnlyWhenTheProducerIsUnique()
+    {
+        // The one Locate before the consumer is unambiguously the producer it forgot to declare.
+        var repaired = OpenRouterBrowserStepCompiler.Parse(Plan.Replace("\"produces\":\"character\"", "\"produces\":null"), "x");
+        Assert.Equal("character", repaired!.Plan.Steps.Single(s => s.Produces is not null).Produces);
+        // A reference nothing before it could produce is still rejected.
+        Assert.Null(OpenRouterBrowserStepCompiler.Parse(Plan.Replace("\"produces\":\"character\"", "\"produces\":\"other\""), "x"));
+    }
 
     [Theory]
     [InlineData("page 7 control", "page 7", true)]

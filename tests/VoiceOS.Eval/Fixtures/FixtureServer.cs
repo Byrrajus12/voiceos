@@ -117,6 +117,7 @@ public sealed class FixtureServer(int port) : IDisposable
         if (path.StartsWith("/videos/watch/")) return Page($"Watch: {Title(path)}", $"<h1>{Title(path)}</h1><p>Video page.</p>{Nav(("All videos", "/videos"))}");
         if (path.StartsWith("/item/")) return Page($"Item {path[6..]}", $"<h1>Result item {path[6..]}</h1>{Nav(("Search", "/search"))}");
         if (path.StartsWith("/lab")) return Lab(path, query);
+        if (path.StartsWith("/validate")) return Validate(path, query);
         if (path.StartsWith("/interact/spa")) return Page("App home", Spa(), SpaScript);
         if (path.StartsWith("/ambiguous/") ) return Page($"Plans {path[11..]}", $"<h1>Plans page {path[11..]}</h1>");
 
@@ -190,6 +191,39 @@ public sealed class FixtureServer(int port) : IDisposable
                 ("Account", "/lab/tabs"), ("Help", "/lab/faq"), ("Legal", "/lab/legal"), ("Reports", "/lab/reports"), ("Find", "/lab/find"))),
             _ when path.StartsWith("/lab/item/") || path.StartsWith("/lab/manual/") || path is "/lab/terms" or "/lab/privacy" or "/lab/final-report"
                 => Page(path[5..].Replace('/', ' ').Replace('-', ' '), $"<h1>{path[5..]}</h1>"),
+            _ => null
+        };
+    }
+
+    // Alpha-correction validation surfaces: reveal vs a same-named link, a real user choice, a gate that may already be
+    // cleared, and pagination among durations and counts. Nothing here fakes browser state.
+    private static string? Validate(string path, string? query)
+    {
+        static string Filler(int n) => string.Concat(Enumerable.Range(1, n).Select(i =>
+            $"<div style=\"height:900px\"><p>Product information block {i}.</p></div>"));
+        return path switch
+        {
+            "/validate/reveal" => Page("Trail Headlamp", "<h1>Trail Headlamp</h1><p>Rated <a href=\"/validate/reviews-list\">(4 Reviews)</a></p>" +
+                Filler(4) + "<section><h2>Specifications</h2><p>Weight 85 g.</p></section>" + Filler(2) +
+                "<section><h2>Customer Reviews</h2><p>Bright and light. Five stars.</p></section>" + "<div style=\"height:1400px\"></div>"),
+            "/validate/reviews-list" => Page("All reviews", "<h1>All reviews</h1><p>Review list page.</p>"),
+            "/validate/choice" => Page("Results for Hello", "<h1>Results for Hello</h1>" +
+                "<section><a href=\"/validate/track/adele\">Hello</a><p>Adele</p></section>" +
+                "<section><a href=\"/validate/track/richie\">Hello</a><p>Lionel Richie</p></section>"),
+            "/validate/track/adele" or "/validate/track/richie" => Page("Track", $"<h1>Hello - {(path.EndsWith("adele") ? "Adele" : "Lionel Richie")}</h1><a href=\"{path}/lyrics\">Lyrics</a>"),
+            "/validate/track/adele/lyrics" or "/validate/track/richie/lyrics" => Page("Lyrics", "<h1>Lyrics</h1><p>Hello, it's me.</p>"),
+            // The gate is shown until a choice was made; ?page=aged renders the page as it is after a previous visit.
+            "/validate/gate" => Page("Shop", (query == "aged" ? "" :
+                "<div id=\"gate\" role=\"dialog\" aria-label=\"Age check\"><p>Are you over 18?</p><button id=\"over\" type=\"button\">I am over 18</button> <button id=\"under\" type=\"button\">I am under 18</button></div>") +
+                "<h1>Shop</h1><a href=\"/validate/gate/pricing\">Pricing</a>",
+                "<script>document.addEventListener('DOMContentLoaded',()=>{const g=document.getElementById('gate');if(!g)return;" +
+                "document.getElementById('over').onclick=()=>g.remove();document.getElementById('under').onclick=()=>{g.textContent='Sorry, this site is for adults.';};});</script>"),
+            "/validate/gate/pricing" => Page("Pricing", "<h1>Pricing</h1><p>Plans.</p>"),
+            "/validate/paginated" => Page("Clips", $"<h1>Clips - page {query ?? "1"}</h1><ul>" +
+                "<li><a href=\"/item/1\">Harbor timelapse <span>4:08</span></a></li><li><a href=\"/item/2\">Bakery tour <span>4:00</span></a></li>" +
+                "<li><a href=\"/item/3\">Lighthouse story</a> <span>4 reviews</span></li>" +
+                "<li><a href=\"/item/4\">Tide tables <span>14:08</span></a></li></ul>" +
+                "<nav aria-label=\"pagination\">" + string.Join(" ", Enumerable.Range(1, 10).Select(p => $"<a href=\"/validate/paginated?page={p}\">{p}</a>")) + "</nav>"),
             _ => null
         };
     }

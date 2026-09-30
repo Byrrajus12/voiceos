@@ -152,7 +152,8 @@ public sealed class BrowserSurface : IInteractionSurface
             current_title = snapshot.Title,
             visible_text = snapshot.VisibleText,
             viewport = snapshot.Viewport,
-            elements = snapshot.Elements.Select(element => ElementEvidence(element, facts[element.Ref]))
+            elements = snapshot.Elements.Select(element => ElementEvidence(element, facts[element.Ref])),
+            headings = snapshot.Headings?.Select(static h => new { id = h.Ref, text = h.Text, level = h.Level, inViewport = h.InViewport })
         });
         return (evidence, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(evidence))));
     }
@@ -253,9 +254,9 @@ public sealed class BrowserSurface : IInteractionSurface
         }
         catch (ChromeCompanionException ex)
         {
-            if (ex.Code == "TRANSPORT_DISCONNECTED")
+            if (ex.IsInfrastructure)
                 throw new InfrastructureUnavailableException(UnavailableReason.ChromeCompanion,
-                    "Chrome companion isn't connected.", ex);
+                    Activation.ActivityMessage.ForUnavailable(UnavailableReason.ChromeCompanion), ex);
             _logger?.LogWarning("Browser action operation={Operation} ref={Ref} outcome={Code}", protocolAction, action.TargetId, ex.Code);
             var status = ex.Code switch
             {
@@ -326,6 +327,10 @@ public sealed class BrowserSurface : IInteractionSurface
             if (actions.Count > 0)
                 result.Add(new(element.Ref, label, actions));
         }
+        // Sections are offered only to be scrolled into view, never activated; listed after the controls so nothing that looks
+        // for "the first candidate with a scroll" meets one before the page itself.
+        var sectionCandidates = (snapshot.Headings ?? []).Select(h => new InteractionCandidate(h.Ref,
+            $"section '{h.Text}'", [new($"r{revision}:reveal:{h.Ref}", InteractionActionKind.Scroll, h.Ref)])).ToArray();
         result.Add(new("page", "Current page", [
             new($"r{revision}:scroll:down", InteractionActionKind.Scroll, Direction: "down"),
             new($"r{revision}:scroll:up", InteractionActionKind.Scroll, Direction: "up")
@@ -333,6 +338,7 @@ public sealed class BrowserSurface : IInteractionSurface
         // The page's own history hint is unreliable; the companion's traversal attempt is the authority.
         result.Add(new("history", "Tab history", [new($"r{revision}:back", InteractionActionKind.GoBack),
             new($"r{revision}:forward", InteractionActionKind.GoForward)]));
+        result.AddRange(sectionCandidates);
         return result;
     }
 }

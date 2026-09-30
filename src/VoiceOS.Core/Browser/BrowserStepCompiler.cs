@@ -49,6 +49,10 @@ public static class SimpleStepFramer
             || scope.EndState == SemanticEndState.SurfaceReady || scope.IsSurfaceOnly
             || ServiceResolver.Resolve(scope.NamedServiceHint) is not null || HasSequencing(utterance))
             return null;
+        // Bringing a section of this page into view is Locate, never a click on a control that shares its name.
+        if (RevealIntent.Parse(utterance) is { } section)
+            return new(new InteractionPlan(utterance.Trim(), utterance.Trim(), [new(PlanStepKind.Locate, utterance.Trim(),
+                Target: section, Progress: $"Scrolling to {section}", Reveal: true)]), null);
         var kind = scope.EndState is SemanticEndState.ResourceOpened or SemanticEndState.ContentActive
             ? PlanStepKind.Open : PlanStepKind.Act;
         return new(InteractionPlan.SingleStep(utterance.Trim(), kind), null);
@@ -64,9 +68,11 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
         "Compile the user's browser request into an ordered plan of semantic steps. Each step is one desired operation or outcome, " +
         "never a selector, script or element reference. Keep EVERY meaningful intermediate intent in order; never collapse 'A then B then C' into C. " +
         "Step kinds: Reach (get to a named site or page; at most one, first), Search (enter a query and apply it), " +
-        "Locate (make a described target visible in the content now shown: a result, section or item), " +
+        "Locate (make a described target visible in the content now shown: a result, section or item; a request to scroll to, go down to, take me to or find a section of this page is Locate and never Open or Act, because bringing a section into view must not click anything), " +
         "Open (activate a described control, link or result and follow it: a page number, a tab, the third result, a button), History (go back or forward one page; target is 'back' or 'forward'), Act (only an operation with no described target, such as scrolling or a media action). " +
         "Destinations are never guessed: set preferredService and Reach only when the user named that site or service; a request with no named site is a generic web task. " +
+        "A named final destination does not own the earlier discovery: a fact needed for it (an actor, a title) may be found by any suitable search, and only the last step must reach the destination. " +
+        "Locate is also how a concrete thing is identified when it is the answer or an input for a later step; a later step that uses it writes ${name} and the Locate that finds it MUST set produces to that name. " +
         "Use 1 to 5 steps. Scope each Search to where the user said: a site-wide search is one Search step with the exact query. " +
         "For Search also say which search surface the user meant in searchScope: Global (the service-wide search; the default), " +
         "CurrentResource (inside the repository/document/project that is open), InPage (find text on the current page) or Collection " +
@@ -158,68 +164,114 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
         {
             throw new InfrastructureUnavailableException(UnavailableReason.BrowserGoalService, "Browser help is unavailable right now.");
         }
-        var compiled = Parse(content, utterance);
+        var diagnostics = new CompileDiagnostics();
+        var compiled = Parse(content, utterance, diagnostics);
+        foreach (var repair in diagnostics.Repairs)
+            logger?.LogInformation("Browser compile structural repair {Repair}", repair);
         if (compiled is null)
-            logger?.LogWarning("Browser compile rejected provider plan: {Plan}", content.Length > 3000 ? content[..3000] : content);
+            logger?.LogWarning("Browser compile rejected reason={Reason} {Detail} plan={Plan}", diagnostics.Reason ?? "malformed",
+                diagnostics.Detail ?? "-", diagnostics.Plan ?? (content.Length > 600 ? content[..600] : content));
         return compiled;
     }
 
-    /// <summary>Validates the provider JSON into a plan; null when any part is unsafe or malformed.</summary>
-    public static CompiledBrowserTask? Parse(string content, string utterance)
+    /// <summary>Why a provider plan was rejected (and what was mechanically repaired), for the log.</summary>
+    public sealed class CompileDiagnostics
     {
+        public string? Reason { get; set; }
+        public string? Detail { get; set; }
+        public string? Plan { get; set; }
+        public List<string> Repairs { get; } = [];
+    }
+
+    private static string Describe(IReadOnlyList<PlanStep> steps)
+        => string.Join(" > ", steps.Select((s, i) => $"{i + 1}:{s.Kind}[{(s.Produces is null ? "" : "produces=" + s.Produces + ";")}{s.Description}]"));
+
+    /// <summary>Validates the provider JSON into a plan; null when any part is unsafe or malformed.</summary>
+    public static CompiledBrowserTask? Parse(string content, string utterance, CompileDiagnostics? diagnostics = null)
+    {
+        CompiledBrowserTask? Reject(string reason, string? detail = null, IReadOnlyList<PlanStep>? plan = null)
+        {
+            if (diagnostics is not null)
+            {
+                diagnostics.Reason = reason;
+                diagnostics.Detail = detail;
+                diagnostics.Plan = plan is null ? null : Describe(plan);
+            }
+            return null;
+        }
         try
         {
             using var parsed = JsonDocument.Parse(content);
             var value = parsed.RootElement;
             var finalGoal = Text(value, "finalGoal");
-            if (!SafeText(finalGoal, 240)) return null;
+            if (!SafeText(finalGoal, 240)) return Reject("unsafe_final_goal");
             if (!Enum.TryParse<SemanticEndState>(Text(value, "endState"), out var endState)
-                || endState == SemanticEndState.Unspecified) return null;
+                || endState == SemanticEndState.Unspecified) return Reject("invalid_end_state", $"value={Text(value, "endState")}");
             var steps = new List<PlanStep>();
+            var index = 0;
             foreach (var item in value.GetProperty("steps").EnumerateArray())
             {
-                if (!Enum.TryParse<PlanStepKind>(Text(item, "kind"), out var kind)) return null;
+                index++;
+                if (!Enum.TryParse<PlanStepKind>(Text(item, "kind"), out var kind)) return Reject("invalid_step_kind", $"step={index} value={Text(item, "kind")}");
                 var description = Text(item, "description");
                 var query = Text(item, "query");
                 var target = Text(item, "target");
                 var progress = Text(item, "progress");
                 if (!SafeText(description, 160) || query is not null && !SafeText(query, 120)
-                    || target is not null && !SafeText(target, 120)) return null;
-                if (kind == PlanStepKind.Search && query is null) return null;
-                if (kind is PlanStepKind.Locate or PlanStepKind.Open && target is null) return null;
-                if (kind == PlanStepKind.History && target?.ToLowerInvariant() is not ("back" or "forward")) return null;
+                    || target is not null && !SafeText(target, 120)) return Reject("unsafe_or_long_text", $"step={index} kind={kind}");
+                if (kind == PlanStepKind.Search && query is null) return Reject("search_without_query", $"step={index}");
+                if (kind is PlanStepKind.Locate or PlanStepKind.Open && target is null) return Reject("missing_target", $"step={index} kind={kind}");
+                if (kind == PlanStepKind.History && target?.ToLowerInvariant() is not ("back" or "forward")) return Reject("invalid_history_target", $"step={index} value={target}");
                 if (progress is not null && !SafeText(progress, 48)) progress = null;
                 var intent = kind == PlanStepKind.Search && Enum.TryParse<SearchScopeIntent>(Text(item, "searchScope"), out var parsedIntent)
                     ? parsedIntent : SearchScopeIntent.Unspecified;
                 var produces = Text(item, "produces");
-                if (produces is not null && (kind != PlanStepKind.Locate || !System.Text.RegularExpressions.Regex.IsMatch(produces, "^[a-z][a-z0-9_]{0,31}$"))) return null;
+                if (produces is not null && kind != PlanStepKind.Locate) return Reject("produces_on_non_locate", $"step={index} kind={kind} output={produces}");
+                if (produces is not null && !System.Text.RegularExpressions.Regex.IsMatch(produces, "^[a-z][a-z0-9_]{0,31}$")) return Reject("invalid_output_name", $"step={index} output={produces}");
                 steps.Add(new(kind, description!, kind == PlanStepKind.Search ? query : null, target, progress, intent, produces));
             }
-            // A reference must name a value an earlier step produces; anything else cannot be resolved at run time.
-            var produced = new HashSet<string>();
-            foreach (var step in steps)
+            // A reference must name a value an earlier step produces. A step that forgot to say it produces the value is repaired
+            // when exactly one earlier step can unambiguously be that producer; anything else cannot be resolved at run time.
+            for (var guard = 0; guard <= steps.Count; guard++)
             {
-                if (InteractionPlan.References(step).Any(name => !produced.Contains(name))) return null;
-                if (step.Produces is not null) produced.Add(step.Produces);
+                var produced = new HashSet<string>();
+                (int Consumer, string Name)? unresolved = null;
+                for (var i = 0; i < steps.Count && unresolved is null; i++)
+                {
+                    if (InteractionPlan.References(steps[i]).FirstOrDefault(name => !produced.Contains(name)) is { } missing)
+                        unresolved = (i, missing);
+                    else if (steps[i].Produces is not null) produced.Add(steps[i].Produces!);
+                }
+                if (unresolved is null) break;
+                var (consumer, name) = unresolved.Value;
+                var later = steps.Select((s, i) => (s, i)).Where(x => x.i >= consumer && x.s.Produces == name).ToArray();
+                if (later.Length > 0)
+                    return Reject("producer_after_consumer", $"reference={name} consumer_step={consumer + 1} producer_step={later[0].i + 1}", steps);
+                if (ProducerFor(steps, consumer, name) is not { } producer)
+                    return Reject("unresolved_reference", $"reference={name} consumer_step={consumer + 1} candidate_producers={CountCandidates(steps, consumer)}", steps);
+                steps[producer] = steps[producer] with { Produces = name };
+                diagnostics?.Repairs.Add($"output={name} producer_step={producer + 1} consumer_step={consumer + 1} reason=unique_dependency");
             }
             steps = CollapseRedundantLocates(steps);
-            if (steps.Count is 0 or > InteractionPlan.MaxSteps) return null;
+            if (steps.Count is 0 or > InteractionPlan.MaxSteps) return Reject("step_count", $"count={steps.Count}", steps);
             var corrections = value.GetProperty("correctedTerms").EnumerateArray().Select(x =>
                 new BrowserCorrectedTerm(x.GetProperty("heard").GetString() ?? "",
                     x.GetProperty("interpreted").GetString() ?? "", x.GetProperty("confidence").GetDouble())).ToArray();
             if (corrections.Length > 3 || corrections.Any(x => !SafeText(x.Heard, 80) || !SafeText(x.Interpreted, 80)
-                || x.Confidence is < 0 or > 1)) return null;
+                || x.Confidence is < 0 or > 1)) return Reject("invalid_corrections", $"count={corrections.Length}", steps);
             // A low-confidence correction must not be smuggled into what will be typed or opened.
-            if (corrections.Any(x => x.Confidence < .8 && steps.Any(s =>
+            if (corrections.FirstOrDefault(x => x.Confidence < .8 && steps.Any(s =>
                     (s.Query ?? "").Contains(x.Interpreted, StringComparison.OrdinalIgnoreCase)
-                    || (s.Target ?? "").Contains(x.Interpreted, StringComparison.OrdinalIgnoreCase)))) return null;
+                    || (s.Target ?? "").Contains(x.Interpreted, StringComparison.OrdinalIgnoreCase))) is { } weak)
+                return Reject("low_confidence_correction", $"term={weak.Interpreted} confidence={weak.Confidence:F2}", steps);
             var serviceUrl = Text(value, "preferredServiceUrl");
             if (serviceUrl is not null && (!Uri.TryCreate(serviceUrl, UriKind.Absolute, out var uri)
                 || uri.Scheme != Uri.UriSchemeHttps || uri.UserInfo.Length != 0
-                || uri.AbsolutePath != "/" || uri.Query.Length != 0 || uri.Fragment.Length != 0)) return null;
+                || uri.AbsolutePath != "/" || uri.Query.Length != 0 || uri.Fragment.Length != 0))
+                return Reject("invalid_service_url", $"value={serviceUrl}", steps);
             var resource = Text(value, "resourceType");
             var service = Text(value, "preferredService");
-            if (resource is not null && !SafeText(resource, 80) || service is not null && !SafeText(service, 100)) return null;
+            if (resource is not null && !SafeText(resource, 80) || service is not null && !SafeText(service, 100)) return Reject("unsafe_resource_or_service", null, steps);
 
             var plan = new InteractionPlan(utterance, finalGoal!, steps);
             var entity = steps.LastOrDefault(s => s.Kind is PlanStepKind.Open or PlanStepKind.Locate)?.Target;
@@ -228,8 +280,27 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
                 finalGoal!, corrections, endState));
         }
         catch (OperationCanceledException) { throw; }
-        catch { return null; }
+        catch (Exception ex) { return Reject("malformed_json", ex.GetType().Name); }
     }
+
+    /// <summary>
+    /// The one earlier Locate that can only be the producer of <paramref name="name"/>: among Locates before the consumer that
+    /// produce nothing yet, the one whose own words name the value; or, when none names it, the single such Locate. Null when
+    /// that is not unique, so nothing is guessed.
+    /// </summary>
+    private static int? ProducerFor(IReadOnlyList<PlanStep> steps, int consumer, string name)
+    {
+        var free = Enumerable.Range(0, consumer).Where(i => steps[i] is { Kind: PlanStepKind.Locate, Produces: null }).ToArray();
+        static string Stem(string word) => word.Length > 3 && word.EndsWith('s') ? word[..^1] : word;
+        var wanted = BrowserCompletionEvidence.Tokens(name.Replace('_', ' ')).Select(Stem).ToArray();
+        var named = free.Where(i => BrowserCompletionEvidence.Tokens(steps[i].Description + " " + steps[i].Target).Select(Stem)
+            .Intersect(wanted).Any()).ToArray();
+        if (named.Length == 1) return named[0];
+        return named.Length == 0 && free.Length == 1 ? free[0] : null;
+    }
+
+    private static int CountCandidates(IReadOnlyList<PlanStep> steps, int consumer)
+        => Enumerable.Range(0, consumer).Count(i => steps[i] is { Kind: PlanStepKind.Locate, Produces: null });
 
     /// <summary>
     /// A Locate that produces nothing and is followed by an Open/Act on the same target adds no information: Open

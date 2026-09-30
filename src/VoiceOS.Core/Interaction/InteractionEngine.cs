@@ -69,7 +69,7 @@ public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode p
 
             if (decision.Completion == InteractionCompletionState.Uncertain)
                 return Finish(InteractionCompletionState.Uncertain, decision.Detail ?? "Completion is uncertain.", decision.Choices,
-                    decision.ReasonCode);
+                    decision.ReasonCode, decision.Pending);
 
             if (decision.Completion == InteractionCompletionState.Complete)
             {
@@ -236,9 +236,10 @@ public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode p
             InteractionCompletionState state,
             string? detail,
             IReadOnlyList<InteractionChoice>? choices = null,
-            string? reasonCode = null)
+            string? reasonCode = null,
+            PendingChoice? pending = null)
             => new(state, observation, history.ToArray(), progress, detail, choices, ledger.All.ToArray(),
-                proofs.Count == 0 ? null : proofs.ToArray(), reasonCode);
+                proofs.Count == 0 ? null : proofs.ToArray(), reasonCode, pending);
 
         static IReadOnlyList<InteractionChoice> CompletionChoices() =>
         [
@@ -257,7 +258,9 @@ public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode p
                 using var after = System.Text.Json.JsonDocument.Parse(entry.ResultingEvidence!);
                 var a = before.RootElement;
                 var b = after.RootElement;
-                return Changed("current_url") || Changed("current_title") || Changed("elements");
+                // Scrolling that moves the viewport is exploration even when no control appeared or vanished.
+                return Changed("current_url") || Changed("current_title") || Changed("elements")
+                    || entry.Action.Kind == InteractionActionKind.Scroll && Changed("viewport");
                 bool Changed(string property) => a.TryGetProperty(property, out var left)
                     && b.TryGetProperty(property, out var right) && left.GetRawText() != right.GetRawText();
             }
@@ -273,5 +276,7 @@ public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode p
                 && offered.TargetId == action.TargetId
                 && offered.Direction == action.Direction
                 && (offered.Text == action.Text || offered.Text is null
-                    && action.Kind is InteractionActionKind.TypeText or InteractionActionKind.SetText));
+                    && (action.Kind is InteractionActionKind.TypeText or InteractionActionKind.SetText
+                        // A scroll may ask for a larger or smaller step; the direction is still the offered one.
+                        || action.Kind == InteractionActionKind.Scroll && action.Text is "large" or "small")));
 }

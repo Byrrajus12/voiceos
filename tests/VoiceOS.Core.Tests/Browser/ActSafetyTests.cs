@@ -92,7 +92,9 @@ public sealed class ActSafetyTests
         var gateway = new Gateway(_ => new Dictionary<string, JevAnswer> { ["bind"] = Pick("NONE", .9, "e1"), ["operation"] = Pick("BLOCKED", .9, "CLICK") });
         var service = new BrowserInteractionService(page, gateway, new Compiler(PlanStepKind.Open, "Go to page 7 of the results"));
         var result = await service.RunAsync("go to page 7 of the results, then stop", scope: Scope);
-        Assert.Equal(6, page.Acts.Count(a => a.StartsWith("SCROLL")));    // the existing bound, taken by code alone
+        // Scrolling continues while the page is actually advancing (far past any small fixed count), by code alone, and is still bounded.
+        var scrolls = page.Acts.Count(a => a.StartsWith("SCROLL"));
+        Assert.InRange(scrolls, 7, TypeSafeBrowserDecisionSource.MaxScrollActions);
         Assert.True(gateway.Calls <= 1, $"model calls: {gateway.Calls}");
         Assert.NotEqual(InteractionCompletionState.Complete, result.Completion);
     }

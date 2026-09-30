@@ -3,6 +3,7 @@
   globalThis.__voiceOSCompanionInstalled = true;
 
   const MAX_ELEMENTS = 100;
+  const MAX_SECTIONS = 40;
   const MAX_VISIBLE_TEXT = 3_500;
   const MAX_CONTEXT_TEXT = 180;
   const CANDIDATE_SELECTOR = [
@@ -14,6 +15,7 @@
   let observationCounter = 0;
   let currentRevision = null;
   let currentElements = new Map();
+  let currentSections = new Map();
   let observationSecrets = [];
 
   let mutationCount = 0;
@@ -126,6 +128,7 @@
     observationCounter += 1;
     currentRevision = `${Date.now().toString(36)}-${observationCounter}-${randomToken()}`;
     currentElements = new Map();
+    currentSections = new Map();
 
     const candidates = Array.from(document.querySelectorAll(CANDIDATE_SELECTOR));
     // Only explicit credential controls; this is not a general PII detector.
@@ -190,8 +193,30 @@
         documentHeight: Math.round(document.documentElement.scrollHeight)
       },
       elements,
+      headings: observeSections(),
       canGoBack: history.length > 1
     };
+  }
+
+  // Non-interactive landmarks of the content (headings, labelled regions): where a section starts, and whether it is
+  // in view now. Only the page's own words; revealing one is a scroll, never a click.
+  function observeSections() {
+    const sections = [];
+    try {
+      const found = document.querySelectorAll("h1, h2, h3, h4, h5, h6, [role='heading'], section[aria-label], [role='region'][aria-label]");
+      for (const element of found) {
+        if (sections.length >= MAX_SECTIONS) break;
+        const geometry = geometryOf(element);
+        if (!geometry) continue;
+        const own = element.matches("section, [role='region']") ? element.getAttribute("aria-label") : element.innerText;
+        const text = redactObservationText(normalizeText(own ?? "")).slice(0, 120);
+        if (!text) continue;
+        const ref = `h${sections.length + 1}`;
+        currentSections.set(ref, element);
+        sections.push({ ref, text, level: /^H[1-6]$/.test(element.tagName) ? Number(element.tagName[1]) : null, inViewport: geometry.inViewport });
+      }
+    } catch { /* sections are best-effort evidence */ }
+    return sections;
   }
 
   function performAction(message) {
@@ -199,11 +224,23 @@
       throw actionError("STALE_REVISION", "The element reference belongs to an older observation.");
     }
 
+    if (message.action === "SCROLL" && message.elementRef) {
+      // Reveal: bring a labelled section into view. It activates nothing.
+      const section = currentSections.get(message.elementRef);
+      if (!(section instanceof HTMLElement) || !section.isConnected) {
+        throw actionError("STALE_ELEMENT", "The referenced section is no longer connected.");
+      }
+      section.scrollIntoView({ block: "start", behavior: "instant" });
+      return;
+    }
+
     if (message.action === "SCROLL") {
       if (!["up", "down"].includes(message.direction)) {
         throw actionError("INVALID_ACTION", "SCROLL requires an offered up/down direction.");
       }
-      window.scrollBy({ top: (message.direction === "down" ? 1 : -1) * Math.max(200, innerHeight * 0.8), behavior: "instant" });
+      // A step is most of a screen; "large" when the target is clearly further on, "small" once it is close.
+      const screens = message.text === "large" ? 1.6 : message.text === "small" ? 0.4 : 0.8;
+      window.scrollBy({ top: (message.direction === "down" ? 1 : -1) * Math.max(200, innerHeight * screens), behavior: "instant" });
       return;
     }
 

@@ -17,6 +17,20 @@ public interface IBrowserInteractionService
     /// No-op by default so non-browser-capable implementations need not care.
     /// </summary>
     void PrefetchNormalization(string utterance, string activationId, CancellationToken cancellationToken = default) { }
+
+    /// <summary>
+    /// The choice the suspended execution is waiting on, if any and still valid. A spoken answer is first tried against this
+    /// (<see cref="PendingChoiceMatcher"/>) before the utterance goes to the normal command front door.
+    /// </summary>
+    PendingChoice? PendingChoice => null;
+
+    /// <summary>Resumes the SAME suspended step with the chosen option; never routes, compiles or starts a task.</summary>
+    ValueTask<BrowserInteractionOutcome> ResumeChoiceAsync(string choiceId, CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(new BrowserInteractionOutcome(InteractionCompletionState.Incomplete,
+            BrowserStepMessages.ChoiceExpired, null, null, null));
+
+    /// <summary>Drops a suspended choice (the user moved on, or the UI closed it).</summary>
+    void DismissPendingChoice() { }
 }
 
 public interface IBrowserActivitySource
@@ -38,11 +52,41 @@ public sealed class BrowserInteractionService(
     Func<nint, bool>? foregroundVerifier = null,
     double preparedFreshnessThresholdMs = 150,
     IBrowserStepRepair? repair = null,
-    IBrowserValueExtractor? extractor = null) : IBrowserInteractionService, IBrowserActivitySource
+    IBrowserValueExtractor? extractor = null,
+    IBrowserBlockerAssessor? blocker = null) : IBrowserInteractionService, IBrowserActivitySource
 {
     private readonly IBrowserStepCompiler? _compiler = compiler;
     private volatile string? _stepText;
     private static readonly InteractionBudget StepBudget = new(10, 8, 3, 12, TimeSpan.FromSeconds(50));
+    // A search by scrolling may need many small moves while the page keeps advancing; the decision source bounds it by
+    // progress, this bounds it absolutely.
+    private static readonly InteractionBudget SearchBudget = new(45, 40, 3, 12, TimeSpan.FromSeconds(50));
+    private static InteractionBudget BudgetFor(PlanStep step)
+        => step.Kind is PlanStepKind.Locate or PlanStepKind.Open ? SearchBudget : StepBudget;
+
+    // The one execution suspended on a question to the user. It owns the choice, the plan and the tab it belongs to.
+    private sealed record Suspended(PendingChoice Choice, BrowserGoal Goal, InteractionPlan Plan, BrowserSurface Surface,
+        TypeSafeBrowserDecisionSource Decisions, BrowserExecutionScope? Scope, string TurnId,
+        int DecisionCount, int ActionCount, IReadOnlyList<Effect> Effects);
+    private readonly object _suspendLock = new();
+    private Suspended? _suspended;
+
+    public PendingChoice? PendingChoice
+    {
+        get
+        {
+            lock (_suspendLock)
+            {
+                if (_suspended is { } s && s.Choice.IsExpired(DateTimeOffset.UtcNow)) _suspended = null;
+                return _suspended?.Choice;
+            }
+        }
+    }
+
+    public void DismissPendingChoice()
+    {
+        lock (_suspendLock) _suspended = null;
+    }
     public event Action<BrowserActivity>? ActionStarting;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private (string ActivationId, string Utterance, Task<CompiledBrowserTask?> Task, Stopwatch Clock)? _prefetch;
@@ -63,6 +107,11 @@ public sealed class BrowserInteractionService(
         await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
+            lock (_suspendLock)
+            {
+                if (_suspended is not null) logger?.LogInformation("Browser pending choice dropped reason=superseded");
+                _suspended = null;
+            }
             var framingTimer = Stopwatch.StartNew();
             var goal = new BrowserGoal(utterance) with
             {
@@ -119,7 +168,8 @@ public sealed class BrowserInteractionService(
             }
 
             // One known page operation (Back, Forward, scroll) is executed once, directly: no compile, no decision model.
-            if (scope is { PageOperation: not PageOperation.None, TabId: not null } && selectionTask is not null)
+            if (scope is { PageOperation: not PageOperation.None, TabId: not null } && selectionTask is not null
+                && RevealIntent.Parse(utterance) is null)
                 return await RunPageOperationAsync(goal, scope, sessionId, selectionTask, cancellationToken).ConfigureAwait(false);
 
             var normalizationTimer = Stopwatch.StartNew();
@@ -224,8 +274,8 @@ public sealed class BrowserInteractionService(
         catch (ChromeCompanionException ex)
         {
             logger?.LogWarning("Browser task exit reason=companion_error code={Code}", ex.Code);
-            return new(InteractionCompletionState.Incomplete, $"Chrome companion unavailable: {ex.Message}", null, null, null,
-                Unavailable: ex.Code == "TRANSPORT_DISCONNECTED" ? UnavailableReason.ChromeCompanion : null);
+            return new(InteractionCompletionState.Incomplete, ex.IsInfrastructure ? ActivityMessage.ForUnavailable(UnavailableReason.ChromeCompanion) : $"Chrome companion unavailable: {ex.Message}", null, null, null,
+                Unavailable: ex.IsInfrastructure ? UnavailableReason.ChromeCompanion : null);
         }
         finally { _gate.Release(); }
     }
@@ -394,9 +444,9 @@ public sealed class BrowserInteractionService(
         }
         catch (ChromeCompanionException ex)
         {
-            if (ex.Code == "TRANSPORT_DISCONNECTED")
+            if (ex.IsInfrastructure)
                 throw new InfrastructureUnavailableException(UnavailableReason.ChromeCompanion,
-                    "Chrome companion isn't connected.", ex);
+                    ActivityMessage.ForUnavailable(UnavailableReason.ChromeCompanion), ex);
             logger?.LogWarning("Browser task exit reason=companion_error code={Code}", ex.Code);
             selectTimer.Stop();
             LatencyTrace.Current?.Record("tab_select", selectTimer.Elapsed.TotalMilliseconds);
@@ -460,6 +510,7 @@ public sealed class BrowserInteractionService(
         compiled = DestinationGrounding.Ground(compiled, goal.OriginalUtterance,
             destinationKnown: scope?.Destination is not null || ServiceResolver.Resolve(scope?.NamedServiceHint) is not null
                 || goal.ExplicitUrl is not null);
+        compiled = compiled with { Plan = RevealIntent.Correct(compiled.Plan) };
         applied = goal with { Normalization = compiled.Normalization, Plan = compiled.Plan };
         if (compiled.Normalization is { } normalized)
             logger?.LogInformation("Browser normalization=used reason={Reason} objective={Objective} end_state={EndState} resource_type={ResourceType} service={Service} entity={Entity} queries={Queries} corrections={Corrections} steps={Steps}",
@@ -549,15 +600,18 @@ public sealed class BrowserInteractionService(
     /// </summary>
     private async ValueTask<BrowserInteractionOutcome> RunPlanAsync(
         BrowserGoal goal, BrowserSurface surface, TypeSafeBrowserDecisionSource decisions,
-        CancellationToken cancellationToken, BrowserExecutionScope? scope, string? turnId)
+        CancellationToken cancellationToken, BrowserExecutionScope? scope, string? turnId, ResumeState? resume = null)
     {
-        var plan = goal.Plan!;
+        var plan = resume?.Plan ?? goal.Plan!;
+        _resolved = null;
         var engine = new InteractionEngine(new PlannedStepEvaluator(goal), ProofMode.On);
         using var overall = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         overall.CancelAfter(TimeSpan.FromSeconds(120));
         InteractionObservation? carry = null;
-        var effects = new List<Effect>();
-        int decisionsTotal = 0, actionsTotal = 0;
+        var effects = new List<Effect>(resume?.Effects ?? []);
+        int decisionsTotal = resume?.Decisions ?? 0, actionsTotal = resume?.Actions ?? 0;
+        // The step a choice resumed has already been run once, on the option the user picked; it is not run again.
+        var resumedResult = resume?.Result;
         InteractionRunResult? last = null;
         string? lastRepairReason = null;
         try
@@ -584,7 +638,19 @@ public sealed class BrowserInteractionService(
                 var stepTimer = Stopwatch.StartNew();
                 InteractionRunResult result;
                 string? repairReason;
-                if (step.Kind == PlanStepKind.Locate && step.Produces is { } produced && plan.IsConsumed(produced))
+                if (resumedResult is not null)
+                {
+                    (result, repairReason) = (resumedResult, null);
+                    resumedResult = null;
+                }
+                else if (step.Kind == PlanStepKind.Locate && !step.Reveal && (step.Produces is null || !plan.IsConsumed(step.Produces))
+                    && await ResolveEntityAsync(plan, goal, scope, turnId ?? surface.SessionId, surface, carry, overall.Token).ConfigureAwait(false) is { } resolvedStep)
+                {
+                    // The entity the step asks for is concrete and grounded on the page: that IS the step's result.
+                    (result, plan) = resolvedStep;
+                    repairReason = null;
+                }
+                else if (step.Kind == PlanStepKind.Locate && step.Produces is { } produced && plan.IsConsumed(produced))
                 {
                     // A data-producing step is done only when it holds a concrete value for what it promised.
                     (result, plan) = await ProduceAsync(plan, produced, goal, surface, carry, overall.Token).ConfigureAwait(false);
@@ -594,6 +660,12 @@ public sealed class BrowserInteractionService(
                     (result, plan, repairReason) = await RunStepAsync(engine, plan, goal, scope, turnId ?? surface.SessionId,
                     surface, decisions, carry, overall.Token).ConfigureAwait(false);
                 step = plan.Current;
+                // The step ran out of road without proving its target: the page it ended on may still state the entity.
+                if (step.Kind == PlanStepKind.Locate && !step.Reveal && result.Completion != InteractionCompletionState.Complete
+                    && result.ReasonCode is "budget_exhausted" or "no_progress" or "blocked" or "no_action"
+                    && await ResolveEntityAsync(plan, goal, scope, turnId ?? surface.SessionId, surface, result.Observation, overall.Token, afterSearch: true)
+                        .ConfigureAwait(false) is { } lateStep)
+                    (result, plan) = lateStep;
                 lastRepairReason = repairReason;
                 var framed = PlanFraming.Frame(plan, goal, scope, turnId ?? surface.SessionId);
                 logger?.LogInformation("Browser step index={Index}/{Count} kind={Kind} family={Family} outcome={Outcome} decisions={Decisions} actions={Actions} step_ms={Ms:F0} reason={Reason} rule={Rule}",
@@ -622,8 +694,19 @@ public sealed class BrowserInteractionService(
         foreach (var effect in effects)
             logger?.LogInformation("Browser effect id={EffectId} {Effect}", effect.Id, effect.Summarize());
         var final = last!;
+        // A step that cannot safely choose between real options is suspended here, owning the choice, until the user picks.
+        PendingChoice? pendingChoice = null;
+        if (final.Completion == InteractionCompletionState.Uncertain && final is { ReasonCode: "user_choice", Pending: { } suspendedOn })
+        {
+            pendingChoice = suspendedOn with { ExecutionId = turnId ?? surface.SessionId, TabId = surface.TabId };
+            lock (_suspendLock)
+                _suspended = new Suspended(pendingChoice, goal, plan, surface, decisions, scope, turnId ?? surface.SessionId,
+                    decisionsTotal, actionsTotal, effects.ToArray());
+            logger?.LogInformation("Browser pending choice created step={Step} options={Count} resolution={Resolution} expires_s={Seconds:F0}",
+                pendingChoice.StepId, pendingChoice.Options.Count, pendingChoice.Resolution, (pendingChoice.ExpiresAt - DateTimeOffset.UtcNow).TotalSeconds);
+        }
         // Only a question the user can settle stays a question; every other uncertainty is a specific failure.
-        if (final.Completion == InteractionCompletionState.Uncertain && final.ReasonCode != "needs_user")
+        if (final.Completion == InteractionCompletionState.Uncertain && final.ReasonCode != "needs_user" && pendingChoice is null)
             final = final with { Completion = InteractionCompletionState.Incomplete };
         var userDetail = final.Completion switch
         {
@@ -633,14 +716,126 @@ public sealed class BrowserInteractionService(
                 : BrowserStepMessages.Failure(plan, final.ReasonCode, final.Detail, final.Observation, lastRepairReason)
         };
         logger?.LogInformation("Browser task outcome={Outcome} resumable={Resumable} detail={Detail} decisions={Decisions} actions={Actions} steps_done={Done}/{Total} origin={Origin}",
-            final.Completion, false, final.Detail, decisionsTotal, actionsTotal,
+            final.Completion, pendingChoice is not null, final.Detail, decisionsTotal, actionsTotal,
             plan.CurrentStepIndex + (final.Completion == InteractionCompletionState.Complete ? 1 : 0), goal.Plan!.Steps.Count,
             BrowserSurface.LogOrigin(surface.LatestSnapshot?.Url));
         return new(final.Completion, userDetail, final.Choices,
             surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title, decisionsTotal, actionsTotal, surface.TabId, surface.SessionId,
             goal.Normalization?.Objective ?? plan.FinalGoal,
             Referents: ReferentPopulator.FromBrowserRun(effects, final.Completion, surface.TabId,
-                surface.SessionId, surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title, DateTimeOffset.UtcNow));
+                surface.SessionId, surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title, DateTimeOffset.UtcNow),
+            Pending: pendingChoice, Resolved: final.Completion == InteractionCompletionState.Complete ? _resolved : null);
+    }
+
+    /// <summary>What a resumed run carries over from before it was suspended.</summary>
+    private sealed record ResumeState(InteractionPlan Plan, InteractionRunResult Result, int Decisions, int Actions, IReadOnlyList<Effect> Effects);
+
+    /// <summary>
+    /// Resumes the suspended step on the option the user chose. The choice must belong to the active pending choice and be
+    /// unexpired. The chosen control is found again on a fresh observation by its own words (references do not survive an
+    /// observation), activated as that step's target, observed normally, and the remaining steps then continue.
+    /// Command routing, the compiler and destination inference never run.
+    /// </summary>
+    public async ValueTask<BrowserInteractionOutcome> ResumeChoiceAsync(string choiceId, CancellationToken cancellationToken = default)
+    {
+        await _gate.WaitAsync(cancellationToken).ConfigureAwait(false);
+        try
+        {
+            Suspended? s;
+            lock (_suspendLock)
+            {
+                s = _suspended;
+                if (s is null) return Failed(BrowserStepMessages.ChoiceExpired);
+                if (s.Choice.IsExpired(DateTimeOffset.UtcNow)) { _suspended = null; return Failed(BrowserStepMessages.ChoiceExpired); }
+                if (s.Choice.Find(choiceId) is null) return Failed(BrowserStepMessages.ChoiceUnknown);
+                _suspended = null;
+            }
+            var option = s.Choice.Find(choiceId)!;
+            var plan = s.Plan;
+            var step = plan.Current;
+            s.Decisions.Plan = plan;
+            _stepText = step.Progress;
+            ActionStarting?.Invoke(new(StepText: step.Progress));
+            var fresh = await s.Surface.ObserveAsync(cancellationToken).ConfigureAwait(false);
+            // The selected semantic option, found again among what is on the page now; nothing else is ever activated.
+            if (Rebind(option, fresh) is not { } target)
+            {
+                logger?.LogInformation("Browser pending choice resume=rebind_failed step={Step}", s.Choice.StepId);
+                return new(InteractionCompletionState.Incomplete, BrowserStepMessages.ChoiceGone, null, s.Surface.LatestSnapshot?.Url,
+                    s.Surface.LatestSnapshot?.Title, s.DecisionCount, s.ActionCount, s.Surface.TabId, s.Surface.SessionId);
+            }
+            logger?.LogInformation("Browser pending choice resume step={Step} resolution={Resolution}", s.Choice.StepId, s.Choice.Resolution);
+            var engine = new InteractionEngine(new PlannedStepEvaluator(s.Goal), ProofMode.On);
+            OutcomeStep Framed(InteractionPlan p) => PlanFraming.Frame(p, s.Goal, s.Scope, s.TurnId);
+            InteractionRunResult result;
+            if (s.Choice.Resolution == ChoiceResolution.SatisfiesStep)
+            {
+                var binding = new TargetBinding(target.Candidate.Id, fresh.Revision, BindingMethod.UserChoice,
+                    fresh.Candidates.Count(c => c.Actions.Any(a => a.Kind == InteractionActionKind.Activate)), 1, 1, option.DisplayText);
+                var chosen = InteractionDecision.Act(target.Click) with { TargetBinding = binding };
+                result = await engine.RunAsync(new(step.Description, Framed(plan)), s.Surface,
+                    new OneShotDecisions(chosen, s.Decisions), BudgetFor(step), cancellationToken, fresh).ConfigureAwait(false);
+            }
+            else
+            {
+                // The chosen control only clears what stood in the way; then the same step runs again, normally.
+                var acted = await s.Surface.ExecuteAsync(target.Click, fresh, cancellationToken).ConfigureAwait(false);
+                if (!acted.Succeeded)
+                    return new(InteractionCompletionState.Incomplete, BrowserStepMessages.ChoiceGone, null, s.Surface.LatestSnapshot?.Url,
+                        s.Surface.LatestSnapshot?.Title, s.DecisionCount, s.ActionCount + 1, s.Surface.TabId, s.Surface.SessionId);
+                var after = await s.Surface.ObserveAsync(cancellationToken).ConfigureAwait(false);
+                result = await engine.RunAsync(new(step.Description, Framed(plan)), s.Surface, s.Decisions, BudgetFor(step),
+                    cancellationToken, after).ConfigureAwait(false);
+                result = result with { Progress = result.Progress with { Actions = result.Progress.Actions + 1 } };
+            }
+            return await RunPlanAsync(s.Goal, s.Surface, s.Decisions, cancellationToken, s.Scope, s.TurnId,
+                new ResumeState(plan, result, s.DecisionCount, s.ActionCount, s.Effects)).ConfigureAwait(false);
+        }
+        catch (InfrastructureUnavailableException ex)
+        {
+            return new(InteractionCompletionState.Incomplete, ex.Message, null, null, null, Unavailable: ex.Reason);
+        }
+        catch (OperationCanceledException) when (!cancellationToken.IsCancellationRequested)
+        {
+            return new(InteractionCompletionState.Incomplete, BrowserStepMessages.Stalled, null, null, null);
+        }
+        catch (ChromeCompanionException ex)
+        {
+            return new(InteractionCompletionState.Incomplete, ex.IsInfrastructure ? ActivityMessage.ForUnavailable(UnavailableReason.ChromeCompanion) : $"Chrome companion unavailable: {ex.Message}", null, null, null,
+                Unavailable: ex.IsInfrastructure ? UnavailableReason.ChromeCompanion : null);
+        }
+        finally
+        {
+            _stepText = null;
+            _gate.Release();
+        }
+
+        static BrowserInteractionOutcome Failed(string detail) => new(InteractionCompletionState.Incomplete, detail, null, null, null);
+    }
+
+    /// <summary>
+    /// The offered control that is the option the user picked: the same words (and address, when it had one) among the controls
+    /// now on the page. Two controls that still look identical (twins told apart by their nearby text) are told apart by it; a
+    /// choice that still matches several is refused rather than guessed.
+    /// </summary>
+    private static (InteractionCandidate Candidate, InteractionAction Click)? Rebind(ChoiceOption option, InteractionObservation fresh)
+    {
+        static string Norm(string? text) => string.Join(' ', BrowserCompletionEvidence.Tokens(text));
+        var wanted = Norm(option.DisplayText);
+        // Identity, narrowed in order: the words, the kind of control, where it leads, the text around it, its place in a list.
+        // A step that still leaves more than one is refused: another same-named control is never substituted.
+        var same = BrowserEvidence.Elements(fresh.Evidence).Where(e => e.Enabled
+                && Norm(!string.IsNullOrWhiteSpace(e.Name) ? e.Name : e.Value) == wanted).ToArray();
+        T[] Narrow<T>(T[] items, Func<T, bool> keep) => items.Length > 1 && items.Any(keep) ? items.Where(keep).ToArray() : items;
+        if (same.Length > 1 && option.Role is not null) same = Narrow(same, e => string.Equals(e.Role, option.Role, StringComparison.OrdinalIgnoreCase));
+        if (same.Length > 1 && option.Href is not null)
+            same = Narrow(same, e => string.Equals(e.Href, option.Href, StringComparison.OrdinalIgnoreCase));
+        else if (same.Length == 1 && option.Href is not null && same[0].Href is not null
+            && !string.Equals(same[0].Href, option.Href, StringComparison.OrdinalIgnoreCase)) return null;   // same words, somewhere else
+        if (same.Length > 1 && option.Context is not null) same = Narrow(same, e => Norm(e.Context) == Norm(option.Context));
+        if (same.Length > 1 && option.Position is not null) same = Narrow(same, e => e.Position == option.Position);
+        if (same.Length != 1) return null;
+        return BlockerPolicy.Offered(fresh, same[0].Id) is { } offered ? offered : null;
     }
 
     private static InteractionRunResult Unresolved(InteractionObservation observation, string code)
@@ -650,6 +845,51 @@ public sealed class BrowserInteractionService(
     /// Captures the value a producer step promised from the page in front of it: one bounded extraction, and only
     /// an answer the page itself states is accepted. Nothing concrete means the step has not happened.
     /// </summary>
+    /// <summary>
+    /// A Locate whose completion is the concrete entity itself (an actor, a show, a product): when the cheap target proof does not
+    /// already hold, one bounded extraction reads it from the page, and only a value the page states verbatim and the request does not
+    /// exclude counts. The step is then complete with no click and no scrolling; a later step that uses the value receives it through
+    /// the plan's outputs. Null when nothing grounded was found, so the step runs as before.
+    /// </summary>
+    private async ValueTask<(InteractionRunResult Result, InteractionPlan Plan)?> ResolveEntityAsync(InteractionPlan plan, BrowserGoal goal,
+        BrowserExecutionScope? scope, string turnId, BrowserSurface surface, InteractionObservation? carry, CancellationToken cancellationToken,
+        bool afterSearch = false)
+    {
+        if (extractor is null) return null;
+        var observation = carry is not null && carry.Revision == surface.CurrentRevision
+            ? carry : await surface.ObserveAsync(cancellationToken).ConfigureAwait(false);
+        var step = plan.Current;
+        var page = surface.LatestSnapshot;
+        if (page is null) return null;
+        if (!afterSearch && new PlannedStepEvaluator(goal).Evaluate(new(PlanFraming.Frame(plan, goal, scope, turnId), [], null, null, observation)).Status == ProofStatus.Proved)
+            return null;   // the target is plainly there; the normal step completes at once
+        var raw = await extractor.ExtractAsync(new(goal.OriginalUtterance, StepGoal(step), page), cancellationToken).ConfigureAwait(false);
+        var value = ValueGrounding.Validate(raw, page);
+        if (value is not null && Excluded(step, goal.OriginalUtterance, value)) value = null;
+        logger?.LogInformation("Browser step resolved entity step={Step} raw={Raw} accepted={Accepted}", plan.CurrentStepIndex + 1, raw ?? "-", value is not null);
+        if (value is null) return null;
+        _resolved = value;
+        var done = new InteractionRunResult(InteractionCompletionState.Complete, observation, [], new(0, 0, 0, 0), $"resolved:{value}");
+        return (done, step.Produces is { } name ? plan.WithOutput(name, value) : plan);
+    }
+
+    private volatile string? _resolved;
+
+    private static string StepGoal(PlanStep step)
+        => step.Target is { } target && !step.Description.Contains(target, StringComparison.OrdinalIgnoreCase) ? $"{step.Description} ({target})" : step.Description;
+
+    private static readonly System.Text.RegularExpressions.Regex Exclusion =
+        new(@"\b(different|other|another|else|besides|apart\s+from)\b", System.Text.RegularExpressions.RegexOptions.IgnoreCase | System.Text.RegularExpressions.RegexOptions.Compiled);
+
+    /// <summary>"A different show" excludes what the request already named.</summary>
+    internal static bool Excluded(PlanStep step, string request, string value)
+    {
+        if (!Exclusion.IsMatch(step.Description + " " + step.Target)) return false;
+        var named = BrowserCompletionEvidence.Tokens(request).ToHashSet();
+        var said = BrowserCompletionEvidence.Tokens(value).ToArray();
+        return said.Length > 0 && said.All(named.Contains);
+    }
+
     private async ValueTask<(InteractionRunResult Result, InteractionPlan Plan)> ProduceAsync(InteractionPlan plan, string name,
         BrowserGoal goal, BrowserSurface surface, InteractionObservation? carry, CancellationToken cancellationToken)
     {
@@ -660,9 +900,10 @@ public sealed class BrowserInteractionService(
         string? value = null;
         if (page is not null && extractor is not null)
         {
-            var raw = await extractor.ExtractAsync(new(goal.OriginalUtterance, step.Target ?? step.Description, page), cancellationToken)
+            var raw = await extractor.ExtractAsync(new(goal.OriginalUtterance, StepGoal(step), page), cancellationToken)
                 .ConfigureAwait(false);
             value = ValueGrounding.Validate(raw, page);
+            if (value is not null && Excluded(step, goal.OriginalUtterance, value)) value = null;
             logger?.LogInformation("Browser step output name={Name} goal={Goal} raw={Raw} accepted={Accepted}",
                 name, step.Target ?? step.Description, raw ?? "-", value is not null);
         }
@@ -720,7 +961,7 @@ public sealed class BrowserInteractionService(
         Task<InteractionRunResult> Run(InteractionPlan p, IInteractionDecisionSource source, InteractionObservation? start)
         {
             decisions.Plan = p;
-            return engine.RunAsync(new(p.Current.Description, Framed(p)), surface, source, StepBudget, cancellationToken, start)
+            return engine.RunAsync(new(p.Current.Description, Framed(p)), surface, source, BudgetFor(p.Current), cancellationToken, start)
                 .AsTask();
         }
 
@@ -728,13 +969,17 @@ public sealed class BrowserInteractionService(
         if (plan.Current.Kind == PlanStepKind.History)
             return (await Run(plan, new HistoryDecisions(plan.Current.Target), carry).ConfigureAwait(false), plan, null);
         var result = await Run(plan, decisions, carry).ConfigureAwait(false);
-        if (!Recoverable(result)) return (result, plan, null);
+        var recoverable = Recoverable(result);
+        // A step that simply ran out of road is not repaired, but a blocker may still be what stopped it.
+        var stalled = blocker is not null && result.Completion != InteractionCompletionState.Complete
+            && result.ReasonCode is "no_progress" or "budget_exhausted" or "repeated_failure";
+        if (!recoverable && !stalled) return (result, plan, null);
 
         var recoveryTimer = Stopwatch.StartNew();
         logger?.LogInformation("Browser recovery start step={Step} code={Code}", plan.CurrentStepIndex + 1, result.ReasonCode);
         // 1. The page may have moved while the decision was uncertain: judge the same step again on what is there now.
         var fresh = await surface.ObserveAsync(cancellationToken).ConfigureAwait(false);
-        if (!StringComparer.Ordinal.Equals(fresh.StateKey, result.Observation.StateKey))
+        if (recoverable && !StringComparer.Ordinal.Equals(fresh.StateKey, result.Observation.StateKey))
         {
             var again = await Run(plan, decisions, fresh).ConfigureAwait(false);
             if (!Recoverable(again))
@@ -748,7 +993,20 @@ public sealed class BrowserInteractionService(
                 ? again.Observation : await surface.ObserveAsync(cancellationToken).ConfigureAwait(false);
         }
 
-        // 2. One bounded semantic repair.
+        // 2. One bounded look at what stands in the way: a state that already holds, an interruption to clear, a choice only the
+        // user can make, or a challenge only a person can pass. Only after the normal decision could not advance the step.
+        if (blocker is not null)
+        {
+            var assessment = await blocker.AssessAsync(new(plan, result.ReasonCode!, fresh, result.RecentHistory), cancellationToken)
+                .ConfigureAwait(false);
+            LatencyTrace.Current?.Record("blocker", recoveryTimer.Elapsed.TotalMilliseconds);
+            logger?.LogInformation("Browser blocker outcome={Kind} candidates={Candidates} recovery_ms={Ms:F0}",
+                assessment?.Kind.ToString() ?? "unavailable", assessment?.CandidateIds?.Count ?? 0, recoveryTimer.Elapsed.TotalMilliseconds);
+            if (await HandleBlockerAsync(assessment).ConfigureAwait(false) is { } handled) return handled;
+        }
+        if (!recoverable) return (result, plan, null);
+
+        // 3. One bounded semantic repair.
         StepRepairResult? fix = null;
         if (repair is not null)
         {
@@ -778,7 +1036,51 @@ public sealed class BrowserInteractionService(
             default:
                 return (result with { Completion = InteractionCompletionState.Incomplete }, plan, null);
         }
+
+        // What the runtime does with a blocker assessment. The model only points; every claim is checked against the page.
+        async ValueTask<(InteractionRunResult, InteractionPlan, string?)?> HandleBlockerAsync(BlockerAssessment? assessment)
+        {
+            switch (assessment?.Kind)
+            {
+                case BlockerKind.AlreadySatisfied when BlockerPolicy.MayBeAlreadySatisfied(plan, fresh, assessment.Evidence):
+                    // The state this step exists to establish is positively observed: complete it with no action and move on.
+                    logger?.LogInformation("Browser blocker already_satisfied step={Step} kind={Kind} actions=0", plan.CurrentStepIndex + 1, plan.Current.Kind);
+                    return (new InteractionRunResult(InteractionCompletionState.Complete, fresh, [], new(0, 0, 0, 0), "blocker:already_satisfied"), plan, null);
+                case BlockerKind.HumanRequired:
+                    return (result with { Completion = InteractionCompletionState.Incomplete, ReasonCode = "human_required",
+                        Detail = BlockerPolicy.HumanMessage(assessment.HumanKind) }, plan, null);
+                case BlockerKind.ResolvableAction when assessment.CandidateIds is { Count: 1 } one
+                        && BlockerPolicy.Offered(fresh, one[0]) is { } offered
+                        && BlockerPolicy.IsLowConsequence(BrowserEvidence.Elements(fresh.Evidence).FirstOrDefault(e => e.Id == one[0])?.Name ?? offered.Candidate.Label):
+                {
+                    // One neutral, grounded action clears the interruption; the SAME step is then retried. The plan is never changed.
+                    var acted = await surface.ExecuteAsync(offered.Click, fresh, cancellationToken).ConfigureAwait(false);
+                    logger?.LogInformation("Browser blocker resolvable_action step={Step} succeeded={Succeeded}", plan.CurrentStepIndex + 1, acted.Succeeded);
+                    if (!acted.Succeeded) return null;
+                    var after = await surface.ObserveAsync(cancellationToken).ConfigureAwait(false);
+                    var again = await Run(plan, decisions, after).ConfigureAwait(false);
+                    return (again with { Progress = again.Progress with { Actions = again.Progress.Actions + 1 } }, plan, null);
+                }
+                case BlockerKind.UserChoice when assessment.CandidateIds is { Count: >= 2 } ids:
+                {
+                    var options = TypeSafeBrowserDecisionSource.GroundedOptions(fresh,
+                        ids.Where(id => BlockerPolicy.Offered(fresh, id) is not null).Select(static id => (id, (double?)null)).ToArray());
+                    if (options is null || options.Count > PendingChoice.MaxOptions) return null;
+                    var now = DateTimeOffset.UtcNow;
+                    var question = ChoiceQuestion(assessment.Question);
+                    var pending = new PendingChoice("", $"s{plan.CurrentStepIndex + 1}", question, options, now, now + PendingChoice.Lifetime,
+                        ChoiceResolution.ClearsBlocker, fresh.Revision);
+                    return (result with { Completion = InteractionCompletionState.Uncertain, ReasonCode = "user_choice", Detail = question,
+                        Pending = pending, Observation = fresh }, plan, null);
+                }
+            }
+            return null;
+        }
     }
+
+    private static string ChoiceQuestion(string? question)
+        => !string.IsNullOrWhiteSpace(question) && question.Trim() is { Length: <= 60 } q && q.All(static c => !char.IsControl(c)) && (q.EndsWith('?') || q.EndsWith(':'))
+            ? q : "The page needs a choice:";
 
     /// <summary>The repaired action, only if it is one the fresh observation actually offers.</summary>
     private static InteractionDecision? BindRepair(StepRepairResult fix, PlanStep step, InteractionObservation fresh)

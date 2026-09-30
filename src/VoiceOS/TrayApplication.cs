@@ -17,6 +17,7 @@ public sealed class TrayApplication : ApplicationContext
     private readonly ActivationOrchestrator _orchestrator;
     private readonly NotifyIcon _trayIcon;
     private readonly ProductUiOverlay _ui;
+    private readonly ChoicePanel _choices = new();
     private SynchronizationContext? _uiContext;
     private Icon? _currentIcon;
     private bool _disposed;
@@ -41,6 +42,9 @@ public sealed class TrayApplication : ApplicationContext
 
         _orchestrator.StateChanged += OnStateChanged;
         _orchestrator.ProductUiChanged += OnProductUiChanged;
+        // Answering a question resumes the suspended execution directly; it is never routed as a new command.
+        _choices.Selected += id => _ = _orchestrator.ResolvePendingChoiceAsync(id);
+        _choices.Dismissed += _orchestrator.DismissPendingChoice;
 
         // Install hook after the message pump is running.
         Application.Idle += OnFirstIdle;
@@ -90,6 +94,10 @@ public sealed class TrayApplication : ApplicationContext
     {
         if (_disposed || update.Generation < _lastUiGeneration) return;
         _lastUiGeneration = update.Generation;
+        // The options of a real question stay clickable until it is answered, dismissed or expires; any later phase of the
+        // same or a new run (except merely listening, when a spoken answer may be coming) replaces it.
+        if (update.Phase == ProductUiPhase.Clarify && update.Choice is { } choice) _choices.Show(choice);
+        else if (update.Phase != ProductUiPhase.Listening) _choices.Hide();
         if (update.Phase == ProductUiPhase.Acting)
             _ui.SetActingMessage(update.Message);
         else if (update.Phase == ProductUiPhase.Clarify)
@@ -152,6 +160,7 @@ public sealed class TrayApplication : ApplicationContext
             _orchestrator.StateChanged -= OnStateChanged;
             _orchestrator.ProductUiChanged -= OnProductUiChanged;
             _orchestrator.Dispose();
+            _choices.Dispose();
             _ui.Dispose();
             _trayIcon.Visible = false;
             _trayIcon.Dispose();

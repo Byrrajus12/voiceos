@@ -23,7 +23,7 @@ internal static class PlanFraming
             PlanStepKind.Search when !string.IsNullOrWhiteSpace(step.Query)
                 => new(id, ProofFamily.Find, new(step.Description, step.Query, goal.OriginalUtterance, WantedScope(step)), WithinPlan: true),
             PlanStepKind.Locate when !referential
-                => new(id, ProofFamily.Locate, new(target, Utterance: goal.OriginalUtterance), WithinPlan: true),
+                => new(id, ProofFamily.Locate, new(target, Utterance: goal.OriginalUtterance, Reveal: step.Reveal), WithinPlan: true),
             PlanStepKind.Open when !referential
                 => new(id, ProofFamily.Activate, new(target, Utterance: goal.OriginalUtterance), WithinPlan: true),
             _ => new(id, ProofFamily.Reach, new(step.Description, Utterance: goal.OriginalUtterance), WithinPlan: true)

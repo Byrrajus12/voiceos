@@ -12,7 +12,7 @@ internal static class ActivityMessage
     {
         UnavailableReason.IntentService => "Can't reach the command service.",
         UnavailableReason.BrowserGoalService => "Browser help is unavailable right now.",
-        UnavailableReason.ChromeCompanion => "Chrome companion isn't connected.",
+        UnavailableReason.ChromeCompanion => "I lost the connection to Chrome.",
         _ => "The service is unavailable right now."
     };
     public static string? ForStep(VoiceStep step, IAppCatalog? catalog,
@@ -118,7 +118,7 @@ internal static class ActivityMessage
     {
         "Media intent needs clarification before controlling current playback." => "What should I play?",
         // A question the runtime composed from a genuine ambiguity in the request is shown as is.
-        { Length: > 0 and <= 140 } question when question.EndsWith('?') => question,
+        { Length: > 0 and <= 140 } question when question.EndsWith('?') || question.EndsWith(':') => question,
         _ => "Which one did you mean?"
     };
 

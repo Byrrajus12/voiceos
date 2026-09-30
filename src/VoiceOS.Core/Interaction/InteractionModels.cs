@@ -97,7 +97,8 @@ public sealed record InteractionDecision(
     IReadOnlyList<InteractionChoice>? Choices = null,
     double GoalConfidence = 0,
     TargetBinding? TargetBinding = null,
-    string? ReasonCode = null)
+    string? ReasonCode = null,
+    PendingChoice? Pending = null)
 {
     public static InteractionDecision Act(InteractionAction action, string? detail = null)
         => new(InteractionCompletionState.Incomplete, action, detail);
@@ -106,6 +107,9 @@ public sealed record InteractionDecision(
     public static InteractionDecision Unsure(string? detail = null, IReadOnlyList<InteractionChoice>? choices = null,
         string? reasonCode = null)
         => new(InteractionCompletionState.Uncertain, Detail: detail, Choices: choices, ReasonCode: reasonCode);
+    /// <summary>The step cannot safely choose between several real options: suspend it and ask the user which.</summary>
+    public static InteractionDecision NeedsChoice(PendingChoice pending)
+        => new(InteractionCompletionState.Uncertain, Detail: pending.Reason, ReasonCode: "user_choice", Pending: pending);
 }
 
 public sealed record InteractionHistoryEntry(
@@ -160,7 +164,8 @@ public sealed record InteractionRunResult(
     IReadOnlyList<InteractionChoice>? Choices = null,
     IReadOnlyList<Effect>? Effects = null,
     IReadOnlyList<ProofRecord>? Proof = null,
-    string? ReasonCode = null);
+    string? ReasonCode = null,
+    PendingChoice? Pending = null);
 
 public interface IInteractionSurface
 {

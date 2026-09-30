@@ -90,10 +90,11 @@ public static class ScenarioLoader
 
     private static Turn NormalizeTurn(RawTurn t, string fileName, string id, int scenarioSettleMs)
     {
-        if (string.IsNullOrWhiteSpace(t.Transcript))
-            throw new ScenarioLoadException($"{fileName}: scenario '{id}': turn missing 'transcript'");
-        return new Turn(t.Transcript, NormalizeExpectation(t.Expect, fileName, id), t.SettleMs ?? scenarioSettleMs,
-            t.Before?.Select(s => NormalizeSetupStep(s, fileName, id)).ToList());
+        if (string.IsNullOrWhiteSpace(t.Transcript) && string.IsNullOrWhiteSpace(t.Choose))
+            throw new ScenarioLoadException($"{fileName}: scenario '{id}': turn missing 'transcript' (or 'choose')");
+        return new Turn(string.IsNullOrWhiteSpace(t.Transcript) ? $"[choose] {t.Choose}" : t.Transcript,
+            NormalizeExpectation(t.Expect, fileName, id), t.SettleMs ?? scenarioSettleMs,
+            t.Before?.Select(s => NormalizeSetupStep(s, fileName, id)).ToList(), t.Choose);
     }
 
     private static Expectation? NormalizeExpectation(RawExpectation? e, string fileName, string id)
@@ -196,7 +197,8 @@ public static class ScenarioLoader
 
     private sealed record RawSetupStep(string? Kind, string? File, string? Args, string? Process, int? Ms);
 
-    private sealed record RawTurn(string? Transcript, RawExpectation? Expect, int? SettleMs, List<RawSetupStep>? Before = null);
+    private sealed record RawTurn(string? Transcript, RawExpectation? Expect, int? SettleMs, List<RawSetupStep>? Before = null,
+        string? Choose = null);
 
     private sealed record RawExpectation(ExpectedOutcome? Outcome, List<CommandRoute>? Route,
         List<ScopeExpectation>? Scope, RawStringSet? DirectSteps, RawStringSet? BrowserOperations,

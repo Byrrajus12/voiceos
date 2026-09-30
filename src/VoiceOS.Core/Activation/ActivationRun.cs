@@ -6,7 +6,7 @@ using VoiceOS.Core.Interaction;
 namespace VoiceOS.Core.Activation;
 
 /// <summary>Where the recognized transcript of an activation came from.</summary>
-public enum ActivationSource { Voice, InjectedTranscript }
+public enum ActivationSource { Voice, InjectedTranscript, ChoiceSelection }
 
 /// <summary>
 /// Passive structured record of one activation, filled in as the production pipeline runs.

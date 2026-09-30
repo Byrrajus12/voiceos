@@ -85,15 +85,18 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             _logger?.LogInformation("Browser completion evidence page={Page} evidence={Evidence} reason={Reason} threshold={Threshold:F2} goal_achieved={Goal:F2}",
                 PageSummary(context.Observation), evidence.Strength, evidence.Reason, completionThreshold, achieved);
             var proposed = answers.GetValueOrDefault("operation")?.SelectedChoice;
+            // Two or more real controls each plausibly ARE the target and the binder cannot separate them: that is a
+            // missing user preference. Suspend with exactly those controls; no further model call builds the options.
+            if (stepMode && bindStep is not null && planStep!.Kind is PlanStepKind.Open or PlanStepKind.Act
+                && AmbiguousChoice(context, space, answers, binding, planStep) is { } pending)
+            {
+                _logger?.LogInformation("Browser step choice=user options={Count} step={Step}", pending.Options.Count, pending.StepId);
+                return InteractionDecision.NeedsChoice(pending);
+            }
             // The binder judged nothing on screen to be the target although something looked plausible: look further
             // down (bounded) rather than click a control that is not the target.
             if (stepMode && planStep!.Kind == PlanStepKind.Open && binding is null
-                && BrowserEvidence.CanScrollDown(context.Observation.Evidence)
-                && context.RecentHistory.Count(h => h.Action.Kind == InteractionActionKind.Scroll) < 6
-                && context.Observation.Candidates.SelectMany(c => c.Actions)
-                    .FirstOrDefault(a => a.Kind == InteractionActionKind.Scroll && a.Direction == "down") is { } down
-                && !context.RecentHistory.Any(h => h.Result.IsFailure && h.Action.Signature == down.Signature
-                    && h.ObservationStateKey == context.Observation.StateKey))
+                && NextScroll(context, nearby: true) is { } down)
             {
                 _logger?.LogInformation("Browser step shortcut=scroll_to_find_target");
                 return InteractionDecision.Act(down);
@@ -183,7 +186,8 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             {
                 var boundElement = binding is null ? null : BrowserEvidence.Elements(context.Observation.Evidence)
                     .FirstOrDefault(e => e.Id == binding.ElementRef);
-                if (!TargetEvidence.Established(binding, boundElement, planStep.Target ?? planStep.Description, _thresholds)
+                if (!TargetEvidence.Established(binding, boundElement, planStep.Target ?? planStep.Description, _thresholds,
+                        BrowserEvidence.Elements(context.Observation.Evidence))
                     || !space.Targets.TryGetValue("CLICK", out var clicks) || !clicks.TryGetValue(binding!.ElementRef, out var boundClick))
                     return Exit("weak_target", "No control on the page is established as the target of this step.");
                 action = boundClick;
@@ -304,16 +308,19 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             }
             return null;
         }
-        // Locate: the target is not present yet, so look further down the page while there is more page; no model call.
-        if (step.Kind == PlanStepKind.Locate && BrowserEvidence.CanScrollDown(context.Observation.Evidence)
-            && context.RecentHistory.Count(h => h.Action.Kind == InteractionActionKind.Scroll) < 8)
+        // Locate / Reveal: the target is not in view yet. A section the page already names is scrolled into view; otherwise
+        // look further along the page while it is still moving. Never a click, never a model call.
+        if (step.Kind == PlanStepKind.Locate)
         {
-            var down = context.Observation.Candidates.SelectMany(c => c.Actions)
-                .FirstOrDefault(a => a.Kind == InteractionActionKind.Scroll && a.Direction == "down");
-            if (down is not null && !AlreadyFailed(down))
+            if (step.Reveal && RevealSection(step, context) is { } reveal && !AlreadyFailed(reveal))
             {
-                _logger?.LogInformation("Browser step shortcut=scroll_to_locate");
-                return InteractionDecision.Act(down);
+                _logger?.LogInformation("Browser step shortcut=reveal_section target={Target}", reveal.TargetId);
+                return InteractionDecision.Act(reveal);
+            }
+            if (NextScroll(context, nearby: PartlyPresent(step, elements, context)) is { } onward)
+            {
+                _logger?.LogInformation("Browser step shortcut=scroll_to_locate amount={Amount}", onward.Text ?? "page");
+                return InteractionDecision.Act(onward);
             }
         }
         // An Open whose target is clearly absent from the controls on screen scrolls in code: no model call is spent
@@ -321,17 +328,14 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
         if (step.Kind == PlanStepKind.Open && _logger is not null && TargetEvidence.From(step.Target ?? step.Description) is { Informative: true } probe)
             _logger.LogInformation("Browser target evidence numbers=[{Numbers}] terms=[{Terms}] ordinal={Ordinal} plausible=[{Plausible}]",
                 string.Join(',', probe.Numbers), string.Join(',', probe.Terms), probe.Ordinal,
-                string.Join(" | ", elements.Where(e => e.Enabled && TargetEvidence.Matches(probe, e)).Take(3)
+                string.Join(" | ", elements.Where(e => e.Enabled && TargetEvidence.Matches(probe, e, elements)).Take(3)
                     .Select(e => $"{e.Id}:{(e.Name ?? "")[..Math.Min((e.Name ?? "").Length, 40)]}")));
-        if (step.Kind == PlanStepKind.Open && BrowserEvidence.CanScrollDown(context.Observation.Evidence)
-            && context.RecentHistory.Count(h => h.Action.Kind == InteractionActionKind.Scroll) < 6
+        if (step.Kind == PlanStepKind.Open
             && !TargetEvidence.AnyPlausible(TargetEvidence.From(step.Target ?? step.Description),
                 elements.Where(e => e.Enabled && Offered(e.Id, InteractionActionKind.Activate) is not null))
-            && context.Observation.Candidates.SelectMany(c => c.Actions)
-                .FirstOrDefault(a => a.Kind == InteractionActionKind.Scroll && a.Direction == "down") is { } scrollDown
-            && !AlreadyFailed(scrollDown))
+            && NextScroll(context, nearby: false) is { } scrollDown)
         {
-            _logger?.LogInformation("Browser step shortcut=scroll_target_absent");
+            _logger?.LogInformation("Browser step shortcut=scroll_target_absent amount={Amount}", scrollDown.Text ?? "page");
             return InteractionDecision.Act(scrollDown);
         }
         if (step.Kind == PlanStepKind.Open && NormalizeName(step.Target) is { Length: > 0 } target)
@@ -352,6 +356,152 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
         }
         return null;
     }
+
+    /// <summary>More page lies ahead than this many actions have covered: a hard stop for any search by scrolling.</summary>
+    internal const int MaxScrollActions = 36;
+
+    /// <summary>
+    /// The next scroll of a search for an absent target, decided in code: only while the page is actually advancing and more of
+    /// it remains, in larger steps while nothing resembling the target is in sight and small ones once something is.
+    /// </summary>
+    private static InteractionAction? NextScroll(InteractionDecisionContext context, bool nearby)
+    {
+        if (!BrowserEvidence.CanScrollDown(context.Observation.Evidence) || context.Progress.Actions >= MaxScrollActions) return null;
+        var previous = context.RecentHistory.LastOrDefault(static h => !h.Suppressed);
+        if (previous is { Action.Kind: InteractionActionKind.Scroll }
+            && (previous.Result.IsFailure || ScrollY(previous.ResultingEvidence) <= ScrollY(previous.ObservationEvidence)))
+            return null;
+        var down = context.Observation.Candidates.SelectMany(static c => c.Actions)
+            .FirstOrDefault(static a => a.Kind == InteractionActionKind.Scroll && a.Direction == "down" && a.TargetId is null);
+        if (down is null) return null;
+        var scrolls = context.RecentHistory.Count(static h => h.Action.Kind == InteractionActionKind.Scroll);
+        var amount = nearby ? "small" : scrolls >= 1 ? "large" : null;
+        var action = amount is null ? down : down with { Text = amount };
+        return context.RecentHistory.Any(h => h.Result.IsFailure && h.Action.Signature == action.Signature
+            && h.ObservationStateKey == context.Observation.StateKey) ? null : action;
+    }
+
+    private static int ScrollY(string? evidence)
+    {
+        try
+        {
+            if (evidence is null) return 0;
+            using var document = JsonDocument.Parse(evidence);
+            return document.RootElement.TryGetProperty("viewport", out var v) && v.TryGetProperty("scrollY", out var y)
+                && y.ValueKind == JsonValueKind.Number ? y.GetInt32() : 0;
+        }
+        catch { return 0; }
+    }
+
+    /// <summary>The scroll action that brings the named section into view, when the page reports one that is not in view yet.</summary>
+    private static InteractionAction? RevealSection(PlanStep step, InteractionDecisionContext context)
+    {
+        var terms = PlannedStepEvaluator.TargetTerms(step.Target ?? step.Description);
+        if (terms.Length == 0 || BrowserEvidence.Sections(context.Observation.Evidence) is not { } sections) return null;
+        var section = sections.FirstOrDefault(s => !s.InViewport && PlannedStepEvaluator.HasAll(s.Text, terms));
+        return section is null ? null : context.Observation.Candidates.FirstOrDefault(c => c.Id == section.Id)?.Actions
+            .FirstOrDefault(a => a.Kind == InteractionActionKind.Scroll && a.TargetId == section.Id);
+    }
+
+    /// <summary>Something on the page already shares a distinctive word with the target: look closely rather than leap.</summary>
+    private static bool PartlyPresent(PlanStep step, IReadOnlyList<EvidenceElement> elements, InteractionDecisionContext context)
+    {
+        var terms = PlannedStepEvaluator.TargetTerms(step.Target ?? step.Description);
+        if (terms.Length == 0) return false;
+        bool Shares(string? text) => BrowserCompletionEvidence.Tokens(text).Select(SingularTerm).Any(terms.Contains);
+        return elements.Any(e => Shares(e.Name)) || BrowserEvidence.Sections(context.Observation.Evidence)?.Any(s => Shares(s.Text)) == true;
+    }
+
+    // -- a real choice for the user ----------------------------------------------------------
+
+    /// <summary>A candidate needs at least this much of the binder's belief to be offered to the user at all.</summary>
+    internal const double ChoiceFloor = .25;
+    /// <summary>When the best candidate leads the next by at least this much, it simply wins and nothing is asked.</summary>
+    internal const double ChoiceMargin = .20;
+
+    /// <summary>
+    /// Builds the question from the binder's own distribution, reusing what it already answered. It exists only when two to four
+    /// real controls are each plausibly the target, none leads by a safe margin, the best answer is not "none of them", and their
+    /// own words differ. Noise (many weak candidates) and ordinary moderate uncertainty (one candidate ahead) never ask.
+    /// </summary>
+    private PendingChoice? AmbiguousChoice(InteractionDecisionContext context, BrowserDecisionSpace space,
+        IReadOnlyDictionary<string, JevAnswer> answers, TargetBinding? binding, PlanStep step)
+    {
+        if (binding?.Method == BindingMethod.ExactLabel) return null;
+        if (!answers.TryGetValue("bind", out var bind) || bind.QuestionType != "choice"
+            || !space.Targets.TryGetValue("CLICK", out var clickable)) return null;
+        var ranked = bind.Probabilities.Where(item => clickable.ContainsKey(item.Key))
+            .OrderByDescending(static item => item.Value).ToArray();
+        if (ranked.Length < 2 || bind.Probabilities.GetValueOrDefault("NONE") >= ranked[0].Value) return null;
+        var plausible = ranked.Where(static item => item.Value >= ChoiceFloor).ToArray();
+        if (plausible.Length < 2 || plausible.Length > PendingChoice.MaxOptions
+            || plausible[0].Value - plausible[1].Value >= ChoiceMargin) return null;
+        var options = GroundedOptions(context.Observation, plausible.Select(static item => (item.Key, (double?)item.Value)).ToArray());
+        if (options is null) return null;
+        // The control's own words can settle it: when the described target is in some of them and not in others, the others
+        // are not contenders. Only what is left and still plural is a real choice.
+        var evidence = TargetEvidence.From(step.Target ?? step.Description);
+        if (evidence.Informative)
+        {
+            var elements = BrowserEvidence.Elements(context.Observation.Evidence);
+            var matching = options.Where(o => elements.FirstOrDefault(e => e.Id == o.TargetRef) is { } e
+                && TargetEvidence.Matches(evidence, e, elements)).ToArray();
+            if (matching.Length is > 0 && matching.Length < options.Count) options = matching;
+            if (options.Count < 2) return null;
+        }
+        var now = DateTimeOffset.UtcNow;
+        return new PendingChoice("", context.Goal.Step?.Id ?? "s1", "Which one?", options, now, now + PendingChoice.Lifetime,
+            ChoiceResolution.SatisfiesStep, context.Observation.Revision);
+    }
+
+    /// <summary>
+    /// Options made only of the candidates' own words (accessible name, else value). Two that say the same thing and lead to the
+    /// same place are one option; two with the same name are told apart by their nearby text or address. Null when fewer than
+    /// two distinct, displayable options remain.
+    /// </summary>
+    internal static IReadOnlyList<ChoiceOption>? GroundedOptions(InteractionObservation observation, IReadOnlyList<(string Ref, double? P)> refs)
+    {
+        var elements = BrowserEvidence.Elements(observation.Evidence).ToDictionary(static e => e.Id, StringComparer.Ordinal);
+        var picked = new List<(EvidenceElement Element, string Text, double? P)>();
+        foreach (var (reference, p) in refs)
+        {
+            if (!elements.TryGetValue(reference, out var e)) continue;
+            var text = Squash(!string.IsNullOrWhiteSpace(e.Name) ? e.Name : e.Value);
+            if (text.Length == 0 || text.Any(char.IsControl)) continue;
+            if (picked.Any(o => NormalizeName(o.Text) == NormalizeName(text) && string.Equals(o.Element.Href, e.Href, StringComparison.OrdinalIgnoreCase)))
+                continue;
+            picked.Add((e, text.Length > 80 ? text[..80].TrimEnd() + "\u2026" : text, p));
+        }
+        if (picked.Count < 2) return null;
+        var options = new List<ChoiceOption>();
+        foreach (var o in picked)
+        {
+            var twin = picked.Count(x => NormalizeName(x.Text) == NormalizeName(o.Text)) > 1;
+            var secondary = twin ? Distinguisher(o.Element, o.Text) : null;
+            // Words that say nothing ("Option", "Read more"), or the same words twice with nothing to tell them apart, are not a
+            // question a person can answer: that is a binding problem, not a choice.
+            if (GenericLabels.Contains(NormalizeName(o.Text)) || twin && secondary is null) return null;
+            options.Add(new ChoiceOption(Guid.NewGuid().ToString("N")[..8], o.Element.Id, o.Text, secondary, o.P, o.Element.Href,
+                o.Element.Role, Squash(o.Element.Context) is { Length: > 0 } ctx ? ctx : null, o.Element.Position));
+        }
+        return options;
+    }
+
+    private static readonly HashSet<string> GenericLabels = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "option", "options", "choice", "item", "result", "here", "click here", "more", "read more", "learn more", "details",
+        "view", "select", "continue", "submit", "ok", "yes", "no", "image", "icon", "link", "button", "unnamed"
+    };
+
+    private static string? Distinguisher(EvidenceElement element, string own)
+    {
+        var context = Squash(element.Context);
+        if (context.Length > 0 && !context.Equals(own, StringComparison.OrdinalIgnoreCase))
+            return context.Length > 60 ? context[..60].TrimEnd() + "\u2026" : context;
+        return Uri.TryCreate(element.Href, UriKind.Absolute, out var uri) ? uri.Host + uri.AbsolutePath.TrimEnd('/') : null;
+    }
+
+    private static string Squash(string? text) => string.Join(' ', (text ?? "").Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
 
     public async ValueTask<InteractionCompletionAssessment> AssessAsync(
         BrowserGoal goal, InteractionObservation observation,
@@ -721,6 +871,8 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                     _ => null
                 };
                 if (operation is null) continue;
+                // A step that only reveals a section or locates content never activates a control.
+                if (operation == "CLICK" && step is not null && RevealIntent.RevealsOnly(step)) continue;
                 if (operation is "CLICK" or "TYPE_TEXT")
                 {
                     if (string.IsNullOrWhiteSpace(action.TargetId) || action.TargetId != candidate.Id) continue;

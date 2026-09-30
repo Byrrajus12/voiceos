@@ -162,7 +162,7 @@ public sealed class LiveScenarioRunner
                 }
                 var turnInitial = i == 0 && turnSpec.Before is not { Count: > 0 } ? initialProbe : priorFinal;
                 var (activationRun, timedOut, stuck) = await RunTranscriptWithTimeoutAsync(
-                    product, turnSpec.Transcript, scenario.TimeoutSeconds).ConfigureAwait(false);
+                    product, turnSpec, scenario.TimeoutSeconds).ConfigureAwait(false);
                 if (stuck)
                 {
                     contaminated = true;
@@ -317,9 +317,13 @@ public sealed class LiveScenarioRunner
             new CountInfo(0, 0, 0, 0, 0, 0), initial, final, [], Classification.Timeout);
 
     private static async Task<(ActivationRun? Run, bool TimedOut, bool Stuck)> RunTranscriptWithTimeoutAsync(
-        VoiceOS.VoiceOSProduct product, string transcript, int timeoutSeconds)
+        VoiceOS.VoiceOSProduct product, Turn turn, int timeoutSeconds)
     {
-        var task = product.Orchestrator.RunTranscriptAsync(transcript);
+        // Answering a pending choice is what a click on an option does: it resumes the suspended step, never a new command.
+        var task = turn.Choose is { } wanted
+            ? product.Orchestrator.ResolvePendingChoiceAsync(product.Orchestrator.PendingChoice?.Options
+                .FirstOrDefault(o => $"{o.DisplayText} {o.SecondaryText}".Contains(wanted, StringComparison.OrdinalIgnoreCase))?.ChoiceId ?? "no-such-option")
+            : product.Orchestrator.RunTranscriptAsync(turn.Transcript);
         var primary = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(timeoutSeconds))).ConfigureAwait(false);
         if (primary == task) return (await task.ConfigureAwait(false), false, false);
 

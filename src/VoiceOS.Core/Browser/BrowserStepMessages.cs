@@ -14,21 +14,32 @@ public static class BrowserStepMessages
     public const string Stalled = "The page stopped responding.";
     public const string TooLong = "I couldn't finish that in time.";
     public const string NotUnderstood = "I couldn't work out the steps for that request.";
+    public const string Captcha = "This page requires a CAPTCHA before I can continue.";
+    public const string SignIn = "You need to sign in before I can continue.";
+    public const string Verification = "This page needs a verification code before I can continue.";
+    public const string Payment = "This page needs a payment confirmation from you before I can continue.";
+    public const string HumanOther = "This page needs something only you can do before I can continue.";
+    public const string ChoiceExpired = "That choice has expired.";
+    public const string ChoiceGone = "I couldn't find that option on the page any more.";
+    public const string ChoiceUnknown = "That isn't one of the choices.";
 
     private static readonly string[] Known =
         [NoSearchControl, NoChange, NoMatch, Stalled, TooLong, NotUnderstood,
-            "There is no earlier page in this tab.", "That tab has no previous page.", "That tab has no next page.", "Nothing was done on the current page yet."];
+            "There is no earlier page in this tab.", "That tab has no previous page.", "That tab has no next page.", "Nothing was done on the current page yet.",
+            Captcha, SignIn, Verification, Payment, HumanOther, ChoiceExpired, ChoiceGone, ChoiceUnknown];
 
     /// <summary>True for a message this class already worded for the user (shown as is).</summary>
     public static bool IsUserFacing(string? detail)
         => detail is not null && (Known.Contains(detail)
             || detail.StartsWith("Couldn't find ", StringComparison.Ordinal) || detail.StartsWith("I couldn't ", StringComparison.Ordinal)
+            || detail.StartsWith("I reached the end of the page", StringComparison.Ordinal)
             || detail.StartsWith("That ", StringComparison.Ordinal) && detail.EndsWith('.'));
 
     public static string Failure(InteractionPlan plan, string? code, string? detail, InteractionObservation? observation,
         string? repairReason = null)
     {
         if (code == "no_history") return "There is no earlier page in this tab.";
+        if (code == "human_required" && IsUserFacing(detail)) return detail!;
         if (code == "no_value")
             return Short(plan.Current.Target ?? plan.Current.Description) is { } wanted
                 ? $"I looked, but couldn't determine {wanted}." : "I couldn't find the information that step needed.";
@@ -37,6 +48,12 @@ public static class BrowserStepMessages
         if (code == "weak_target" && step.Kind == PlanStepKind.Act) return "I couldn't find a clear match for that on this page.";
         var afterSearch = plan.Completed.Any(static s => s.Kind == PlanStepKind.Search);
         var target = Short(step.Target);
+        // The search for the target ran out of page: say that, not a model's confidence.
+        if (step.Kind is PlanStepKind.Open or PlanStepKind.Locate && target is not null && observation is not null
+            && code is null or "budget_exhausted" or "blocked" or "no_action" or "weak_target" or "low_operation_confidence"
+                or "correction_exhausted" or "unoffered_operation" or "invalid_target"
+            && !BrowserEvidence.CanScrollDown(observation.Evidence))
+            return $"I reached the end of the page but couldn't find {target}.";
         switch (step.Kind)
         {
             case PlanStepKind.History:

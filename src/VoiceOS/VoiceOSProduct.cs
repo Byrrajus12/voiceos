@@ -144,6 +144,9 @@ public sealed class VoiceOSProduct : IDisposable
                     Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")),
                 extractor: new OpenRouterBrowserValueExtractor(
                     new HttpClient(openRouterHandler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(15) },
+                    Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")),
+                blocker: new OpenRouterBrowserBlockerAssessor(
+                    new HttpClient(openRouterHandler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(20) },
                     Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")));
         }
         else

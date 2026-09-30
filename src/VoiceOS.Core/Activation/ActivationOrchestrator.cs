@@ -462,6 +462,9 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         var activationId = run.ActivationId;
         var kind = run.Kind;
         var trace = run.Trace = LatencyTrace.Begin(activationId);
+        // A pending choice is answered before a transcript is treated as a command (see PendingChoiceMatcher); until spoken
+        // answers are wired, a new command simply supersedes the question it never answered.
+        if (_browserInteraction?.PendingChoice is not null) DismissPendingChoice();
 
         PublishState(kind, ActivationState.Understanding);
         var collected = await ExecutionContextCollector.CollectAsync(transcript, _catalog, _topoService,
@@ -658,31 +661,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                 transcript, "Framing browser goal and acquiring managed context"));
             var browserResult = await _browserInteraction.RunAsync(transcript, _shutdown.Token,
                 activationId, executionScope.Browser is { } browserScope ? browserScope.WithRouterSignals(route) : null).ConfigureAwait(false);
-            run.BrowserOutcome = browserResult;
-            if (browserResult.Unavailable is { } unavailable)
-            {
-                run.ActionCount = browserResult.Actions;
-                PublishUnavailable(run, unavailable, browserResult.Detail);
-                return;
-            }
-            _recentTask = RecentTaskPolicy.AfterBrowserRun(_recentTask, browserResult, transcript, DateTimeOffset.UtcNow);
-            _referents.ObserveMany(browserResult.Referents);
-            if (browserResult.Referents is { Count: > 0 } observed)
-                _logger.LogInformation("Referents observed source=browser kinds={Kinds} store_count={Count}",
-                    string.Join(',', observed.Select(r => r.Kind)), _referents.Count);
-            run.ActionCount = browserResult.Actions;
-            run.Outcome = browserResult.Completion.ToString();
-            if (browserResult.Completion == InteractionCompletionState.Uncertain)
-                _logger.LogInformation("Clarification level=task_local category=browser_question question={Question} choices={ChoiceCount}",
-                    browserResult.Detail, browserResult.Choices?.Count ?? 0);
-            var browserPhase = browserResult.Completion switch
-            {
-                InteractionCompletionState.Complete => ApplicationInteractionPhase.Succeeded,
-                InteractionCompletionState.Uncertain => ApplicationInteractionPhase.NeedsChoice,
-                _ => ApplicationInteractionPhase.Failed
-            };
-            PublishSnapshot(new(browserPhase, kind, transcript,
-                browserResult.Detail, browserResult.Choices, browserResult.Completion));
+            ApplyBrowserOutcome(run, kind, transcript, browserResult);
             return;
         }
 
@@ -983,6 +962,102 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         PublishSnapshot(snapshot);
     }
 
+    /// <summary>The shared tail of a browser run, whether it came from a command or resumed a suspended choice.</summary>
+    private void ApplyBrowserOutcome(ActivationRun run, InteractionKind kind, string transcript, BrowserInteractionOutcome browserResult)
+    {
+        run.BrowserOutcome = browserResult;
+        if (browserResult.Unavailable is { } unavailable)
+        {
+            run.ActionCount = browserResult.Actions;
+            PublishUnavailable(run, unavailable, browserResult.Detail);
+            return;
+        }
+        _recentTask = RecentTaskPolicy.AfterBrowserRun(_recentTask, browserResult, transcript, DateTimeOffset.UtcNow);
+        _referents.ObserveMany(browserResult.Referents);
+        if (browserResult.Referents is { Count: > 0 } observed)
+            _logger.LogInformation("Referents observed source=browser kinds={Kinds} store_count={Count}",
+                string.Join(',', observed.Select(r => r.Kind)), _referents.Count);
+        run.ActionCount = browserResult.Actions;
+        run.Outcome = browserResult.Completion.ToString();
+        if (browserResult.Pending is { } pending)
+        {
+            // The execution is suspended on a real choice; its transcript stays with it for when the user answers.
+            _pendingTranscript = transcript;
+            _logger.LogInformation("Clarification level=pending_choice step={Step} options={OptionCount} resolution={Resolution}",
+                pending.StepId, pending.Options.Count, pending.Resolution);
+            PublishSnapshot(new(ApplicationInteractionPhase.NeedsChoice, kind, transcript, pending.Reason, null, browserResult.Completion));
+            PublishUi(ProductUiPhase.Clarify, pending.Reason, pending);
+            return;
+        }
+        if (browserResult.Completion == InteractionCompletionState.Uncertain)
+            _logger.LogInformation("Clarification level=task_local category=browser_question question={Question} choices={ChoiceCount}",
+                browserResult.Detail, browserResult.Choices?.Count ?? 0);
+        var browserPhase = browserResult.Completion switch
+        {
+            InteractionCompletionState.Complete => ApplicationInteractionPhase.Succeeded,
+            InteractionCompletionState.Uncertain => ApplicationInteractionPhase.NeedsChoice,
+            _ => ApplicationInteractionPhase.Failed
+        };
+        PublishSnapshot(new(browserPhase, kind, transcript,
+            browserResult.Detail, browserResult.Choices, browserResult.Completion));
+    }
+
+    private string? _pendingTranscript;
+
+    /// <summary>The choice the suspended browser execution is waiting on, if any. The UI and, later, speech read it from here.</summary>
+    public PendingChoice? PendingChoice => _browserInteraction?.PendingChoice;
+
+    /// <summary>
+    /// The user picked one of the pending choice's options. The suspended execution resumes its SAME step on that exact grounded
+    /// target and continues its plan: nothing is routed, compiled or inferred again, and no new task starts.
+    /// </summary>
+    public async Task<ActivationRun> ResolvePendingChoiceAsync(string choiceId)
+    {
+        _uiRun.Value = Interlocked.Increment(ref _uiGeneration);
+        var run = new ActivationRun(Guid.NewGuid().ToString("N"), InteractionKind.Command, ActivationSource.ChoiceSelection)
+            { Transcript = _pendingTranscript };
+        _activeRun.Value = run;
+        using var activationScope = _logger.BeginScope("activation_id={ActivationId}", run.ActivationId);
+        try
+        {
+            run.Lane = "Browser";
+            run.PostSttStart = DateTimeOffset.UtcNow;
+            if (_browserInteraction is null || _browserInteraction.PendingChoice is null)
+            {
+                run.Outcome = "Failed";
+                PublishUi(ProductUiPhase.Error, BrowserStepMessages.ChoiceExpired);
+                return run;
+            }
+            PublishUi(ProductUiPhase.Acting);
+            var outcome = await _browserInteraction.ResumeChoiceAsync(choiceId, _shutdown.Token).ConfigureAwait(false);
+            ApplyBrowserOutcome(run, InteractionKind.Command, _pendingTranscript ?? "", outcome);
+        }
+        catch (OperationCanceledException) when (_shutdown.IsCancellationRequested)
+        {
+            PublishUi(ProductUiPhase.Idle);
+        }
+        catch (Exception ex)
+        {
+            run.Failure = ex;
+            _logger.LogError(ex, "Choice resolution failed");
+            PublishUi(ProductUiPhase.Error, "Couldn't complete that action.");
+        }
+        finally
+        {
+            _logger.LogInformation("Activation final activation_id={ActivationId} mode={Kind} source={Source} lane={Lane} outcome={Outcome} actions={Actions}",
+                run.ActivationId, run.Kind, run.Source, run.Lane, run.Outcome, run.ActionCount);
+            CompleteActivation(run);
+        }
+        return run;
+    }
+
+    /// <summary>The user closed the question without answering: the suspended execution is dropped.</summary>
+    public void DismissPendingChoice()
+    {
+        _browserInteraction?.DismissPendingChoice();
+        _pendingTranscript = null;
+    }
+
     private void PublishUnavailable(ActivationRun run, UnavailableReason reason, string? detail)
     {
         run.Outcome = "Unavailable";
@@ -1011,10 +1086,10 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
         InteractionSnapshotChanged?.Invoke(this, new(snapshot));
     }
 
-    private void PublishUi(ProductUiPhase phase, string? message = null)
+    private void PublishUi(ProductUiPhase phase, string? message = null, PendingChoice? choice = null)
     {
         if (_uiRun.Value is { } run && run != Volatile.Read(ref _uiGeneration)) return;
-        ProductUiChanged?.Invoke(this, new(phase, message, _uiRun.Value ?? Volatile.Read(ref _uiGeneration)));
+        ProductUiChanged?.Invoke(this, new(phase, message, _uiRun.Value ?? Volatile.Read(ref _uiGeneration), choice));
     }
 
     private void OnBrowserActionStarting(BrowserActivity action)

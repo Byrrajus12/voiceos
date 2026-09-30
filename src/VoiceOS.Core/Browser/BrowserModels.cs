@@ -116,7 +116,16 @@ public sealed record BrowserSnapshot(
     [property: JsonPropertyName("openerTabId")] int? OpenerTabId = null,
     [property: JsonPropertyName("documentId")] string? DocumentId = null,
     // Longer body text than VisibleText, used only to read a value a later plan step needs.
-    [property: JsonPropertyName("pageText")] string? PageText = null);
+    [property: JsonPropertyName("pageText")] string? PageText = null,
+    // Headings and labelled regions of the whole page (not only those in view): where a section is, and whether it is in view.
+    [property: JsonPropertyName("headings")] IReadOnlyList<BrowserSection>? Headings = null);
+
+/// <summary>A non-interactive landmark of the content, in the page's own words. Revealing it is a scroll.</summary>
+public sealed record BrowserSection(
+    [property: JsonPropertyName("ref")] string Ref,
+    [property: JsonPropertyName("text")] string Text,
+    [property: JsonPropertyName("level")] int? Level = null,
+    [property: JsonPropertyName("inViewport")] bool InViewport = false);
 
 /// <summary>
 /// Navigation signal the companion reported alongside an ACT snapshot (<c>timings.signal</c>:
@@ -134,6 +143,8 @@ public sealed record BrowserActionRequest(
 
 public sealed class ChromeCompanionException(string code, string message) : Exception(message)
 {
+    /// <summary>The connection to Chrome itself failed (disconnected, or the extension errored without a protocol code): not a semantic failure.</summary>
+    public bool IsInfrastructure => Code is "TRANSPORT_DISCONNECTED" or "EXTENSION_ERROR";
     public string Code { get; } = code;
 }
 
@@ -204,4 +215,6 @@ public sealed record BrowserInteractionOutcome(
     IReadOnlyList<InteractionChoice>? Choices, string? Url, string? Title,
     int Decisions = 0, int Actions = 0, int? TabId = null, string? SessionId = null,
     string? SemanticGoal = null, UnavailableReason? Unavailable = null,
-    IReadOnlyList<Referent>? Referents = null);
+    IReadOnlyList<Referent>? Referents = null,
+    PendingChoice? Pending = null,
+    string? Resolved = null);

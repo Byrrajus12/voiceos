@@ -85,8 +85,9 @@ public sealed record Expectation(
 }
 
 /// <summary>Before: setup-style steps run between turns (e.g. focusing a window, closing tabs the scenario opened).</summary>
+/// <param name="Choose">Instead of speaking a command, answers the pending choice with the option whose words contain this text.</param>
 public sealed record Turn(string Transcript, Expectation? Expect = null, int SettleMs = 800,
-    IReadOnlyList<SetupStep>? Before = null);
+    IReadOnlyList<SetupStep>? Before = null, string? Choose = null);
 
 public sealed record Scenario(
     string Id, string Name, string Family, IReadOnlyList<string> Tags, ScenarioSafety Safety,

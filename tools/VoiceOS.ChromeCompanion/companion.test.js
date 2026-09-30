@@ -281,6 +281,53 @@ test("observed cross-origin anchor uses its real DOM activation", () => {
   assert.equal(clicked, 1);
 });
 
+test("sections are reported with their view state and a section is revealed by scrolling, never by a click", () => {
+  let listener;
+  let clicked = 0;
+  let revealed = 0;
+  const scrolls = [];
+  class HTMLElement {
+    isConnected = true;
+    constructor(top) { this.top = top; }
+    getBoundingClientRect() { return { x: 0, y: this.top, width: 100, height: 30, bottom: this.top + 30, right: 100, top: this.top, left: 0 }; }
+    getAttribute() { return null; }
+    closest() { return null; }
+    matches() { return false; }
+  }
+  class HTMLAnchorElement extends HTMLElement {
+    href = "https://shop.example/reviews"; target = ""; download = ""; innerText = "(4 Reviews)";
+    click() { clicked++; }
+  }
+  class Heading extends HTMLElement {
+    tagName = "H2"; innerText = "Customer Reviews";
+    scrollIntoView() { revealed++; }
+  }
+  const link = new HTMLAnchorElement(100);
+  const heading = new Heading(5000);
+  const document = {
+    querySelectorAll: (selector) => selector.startsWith("h1") ? [heading] : [link],
+    body: { innerText: "(4 Reviews) Customer Reviews" }, documentElement: { scrollHeight: 6000 }, title: "Product"
+  };
+  const location = { href: "https://shop.example/p/1", origin: "https://shop.example", assign() {} };
+  const chrome = { runtime: { onMessage: { addListener: (fn) => { listener = fn; } } } };
+  const context = vm.createContext({ chrome, document, location, HTMLElement, HTMLAnchorElement,
+    HTMLButtonElement: class {}, HTMLInputElement: class {}, HTMLTextAreaElement: class {}, HTMLSelectElement: class {},
+    window: { innerWidth: 1280, innerHeight: 800, scrollX: 0, scrollY: 0, scrollBy: (options) => scrolls.push(options.top) },
+    innerWidth: 1280, innerHeight: 800, history: { length: 2 }, URL, Date, crypto: require("node:crypto").webcrypto,
+    getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }) });
+  vm.runInContext(source("content.js"), context);
+  let observation;
+  listener({ type: "VOICEOS_OBSERVE" }, null, value => { observation = value; });
+  assert.deepEqual(Array.from(observation.headings, h => [h.ref, h.text, h.inViewport]), [["h1", "Customer Reviews", false]]);
+  listener({ type: "VOICEOS_ACT", action: "SCROLL", revision: observation.revision, elementRef: "h1" }, null, () => {});
+  assert.equal(revealed, 1);
+  assert.equal(clicked, 0);
+  // A plain scroll moves by a screen fraction: normal, larger while the target is far, smaller once it is close.
+  for (const text of [undefined, "large", "small"])
+    listener({ type: "VOICEOS_ACT", action: "SCROLL", revision: observation.revision, direction: "down", text }, null, () => {});
+  assert.deepEqual(scrolls, [640, 1280, 320]);
+});
+
 test("openTaskTab resolves after document-ready + SETTLE, focusing while still loading, without waiting for full load", async () => {
   const focusCalls = [];
   const { chrome, fire } = createMockChrome({
