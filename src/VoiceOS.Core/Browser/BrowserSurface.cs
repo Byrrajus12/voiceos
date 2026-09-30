@@ -54,6 +54,8 @@ public sealed class BrowserSurface : IInteractionSurface
     public string SessionId => _sessionId;
     public int? TabId => _tabId;
     public BrowserSnapshot? LatestSnapshot { get; private set; }
+    /// <summary>Revision of the observation whose snapshot can still be acted on.</summary>
+    public long CurrentRevision => Interlocked.Read(ref _revision);
 
     /// <summary>
     /// Hands the surface a snapshot obtained by a startup/selection call that ran concurrently
@@ -140,21 +142,38 @@ public sealed class BrowserSurface : IInteractionSurface
 
     private (string Evidence, string StateKey) BuildEvidence(BrowserSnapshot snapshot)
     {
+        var facts = BrowserDomFacts.Derive(snapshot.Elements);
         var evidence = JsonSerializer.Serialize(new
         {
             original_goal = _goal.OriginalUtterance,
             hints = new { _goal.NamedServiceHint },
             current_url = snapshot.Url,
+            current_origin = LogOrigin(snapshot.Url),
             current_title = snapshot.Title,
             visible_text = snapshot.VisibleText,
             viewport = snapshot.Viewport,
-            elements = snapshot.Elements.Select(static element => new
-            {
-                id = element.Ref, element.Role, element.Name, element.Value, element.Href,
-                element.Context, element.Editable, element.Enabled, element.Geometry.InViewport
-            })
+            elements = snapshot.Elements.Select(element => ElementEvidence(element, facts[element.Ref]))
         });
         return (evidence, Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(evidence))));
+    }
+
+    /// <summary>The always-present element fields plus only those derived facts that say something.</summary>
+    private static Dictionary<string, object?> ElementEvidence(BrowserElement element, ElementFacts facts)
+    {
+        var entry = new Dictionary<string, object?>
+        {
+            ["id"] = element.Ref, ["Role"] = element.Role, ["Name"] = element.Name, ["Value"] = element.Value,
+            ["Href"] = element.Href, ["Context"] = element.Context, ["Editable"] = element.Editable,
+            ["Enabled"] = element.Enabled, ["InViewport"] = element.Geometry.InViewport
+        };
+        if (facts.Kind is BrowserDomFacts.SearchField or BrowserDomFacts.SubmitControl or BrowserDomFacts.NavigationLink
+            or BrowserDomFacts.ResultItem) entry["Kind"] = facts.Kind;
+        if (facts.SearchScope is not null) entry["SearchScope"] = facts.SearchScope;
+        if (facts.SubmitRef is not null) entry["SubmitRef"] = facts.SubmitRef;
+        if (element.Form is not null) entry["Form"] = element.Form;
+        if (facts.Landmark is not null) entry["Landmark"] = facts.Landmark;
+        if (facts.Selected is { } selected) entry["Selected"] = selected;
+        return entry;
     }
 
     public async ValueTask<InteractionActionResult> ExecuteAsync(
@@ -268,10 +287,16 @@ public sealed class BrowserSurface : IInteractionSurface
     private static IReadOnlyList<InteractionCandidate> BuildCandidates(BrowserSnapshot snapshot, long revision)
     {
         var result = new List<InteractionCandidate>();
+        var facts = BrowserDomFacts.Derive(snapshot.Elements);
         foreach (var element in snapshot.Elements.Where(static item => item.Enabled))
         {
+            var fact = facts[element.Ref];
             var label = $"{element.Role} '{element.Name}' value='{element.Value}' context='{element.Context}'"
-                + (element.Search ? " purpose='search'" : "");
+                + (element.Search ? " purpose='search'" : "")
+                + (fact.SearchScope is { } scope ? $" scope='{scope}'" : "")
+                + (fact.Selected is { } selected ? $" selected={selected.ToString().ToLowerInvariant()}" : "")
+                + (fact.Landmark is "navigation" ? " region='navigation'" : "")
+                + (fact.InList && element.Role == "link" ? " result_item=true" : "");
             var actions = new List<InteractionAction>();
             if (element.Editable)
             {

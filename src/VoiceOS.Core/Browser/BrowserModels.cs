@@ -71,7 +71,13 @@ public sealed record BrowserElement(
     [property: JsonPropertyName("href")] string? Href,
     [property: JsonPropertyName("geometry")] BrowserGeometry Geometry,
     [property: JsonPropertyName("context")] string Context,
-    [property: JsonPropertyName("search")] bool Search = false);
+    [property: JsonPropertyName("search")] bool Search = false,
+    [property: JsonPropertyName("form")] string? Form = null,
+    [property: JsonPropertyName("submit")] bool Submit = false,
+    [property: JsonPropertyName("formAction")] string? FormAction = null,
+    [property: JsonPropertyName("landmark")] string? Landmark = null,
+    [property: JsonPropertyName("inList")] bool InList = false,
+    [property: JsonPropertyName("selected")] bool? Selected = null);
 
 public sealed record BrowserViewport(
     [property: JsonPropertyName("width")] int Width,

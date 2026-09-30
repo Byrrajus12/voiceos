@@ -15,7 +15,8 @@ public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode p
         IInteractionSurface surface,
         IInteractionDecisionSource decisions,
         InteractionBudget? budget = null,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        InteractionObservation? initialObservation = null)
     {
         ArgumentNullException.ThrowIfNull(goal);
         ArgumentNullException.ThrowIfNull(surface);
@@ -36,8 +37,9 @@ public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode p
         var progress = new InteractionProgress(0, 0, 0, 0);
         double previousGoalConfidence = 0;
         bool awaitingProgressJudgment = false;
-        var observation = await surface.ObserveAsync(token).ConfigureAwait(false);
-        ledger.Append(observation.Effects);
+        // A later plan step continues from the state the previous one ended in; no second observation.
+        var observation = initialObservation ?? await surface.ObserveAsync(token).ConfigureAwait(false);
+        if (initialObservation is null) ledger.Append(observation.Effects);
         var proofs = new List<ProofRecord>();
         if (goal.Step is { } initialStep && Evaluate(initialStep, null, null) is { Status: ProofStatus.Proved } initialProof
             && Acts(initialProof))
@@ -61,11 +63,12 @@ public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode p
                 awaitingProgressJudgment = false;
                 if (progress.ConsecutiveNoProgress >= budget.MaxConsecutiveNoProgress)
                     return Finish(InteractionCompletionState.Incomplete,
-                        "The browser task stopped after consecutive actions without semantic progress.");
+                        "The browser task stopped after consecutive actions without semantic progress.", reasonCode: "no_progress");
             }
 
             if (decision.Completion == InteractionCompletionState.Uncertain)
-                return Finish(InteractionCompletionState.Uncertain, decision.Detail ?? "Completion is uncertain.", decision.Choices);
+                return Finish(InteractionCompletionState.Uncertain, decision.Detail ?? "Completion is uncertain.", decision.Choices,
+                    decision.ReasonCode);
 
             if (decision.Completion == InteractionCompletionState.Complete)
             {
@@ -88,7 +91,8 @@ public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode p
                             "Repeated completion was suppressed because the evidence is unchanged."),
                         observation.StateKey, suppressed: true, observation.Evidence);
                     return Finish(InteractionCompletionState.Uncertain,
-                        "Completion was proposed again after rejection with unchanged evidence.", CompletionChoices());
+                        "Completion was proposed again after rejection with unchanged evidence.", CompletionChoices(),
+                        "completion_unconfirmed");
                 }
 
                 var assessment = await surface.AssessCompletionAsync(goal, observation, history.ToArray(), token).ConfigureAwait(false);
@@ -104,13 +108,14 @@ public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode p
                     observation.StateKey, suppressed: false, observation.Evidence);
                 progress = progress with { ConsecutiveNoProgress = progress.ConsecutiveNoProgress + 1 };
                 if (progress.ConsecutiveNoProgress >= budget.MaxConsecutiveNoProgress)
-                    return Finish(InteractionCompletionState.Incomplete, "Completion was rejected without new evidence.");
+                    return Finish(InteractionCompletionState.Incomplete, "Completion was rejected without new evidence.",
+                        reasonCode: "completion_unconfirmed");
                 continue;
             }
 
             if (decision.Action is null)
                 return Finish(InteractionCompletionState.Incomplete,
-                    decision.Detail ?? "No bounded action was selected.");
+                    decision.Detail ?? "No bounded action was selected.", reasonCode: "no_action");
 
             var action = decision.Action;
             previousGoalConfidence = decision.GoalConfidence;
@@ -121,7 +126,7 @@ public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode p
                         "Repeated action failure was suppressed because the evidence is unchanged."),
                     observation.StateKey, suppressed: true, observation.Evidence);
                 return Finish(InteractionCompletionState.Incomplete,
-                    "A repeated failure was suppressed until the observed state changes.");
+                    "A repeated failure was suppressed until the observed state changes.", reasonCode: "repeated_failure");
             }
 
             InteractionActionResult result;
@@ -149,14 +154,14 @@ public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode p
                 AddHistory(action, result, observation.StateKey, suppressed: false,
                     observation.Evidence);
                 return Finish(InteractionCompletionState.Uncertain,
-                    result.Detail ?? "The browser action changed tabs ambiguously.");
+                    result.Detail ?? "The browser action changed tabs ambiguously.", reasonCode: "topology");
             }
             // The companion definitively reported there is no earlier page: that is a failed operation, not a question.
             if (proofMode == ProofMode.On && action.Kind == InteractionActionKind.GoBack
                 && (result.Effects ?? []).Any(static e => e.Kind == EffectKind.NoEffect && e.Get("reason") == "NO_HISTORY"))
             {
                 AddHistory(action, result, observation.StateKey, suppressed: false, observation.Evidence);
-                return Finish(InteractionCompletionState.Incomplete, "There is no earlier page in this tab.");
+                return Finish(InteractionCompletionState.Incomplete, "There is no earlier page in this tab.", reasonCode: "no_history");
             }
             var next = await surface.ObserveAfterActionAsync(token).ConfigureAwait(false);
             ledger.Append(next.Effects, action.Id);
@@ -182,22 +187,24 @@ public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode p
                 if (verdict.Status == ProofStatus.Proved)
                     return Finish(InteractionCompletionState.Complete, $"proof:{verdict.Rule}");
                 if (verdict.Status == ProofStatus.Refuted)
-                    return Finish(InteractionCompletionState.Incomplete, $"proof_refuted:{verdict.Rule}");
+                    return Finish(InteractionCompletionState.Incomplete, $"proof_refuted:{verdict.Rule}", reasonCode: "proof_refuted");
             }
             if (progress.ConsecutiveNoProgress >= budget.MaxConsecutiveNoProgress)
                 return Finish(InteractionCompletionState.Incomplete,
-                    "The interaction stopped after reaching the no-progress budget.");
+                    "The interaction stopped after reaching the no-progress budget.", reasonCode: "no_progress");
             awaitingProgressJudgment = changed;
         }
 
-        return Finish(InteractionCompletionState.Incomplete, "The interaction budget was exhausted.");
+        return Finish(InteractionCompletionState.Incomplete, "The interaction budget was exhausted.", reasonCode: "budget_exhausted");
 
         // Shadow and On both evaluate and record; only On, for an active family, lets a verdict end the run.
-        bool Acts(ProofVerdict verdict) => proofMode == ProofMode.On && (activeFamilies is null || activeFamilies.Contains(verdict.Family));
+        // The postcondition of a plan step is its completion mechanism, so it acts whatever the proof mode.
+        bool Acts(ProofVerdict verdict) => goal.Step?.WithinPlan == true
+            || proofMode == ProofMode.On && (activeFamilies is null || activeFamilies.Contains(verdict.Family));
 
         ProofVerdict? Evaluate(OutcomeStep step, InteractionAction? action, TargetBinding? binding)
         {
-            if (proof is null || proofMode == ProofMode.Off) return null;
+            if (proof is null || proofMode == ProofMode.Off && !step.WithinPlan) return null;
             var verdict = proof.Evaluate(new(step, ledger.All, action, binding, observation));
             proofs.Add(new(progress.Actions, verdict, binding));
             return verdict;
@@ -227,9 +234,10 @@ public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode p
         InteractionRunResult Finish(
             InteractionCompletionState state,
             string? detail,
-            IReadOnlyList<InteractionChoice>? choices = null)
+            IReadOnlyList<InteractionChoice>? choices = null,
+            string? reasonCode = null)
             => new(state, observation, history.ToArray(), progress, detail, choices, ledger.All.ToArray(),
-                proofs.Count == 0 ? null : proofs.ToArray());
+                proofs.Count == 0 ? null : proofs.ToArray(), reasonCode);
 
         static IReadOnlyList<InteractionChoice> CompletionChoices() =>
         [

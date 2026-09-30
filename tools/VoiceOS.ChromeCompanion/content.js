@@ -169,6 +169,7 @@
       if (element instanceof HTMLAnchorElement && element.href) {
         result.href = redactObservationText(element.href);
       }
+      Object.assign(result, structuralFacts(element));
       return result;
     });
 
@@ -316,6 +317,37 @@
     if (roleOf(element) === "searchbox") return true;
     if (element instanceof HTMLInputElement && element.type === "search") return true;
     return typeof element.closest === "function" && element.closest("[role='search'], search") !== null;
+  }
+
+  // Structural facts only (form ownership, landmark, list membership, state); no site knowledge.
+  const formIds = new WeakMap();
+  function structuralFacts(element) {
+    const facts = {};
+    try {
+      const form = typeof element.closest === "function" ? element.closest("form") : null;
+      if (form) {
+        if (!formIds.has(form)) formIds.set(form, `f${formIds.size + 1}`);
+        facts.form = formIds.get(form);
+        try { facts.formAction = new URL(form.action, location.href).pathname.slice(0, 120); } catch { /* no usable action */ }
+        const type = (element.getAttribute("type") ?? "").toLowerCase();
+        if ((element instanceof HTMLInputElement && type === "submit")
+          || (element instanceof HTMLButtonElement && (type === "submit" || type === ""))) facts.submit = true;
+      }
+      const landmark = typeof element.closest === "function"
+        ? element.closest("nav, [role='navigation'], [role='search'], search, main, [role='main'], header, footer, aside, [role='dialog']") : null;
+      if (landmark) {
+        const tag = landmark.tagName.toLowerCase();
+        const role = landmark.getAttribute("role")?.toLowerCase();
+        facts.landmark = role ?? (tag === "nav" ? "navigation" : tag === "header" ? "banner" : tag === "footer" ? "contentinfo"
+          : tag === "aside" ? "complementary" : tag);
+      }
+      if (typeof element.closest === "function"
+        && element.closest("li, [role='listitem'], article, [role='article'], tr, [role='row']")) facts.inList = true;
+      const state = element.getAttribute("aria-selected") ?? element.getAttribute("aria-checked") ?? element.getAttribute("aria-pressed");
+      if (state === "true" || state === "false") facts.selected = state === "true";
+      else if (element instanceof HTMLInputElement && (element.type === "checkbox" || element.type === "radio")) facts.selected = element.checked;
+    } catch { /* facts are best effort */ }
+    return facts;
   }
 
   function accessibleName(element) {

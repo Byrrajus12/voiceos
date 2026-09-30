@@ -28,7 +28,7 @@ public interface IBrowserActivitySource
 public sealed record BrowserActivity(InteractionActionKind? Operation = null,
     string? Direction = null, string? Query = null, string? Objective = null,
     string? Destination = null, string? TargetRole = null, string? TargetName = null,
-    bool OpeningTab = false);
+    bool OpeningTab = false, string? StepText = null);
 
 public sealed class BrowserInteractionService(
     IChromeCompanionTransport transport,
@@ -44,6 +44,10 @@ public sealed class BrowserInteractionService(
     IBrowserStepCompiler? compiler = null) : IBrowserInteractionService, IBrowserActivitySource
 {
     private readonly IBrowserStepCompiler? _compiler = compiler ?? (normalizer is null ? null : new NormalizerStepCompiler(normalizer));
+    // Plans execute one semantic step at a time only for a real compiler; a bare normalizer keeps the flat legacy loop.
+    private readonly bool _stepRuntime = compiler is not null;
+    private volatile string? _stepText;
+    private static readonly InteractionBudget StepBudget = new(10, 8, 3, 12, TimeSpan.FromSeconds(50));
     public event Action<BrowserActivity>? ActionStarting;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private PendingRun? _pending;
@@ -474,7 +478,8 @@ public sealed class BrowserInteractionService(
                 ActionStarting?.Invoke(ActivityFor(goal, scope, action) with
                 {
                     TargetRole = element?.Role,
-                    TargetName = element?.Name
+                    TargetName = element?.Name,
+                    StepText = _stepText
                 });
             });
         return surface;
@@ -530,6 +535,8 @@ public sealed class BrowserInteractionService(
         BrowserGoal goal, BrowserSurface surface, TypeSafeBrowserDecisionSource decisions,
         CancellationToken cancellationToken, BrowserExecutionScope? scope = null, string? turnId = null)
     {
+        if (_stepRuntime && goal.Plan is not null)
+            return await RunPlanAsync(goal, surface, decisions, cancellationToken, scope, turnId).ConfigureAwait(false);
         // Observational framing: the step rides on the goal but no decision or completion consults it yet.
         var plan = goal.Normalization is null ? null : BrowserStepFramer.Frame(goal, turnId ?? surface.SessionId, scope);
         if (plan is not null)
@@ -556,6 +563,75 @@ public sealed class BrowserInteractionService(
             result.Progress.Decisions, result.Progress.Actions, surface.TabId, surface.SessionId,
             goal.Normalization?.Objective,
             Referents: ReferentPopulator.FromBrowserRun(result.Effects, result.Completion, surface.TabId,
+                surface.SessionId, surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title, DateTimeOffset.UtcNow));
+    }
+
+    /// <summary>
+    /// Runs the compiled plan one semantic step at a time. Each step is decided against only itself, observed in code,
+    /// and completed by its own postcondition; the next step starts from the state the previous one ended in.
+    /// </summary>
+    private async ValueTask<BrowserInteractionOutcome> RunPlanAsync(
+        BrowserGoal goal, BrowserSurface surface, TypeSafeBrowserDecisionSource decisions,
+        CancellationToken cancellationToken, BrowserExecutionScope? scope, string? turnId)
+    {
+        var plan = goal.Plan!;
+        var engine = new InteractionEngine(new PlannedStepEvaluator(goal, new BrowserProofEvaluator(goal, proofThresholds)),
+            ProofMode.On);
+        using var overall = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        overall.CancelAfter(TimeSpan.FromSeconds(120));
+        InteractionObservation? carry = null;
+        var effects = new List<Effect>();
+        int decisionsTotal = 0, actionsTotal = 0;
+        InteractionRunResult? last = null;
+        try
+        {
+            while (true)
+            {
+                var step = plan.Current;
+                decisions.Plan = plan;
+                var framed = PlanFraming.Frame(plan, goal, scope, turnId ?? surface.SessionId);
+                _stepText = step.Progress;
+                if (plan.CurrentStepIndex > 0 || step.Progress is not null)
+                    ActionStarting?.Invoke(new(StepText: step.Progress));
+                var stepTimer = Stopwatch.StartNew();
+                var result = await engine.RunAsync(new(step.Description, framed), surface, decisions, StepBudget,
+                    overall.Token, carry).ConfigureAwait(false);
+                logger?.LogInformation("Browser step index={Index}/{Count} kind={Kind} family={Family} outcome={Outcome} decisions={Decisions} actions={Actions} step_ms={Ms:F0} reason={Reason} rule={Rule}",
+                    plan.CurrentStepIndex + 1, plan.Steps.Count, step.Kind, framed.Family, result.Completion, result.Progress.Decisions,
+                    result.Progress.Actions, stepTimer.Elapsed.TotalMilliseconds, result.ReasonCode ?? "-", result.Detail);
+                LatencyTrace.Current?.Record($"step_{plan.CurrentStepIndex + 1}_{step.Kind.ToString().ToLowerInvariant()}",
+                    stepTimer.Elapsed.TotalMilliseconds);
+                decisionsTotal += result.Progress.Decisions;
+                actionsTotal += result.Progress.Actions;
+                effects.AddRange(result.Effects ?? []);
+                last = result;
+                carry = result.Observation.Revision == surface.CurrentRevision ? result.Observation : null;
+                if (result.Completion != InteractionCompletionState.Complete) break;
+                if (plan.IsLastStep)
+                {
+                    if (scope is { Kind: BrowserScopeKind.ActiveTab, ExplicitSelection: false } && actionsTotal == 0
+                        && step.Kind == PlanStepKind.Act)
+                        last = result with { Completion = InteractionCompletionState.Incomplete,
+                            Detail = "Nothing was done on the current page yet.", ReasonCode = "no_action" };
+                    break;
+                }
+                plan = plan.Advance();
+            }
+        }
+        finally { _stepText = null; }
+        foreach (var effect in effects)
+            logger?.LogInformation("Browser effect id={EffectId} {Effect}", effect.Id, effect.Summarize());
+        var final = last!;
+        _pending = final.Completion == InteractionCompletionState.Uncertain
+            ? new(goal, surface, decisions, final) : null;
+        logger?.LogInformation("Browser task outcome={Outcome} resumable={Resumable} detail={Detail} decisions={Decisions} actions={Actions} steps_done={Done}/{Total} origin={Origin}",
+            final.Completion, _pending is not null, final.Detail, decisionsTotal, actionsTotal,
+            plan.CurrentStepIndex + (final.Completion == InteractionCompletionState.Complete ? 1 : 0), goal.Plan!.Steps.Count,
+            BrowserSurface.LogOrigin(surface.LatestSnapshot?.Url));
+        return new(final.Completion, final.Completion == InteractionCompletionState.Complete ? null : final.Detail, final.Choices,
+            surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title, decisionsTotal, actionsTotal, surface.TabId, surface.SessionId,
+            goal.Normalization?.Objective ?? plan.FinalGoal,
+            Referents: ReferentPopulator.FromBrowserRun(effects, final.Completion, surface.TabId,
                 surface.SessionId, surface.LatestSnapshot?.Url, surface.LatestSnapshot?.Title, DateTimeOffset.UtcNow));
     }
 

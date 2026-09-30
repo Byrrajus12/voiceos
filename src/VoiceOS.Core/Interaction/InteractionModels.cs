@@ -95,14 +95,16 @@ public sealed record InteractionDecision(
     string? Detail = null,
     IReadOnlyList<InteractionChoice>? Choices = null,
     double GoalConfidence = 0,
-    TargetBinding? TargetBinding = null)
+    TargetBinding? TargetBinding = null,
+    string? ReasonCode = null)
 {
     public static InteractionDecision Act(InteractionAction action, string? detail = null)
         => new(InteractionCompletionState.Incomplete, action, detail);
     public static InteractionDecision Done(string? detail = null)
         => new(InteractionCompletionState.Complete, Detail: detail);
-    public static InteractionDecision Unsure(string? detail = null, IReadOnlyList<InteractionChoice>? choices = null)
-        => new(InteractionCompletionState.Uncertain, Detail: detail, Choices: choices);
+    public static InteractionDecision Unsure(string? detail = null, IReadOnlyList<InteractionChoice>? choices = null,
+        string? reasonCode = null)
+        => new(InteractionCompletionState.Uncertain, Detail: detail, Choices: choices, ReasonCode: reasonCode);
 }
 
 public sealed record InteractionHistoryEntry(
@@ -156,7 +158,8 @@ public sealed record InteractionRunResult(
     string? Detail = null,
     IReadOnlyList<InteractionChoice>? Choices = null,
     IReadOnlyList<Effect>? Effects = null,
-    IReadOnlyList<ProofRecord>? Proof = null);
+    IReadOnlyList<ProofRecord>? Proof = null,
+    string? ReasonCode = null);
 
 public interface IInteractionSurface
 {

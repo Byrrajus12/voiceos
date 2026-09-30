@@ -13,7 +13,9 @@ public enum ProofFamily
     /// <summary>A described target was activated and its consequence observed.</summary>
     Activate,
     /// <summary>Use the existing legacy browser behavior; no deterministic proof is attempted.</summary>
-    Reach
+    Reach,
+    /// <summary>A described target is present in the current content (plan steps only).</summary>
+    Locate
 }
 
 /// <summary>
@@ -26,7 +28,10 @@ public sealed record Descriptor(string Phrase, string? Query = null, string? Utt
 /// One proof-oriented unit of a command. <see cref="DescriptorReliable"/> is false when the request
 /// depends on earlier context the step does not represent.
 /// </summary>
-public sealed record OutcomeStep(string Id, ProofFamily Family, Descriptor What, bool DescriptorReliable = true);
+/// <param name="WithinPlan">The step belongs to a compiled <see cref="InteractionPlan"/>: its postcondition is local and
+/// deterministic, evaluated whatever the proof mode, and is the completion mechanism of the step.</param>
+public sealed record OutcomeStep(string Id, ProofFamily Family, Descriptor What, bool DescriptorReliable = true,
+    bool WithinPlan = false);
 
 /// <summary>The ordered steps of one command. Exactly one step is supported for now.</summary>
 public sealed record CommandPlan
