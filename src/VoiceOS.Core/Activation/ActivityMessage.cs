@@ -69,6 +69,8 @@ internal static class ActivityMessage
 
     public static string ForBrowserAction(BrowserActivity activity)
     {
+        // A compiled plan names what it is doing in its own words for the whole step.
+        if (SafeStepText(activity.StepText) is { } stepText) return stepText;
         if (activity.Operation == InteractionActionKind.Scroll)
             return activity.Direction?.ToLowerInvariant() switch
             {
@@ -95,6 +97,14 @@ internal static class ActivityMessage
             ? $"Working on {objective}…" : "Working in Chrome…";
     }
 
+    private static string? SafeStepText(string? value)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return null;
+        value = value.Trim().TrimEnd('.', '\u2026');
+        return value.Length is > 0 and <= 48 && value.All(c => char.IsLetterOrDigit(c) || c is ' ' or '-' or '.' or '+' or '#' or '\'' or '/')
+            ? value + "\u2026" : null;
+    }
+
     private static string? SafeLabel(string? value)
     {
         if (string.IsNullOrWhiteSpace(value)) return null;
@@ -112,6 +122,8 @@ internal static class ActivityMessage
         "The execution surface is ambiguous." => "Where should I do that?",
         "The context does not safely identify a surface." => "Where should I do that?",
         "Media intent needs clarification before controlling current playback." => "What should I play?",
+        // A question the runtime composed from a genuine ambiguity in the request is shown as is.
+        { Length: > 0 and <= 140 } question when question.EndsWith('?') => question,
         _ => "Could you clarify that request?"
     };
 
@@ -120,6 +132,11 @@ internal static class ActivityMessage
         "Text insertion is unavailable" => "Couldn't insert that text.",
         "Managed browser interaction is unavailable" => "Chrome is unavailable.",
         "Native UI interaction is not enabled yet." => "That app action isn't available yet.",
+        "The requested app isn't installed." => "That app isn't installed.",
+        "The chosen app doesn't match the requested app." => "I couldn't match that to an installed app.",
+        "Chrome is no longer the foreground application." => "Chrome lost focus.",
+        "Chrome lost foreground focus before browser observation." => "Chrome lost focus.",
+        _ when BrowserStepMessages.IsUserFacing(detail) => detail!,
         _ => "Couldn't complete that action."
     };
 }

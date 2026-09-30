@@ -1,6 +1,7 @@
 using VoiceOS.Core.Browser;
 using VoiceOS.Core.Decision;
 using VoiceOS.Core.Interaction;
+using VoiceOS.Core.Candidates;
 using Xunit;
 
 namespace VoiceOS.Core.Tests.Browser;
@@ -110,4 +111,55 @@ public sealed class BrowserStepCompilerTests
         var current = new CommandRouteDecision(CommandRoute.ComputerUse, .9, GoalShape: GoalShape.ActionOnSurface);
         Assert.True(SimpleStepFramer.MayBeSimple(current, "click Support"));
     }
+}
+
+public sealed class SurfacePlacementTests
+{
+    private sealed class Chooser : IContextualScopeDecisionSource
+    {
+        public int ReferentCalls;
+        public ValueTask<ContextualSurface> SelectAsync(string utterance, CommandRouteDecision intent,
+            ExecutionContextSnapshot context, IReadOnlyList<ContextualSurface> offered, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(ContextualSurface.Clarify);
+        public ValueTask<ReferentChoice> SelectReferentAsync(string utterance, IReadOnlyList<ReferentCandidate> candidates,
+            CancellationToken cancellationToken = default)
+        { ReferentCalls++; return ValueTask.FromResult(new ReferentChoice(ReferentChoiceKind.Unavailable)); }
+    }
+
+    private static readonly VoiceOS.Core.Candidates.WindowCandidate Chrome = new("w", "chrome", "Chrome", true, 42);
+    private static ExecutionContextSnapshot Context(params Referent[] referents)
+        => new(Chrome, [Chrome], true, [new BrowserTabInfo(3, 1, true, "https://example.org/page", "Page", BrowserTabProvenance.User)])
+        { Referents = referents };
+
+    [Fact]
+    public async Task CurrentPageRequest_StaysOnTheActiveTab_EvenWithOldReferentsAround()
+    {
+        var old = ReferentFixtures.OldItem();
+        var chooser = new Chooser();
+        var route = new CommandRouteDecision(CommandRoute.ComputerUse, .9, TaskRelation: TaskRelation.NewTask,
+            ContextDependency: ContextDependency.RequiresCurrentSurface, GoalShape: GoalShape.ActionOnSurface,
+            MediaRequestKind: MediaRequestKind.None) { TaskRelationEstablished = true };
+        var scope = await new ScopeResolver().ResolveAsync("click support", route, Context(old), chooser);
+        Assert.Equal(BrowserScopeKind.ActiveTab, scope.Browser!.Kind);
+        Assert.Equal(3, scope.Browser.TabId);
+        Assert.Equal(0, chooser.ReferentCalls); // a fresh command never consults history
+    }
+
+    [Fact]
+    public async Task FreshSelfContainedTask_OpensItsOwnTab_InsteadOfReusingTheVisiblePage()
+    {
+        var chooser = new Chooser();
+        var route = new CommandRouteDecision(CommandRoute.ComputerUse, .9, DestinationKind: SemanticDestinationKind.KnownService,
+            DestinationName: "GitHub", TaskRelation: TaskRelation.NewTask, ContextDependency: ContextDependency.SelfContained,
+            GoalShape: GoalShape.ActionOnSurface, MediaRequestKind: MediaRequestKind.None) { TaskRelationEstablished = true };
+        var scope = await new ScopeResolver().ResolveAsync("search GitHub for tauri", route, Context(ReferentFixtures.OldItem()), chooser);
+        Assert.Equal(BrowserScopeKind.NewTaskTab, scope.Browser!.Kind);
+        Assert.Equal("github.com", scope.Browser.Destination!.Host);
+        Assert.Equal(0, chooser.ReferentCalls);
+    }
+}
+
+internal static class ReferentFixtures
+{
+    public static Referent OldItem() => VoiceOS.Core.Tests.Interaction.ReferentStoreTests.Item("https://old.example/item", "Old item") with { Seq = 1 };
 }

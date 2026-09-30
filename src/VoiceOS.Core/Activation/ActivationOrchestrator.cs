@@ -673,7 +673,7 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
             run.ActionCount = browserResult.Actions;
             run.Outcome = browserResult.Completion.ToString();
             if (browserResult.Completion == InteractionCompletionState.Uncertain)
-                _logger.LogInformation("Clarification level=task_local category=browser_uncertain reason={Reason} choices={ChoiceCount}",
+                _logger.LogInformation("Clarification level=task_local category=browser_question question={Question} choices={ChoiceCount}",
                     browserResult.Detail, browserResult.Choices?.Count ?? 0);
             var browserPhase = browserResult.Completion switch
             {
@@ -791,13 +791,12 @@ public sealed class ActivationOrchestrator : IDisposable, IApplicationInteractio
                     targetVerdict, route.RequestedEntity, route.DestinationName ?? "-", decision.Plan.AppCandidateId ?? "-");
             if (targetVerdict is DirectTargetVerdict.NativeUnavailable or DirectTargetVerdict.NativeMismatch)
             {
-                run.Outcome = "Clarify";
-                PublishSnapshot(new(ApplicationInteractionPhase.NeedsChoice, kind,
+                // Not installed / not that app is a blocker, not a question the user can answer by rewording.
+                run.Outcome = "Failed";
+                PublishSnapshot(new(ApplicationInteractionPhase.Failed, kind,
                     transcript, targetVerdict == DirectTargetVerdict.NativeUnavailable
                         ? "The requested app isn't installed."
-                        : "The chosen app doesn't match the requested app.",
-                    [new InteractionChoice("retry", "Clarify request"), new InteractionChoice("cancel", "Cancel")],
-                    InteractionCompletionState.Uncertain));
+                        : "The chosen app doesn't match the requested app."));
                 return;
             }
             if (targetVerdict == DirectTargetVerdict.RerouteToBrowser)

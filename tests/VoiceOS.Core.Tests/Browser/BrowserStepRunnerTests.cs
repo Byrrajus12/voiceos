@@ -211,3 +211,133 @@ public sealed class BrowserStepRunnerTests
         Assert.Equal(ProofStatus.Inconclusive, evaluator.Evaluate(new(step, [activated, nav], click, other, obs)).Status);
     }
 }
+
+public sealed class StepRecoveryTests
+{
+    private static BrowserElement El(string r, string role, string name, bool editable = false, bool search = false)
+        => new(r, role, name, true, editable, null, null, new(0, 0, 100, 20, true), "", search);
+
+    private sealed class Page : IChromeCompanionTransport
+    {
+        public int Acts { get; private set; }
+        private static BrowserSnapshot Snap(string session, int tab) => new(tab, session, "r1", "https://example.org/", "Example", "text", false,
+            new(1280, 800, 0, 0), [El("e1", "link", "Alpha team"), El("e2", "link", "Beta team")], false);
+        public ValueTask<BrowserSnapshot> OpenTaskTabAsync(string s, string u, CancellationToken c = default) => ValueTask.FromResult(Snap(s, 7));
+        public ValueTask<BrowserSnapshot> ObserveAsync(string s, int t, CancellationToken c = default) => ValueTask.FromResult(Snap(s, t));
+        public ValueTask<BrowserSnapshot> ActAsync(BrowserActionRequest a, CancellationToken c = default) { Acts++; return ValueTask.FromResult(Snap(a.SessionId, a.TabId)); }
+        public ValueTask SelectTabAsync(string s, int t, string e, bool r, CancellationToken c = default) => ValueTask.CompletedTask;
+    }
+
+    private sealed class Gateway : IJevGateway
+    {
+        public int Calls;
+        public Task<IReadOnlyDictionary<string, JevAnswer>> AskAsync(object state, IReadOnlyDictionary<string, JevQuestionDto> q, CancellationToken c = default)
+        {
+            Calls++;
+            // The cheap decision is unsure: its operation confidence is below threshold.
+            return Task.FromResult<IReadOnlyDictionary<string, JevAnswer>>(new Dictionary<string, JevAnswer>
+            {
+                ["operation"] = new("choice", "CLICK", new Dictionary<string, double> { ["CLICK"] = .2, ["SCROLL_DOWN"] = .19 }, .1),
+                ["click_target"] = new("choice", "e1", new Dictionary<string, double> { ["e1"] = .5, ["e2"] = .4 }, .5)
+            });
+        }
+    }
+
+    private sealed class Repair(StepRepairResult? result) : IBrowserStepRepair
+    {
+        public int Calls;
+        public StepRepairRequest? Seen;
+        public ValueTask<StepRepairResult?> RepairAsync(StepRepairRequest r, CancellationToken c = default) { Calls++; Seen = r; return ValueTask.FromResult(result); }
+    }
+
+    private static readonly BrowserExecutionScope Active = new(BrowserScopeKind.ActiveTab, 7, "https://example.org/",
+        EndState: SemanticEndState.ResourceOpened, GoalShape: GoalShape.ActionOnSurface);
+
+    private static BrowserInteractionService Service(Page page, IBrowserStepRepair? repair)
+        => new(page, new Gateway(), proofMode: ProofMode.On, repair: repair, compiler: new OpenRouterCompilerStub());
+
+    private sealed class OpenRouterCompilerStub : IBrowserStepCompiler
+    {
+        public ValueTask<CompiledBrowserTask?> CompileAsync(string u, CancellationToken c = default) => ValueTask.FromResult<CompiledBrowserTask?>(null);
+    }
+
+    [Fact]
+    public async Task LowDecisionConfidence_IsRepairedInternally_AndTheRepairedActionRuns()
+    {
+        var page = new Page();
+        var repair = new Repair(new(StepRepairKind.Bind, "e2", "click"));
+        var outcome = await Service(page, repair).RunAsync("open the beta team", scope: Active);
+        Assert.Equal(1, repair.Calls);
+        Assert.Equal(1, page.Acts); // the repaired click ran
+        Assert.NotEqual(InteractionCompletionState.Uncertain, outcome.Completion);
+        Assert.Null(outcome.Choices);
+        // The repair saw the exact reason the cheap decision was unsure.
+        Assert.Equal("low_operation_confidence", repair.Seen!.UncertaintyCode);
+    }
+
+    [Fact]
+    public async Task RepairThatFindsNoWay_EndsAsASpecificFailure_NotAQuestion()
+    {
+        var repair = new Repair(new(StepRepairKind.Impossible, Reason: "The page has no team member list"));
+        var outcome = await Service(new Page(), repair).RunAsync("open the beta team", scope: Active);
+        Assert.Equal(1, repair.Calls);
+        Assert.Equal(InteractionCompletionState.Incomplete, outcome.Completion);
+        Assert.Equal("The page has no team member list.", outcome.Detail);
+        Assert.Null(outcome.Choices);
+    }
+
+    [Fact]
+    public async Task UnavailableRepair_StillEndsAsAFailure_NeverAClarification()
+    {
+        var outcome = await Service(new Page(), new Repair(null)).RunAsync("open the beta team", scope: Active);
+        Assert.Equal(InteractionCompletionState.Incomplete, outcome.Completion);
+        Assert.False(string.IsNullOrWhiteSpace(outcome.Detail));
+    }
+
+    [Fact]
+    public async Task GenuineAmbiguity_CanStillAskTheUser_WithItsOwnQuestion()
+    {
+        var repair = new Repair(new(StepRepairKind.NeedsUser, Question: "Which John did you mean: John Smith or John Lee?",
+            Options: ["John Smith", "John Lee"]));
+        var outcome = await Service(new Page(), repair).RunAsync("open John's document", scope: Active);
+        Assert.Equal(InteractionCompletionState.Uncertain, outcome.Completion);
+        Assert.Equal("Which John did you mean: John Smith or John Lee?", outcome.Detail);
+        Assert.Equal("Which John did you mean: John Smith or John Lee?", VoiceOS.Core.Activation.ActivityMessage.ForClarification(outcome.Detail));
+    }
+
+    [Fact]
+    public async Task AQuestionWithoutRealOptions_IsNotAccepted()
+    {
+        var repair = new Repair(new(StepRepairKind.NeedsUser, Question: "Which one?", Options: ["only one"]));
+        var outcome = await Service(new Page(), repair).RunAsync("open the beta team", scope: Active);
+        Assert.Equal(InteractionCompletionState.Incomplete, outcome.Completion);
+    }
+
+    [Fact]
+    public async Task ARepairIsNeverRetried_OnlyOneRepairCallPerStep()
+    {
+        var repair = new Repair(new(StepRepairKind.Reframe, NewDescription: "Open the Beta team page"));
+        var outcome = await Service(new Page(), repair).RunAsync("open the beta team", scope: Active);
+        Assert.Equal(1, repair.Calls);
+        Assert.NotEqual(InteractionCompletionState.Uncertain, outcome.Completion);
+    }
+}
+
+public sealed class StepMessageTests
+{
+    [Fact]
+    public void RunningStep_IsShownInHumanWords()
+        => Assert.Equal("Searching GitHub…", VoiceOS.Core.Activation.ActivityMessage.ForBrowserAction(new(StepText: "Searching GitHub")));
+
+    [Fact]
+    public void Failures_NameTheBlocker_NotAConfidenceOrAGenericClarify()
+    {
+        var plan = new InteractionPlan("x", "y", [new(PlanStepKind.Search, "s", "q"), new(PlanStepKind.Locate, "l", Target: "Tauri")], 1);
+        var message = BrowserStepMessages.Failure(plan, "budget_exhausted", null, null);
+        Assert.Equal("Couldn't find Tauri in these results.", message);
+        Assert.Equal(message, VoiceOS.Core.Activation.ActivityMessage.ForFailure(message));
+        var search = new InteractionPlan("x", "y", [new(PlanStepKind.Search, "s", "q")]);
+        Assert.Equal(BrowserStepMessages.NoSearchControl, BrowserStepMessages.Failure(search, "no_action", null, null));
+        Assert.DoesNotContain("%", message);
+    }
+}
