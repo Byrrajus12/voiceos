@@ -835,6 +835,7 @@ test("content observe marks the search field via a [role=search] ancestor, indep
 // A small stateful model of Chrome's per-tab session history. Entries created by VoiceOS's
 // synthetic clicks are not user-activated, so chrome.tabs.goBack skips them (history-manipulation
 // intervention) while the page's own history.back() traverses them - as observed in real Chrome.
+// VoiceOS therefore traverses through the page first.
 function historyChrome(initialTabs) {
   const tabsState = new Map();
   for (const [id, spec] of Object.entries(initialTabs))
@@ -900,7 +901,8 @@ test("history: VOS-owned tab A->B->C by programmatic navigation goes back C->B, 
   const first = await h.back(5, "session-hist-5");
   assert.equal(first.snapshot.url, "https://b.test/");
   assert.equal(first.snapshot.tabId, 5);
-  assert.equal(h.calls.pageTraversals, 1, "chrome.tabs.goBack rejected; the page traversal used the real history");
+  assert.equal(h.calls.pageTraversals, 1);
+  assert.equal(h.calls.goBack, 0, "page-level history is the primary mechanism, not tabs.goBack");
   const second = await h.back(5, "session-hist-5");
   assert.equal(second.snapshot.url, "https://a.test/");
   assert.equal(h.calls.create + h.calls.remove, 0, "the tab is never recreated or closed to simulate history");
@@ -971,4 +973,25 @@ test("history: tab identity and ownership stay stable through ordinary same-tab 
   assert.equal(observed.ownedByVoiceOS, true);
   assert.equal(vm.runInContext("ownedTaskTabs.get(14)", h.context), "session-hist-14");
   assert.equal(h.calls.create, 0);
+});
+
+test("history: Forward mirrors Back through the page session history; a Back-less tab has no Forward to fake", async () => {
+  const h = historyChrome({ 15: { entries: ["https://a.test/", "https://b.test/", "https://c.test/"] } });
+  vm.runInContext('ownedTaskTabs.set(15, "session-hist-15")', h.context);
+  await h.back(15, "session-hist-15");
+  const forward = await vm.runInContext(
+    'actInOwnedTab({ tabId: 15, sessionId: "session-hist-15", revision: "r1", action: "FORWARD" })', h.context);
+  assert.equal(forward.snapshot.url, "https://c.test/");
+  await assert.rejects(vm.runInContext(
+    'actInOwnedTab({ tabId: 15, sessionId: "session-hist-15", revision: "r1", action: "FORWARD" })', h.context),
+    error => error.code === "NO_HISTORY");
+});
+
+test("history: when the page cannot be scripted, Chrome's tab API is the fallback for Back", async () => {
+  const h = historyChrome({ 16: { entries: ["https://a.test/", "https://b.test/"], activated: [0] } });
+  h.chrome.scripting.executeScript = async () => { throw new Error("Cannot access contents of the page."); };
+  vm.runInContext('ownedTaskTabs.set(16, "session-hist-16")', h.context);
+  const result = await h.back(16, "session-hist-16");
+  assert.equal(result.snapshot.url, "https://a.test/");
+  assert.equal(h.calls.goBack, 1);
 });

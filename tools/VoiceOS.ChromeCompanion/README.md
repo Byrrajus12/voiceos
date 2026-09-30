@@ -160,3 +160,15 @@ new injected observer.
 
 No observed limitation in this basic proof requires `chrome.debugger`; ordinary
 content-script DOM mechanisms cover its snapshot, typing, and click scope.
+
+## Back / Forward and Chrome's skippable history entries
+
+VoiceOS clicks with synthetic `element.click()`, which carries no trusted user activation.
+Chrome's history-manipulation intervention can therefore treat the entries those clicks create
+as skippable: `chrome.tabs.goBack()` (and possibly the toolbar Back button) may skip or reject
+them even though the session history contains them. VoiceOS does not try to change that.
+Its own `BACK`/`FORWARD` actions run `history.back()`/`history.forward()` in the page, which
+walks the real session history (including VoiceOS-generated entries and the user's earlier
+pages in an adopted tab), and succeed only on an observed traversal. `chrome.tabs.goBack()`
+is used only when the page cannot be scripted. Only a genuine new child tab (opened by a
+VoiceOS action) with no same-tab history falls back to returning to its opener.
