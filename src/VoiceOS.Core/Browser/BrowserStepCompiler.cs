@@ -65,7 +65,7 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
         "never a selector, script or element reference. Keep EVERY meaningful intermediate intent in order; never collapse 'A then B then C' into C. " +
         "Step kinds: Reach (get to a named site or page; at most one, first), Search (enter a query and apply it), " +
         "Locate (make a described target visible in the content now shown: a result, section or item), " +
-        "Open (activate a described target and follow it), History (go back or forward one page; target is 'back' or 'forward'), Act (any other bounded in-page operation). " +
+        "Open (activate a described control, link or result and follow it: a page number, a tab, the third result, a button), History (go back or forward one page; target is 'back' or 'forward'), Act (only an operation with no described target, such as scrolling or a media action). " +
         "Destinations are never guessed: set preferredService and Reach only when the user named that site or service; a request with no named site is a generic web task. " +
         "Use 1 to 5 steps. Scope each Search to where the user said: a site-wide search is one Search step with the exact query. " +
         "For Search also say which search surface the user meant in searchScope: Global (the service-wide search; the default), " +

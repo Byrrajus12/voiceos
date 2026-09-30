@@ -84,6 +84,19 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             _logger?.LogInformation("Browser completion evidence page={Page} evidence={Evidence} reason={Reason} threshold={Threshold:F2} goal_achieved={Goal:F2}",
                 PageSummary(context.Observation), evidence.Strength, evidence.Reason, completionThreshold, achieved);
             var proposed = answers.GetValueOrDefault("operation")?.SelectedChoice;
+            // An Open whose target is not among the controls on screen looks further down the page first (bounded);
+            // it never clicks a control that is not the target, and needs no separate Locate step to do it.
+            if (stepMode && planStep!.Kind == PlanStepKind.Open && binding is null
+                && BrowserEvidence.CanScrollDown(context.Observation.Evidence)
+                && context.RecentHistory.Count(h => h.Action.Kind == InteractionActionKind.Scroll) < 6
+                && context.Observation.Candidates.SelectMany(c => c.Actions)
+                    .FirstOrDefault(a => a.Kind == InteractionActionKind.Scroll && a.Direction == "down") is { } down
+                && !context.RecentHistory.Any(h => h.Result.IsFailure && h.Action.Signature == down.Signature
+                    && h.ObservationStateKey == context.Observation.StateKey))
+            {
+                _logger?.LogInformation("Browser step shortcut=scroll_to_find_target");
+                return InteractionDecision.Act(down);
+            }
             // The target this step deliberately bound is the action: a wrongly bound control is a binding failure,
             // which the step postcondition must not paper over. Operation confidence does not gate it.
             if (stepMode && planStep!.Kind == PlanStepKind.Open && binding is not null

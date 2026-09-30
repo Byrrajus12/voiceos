@@ -57,7 +57,8 @@ public sealed class InteractionEngine(IProofEvaluator? proof = null, ProofMode p
                 var sameActionRepeated = history.TakeLast(3).Count(x =>
                     x.Action.Signature == last.Action.Signature) > 1;
                 var advanced = decision.GoalConfidence > previousGoalConfidence + .08
-                    || (!sameActionRepeated && HasRelevantStateChange(last));
+                    // Scrolling that reveals new content is exploration, not a repeated no-op; the decision source bounds it.
+                    || (HasRelevantStateChange(last) && (!sameActionRepeated || last.Action.Kind == InteractionActionKind.Scroll));
                 progress = progress with { ConsecutiveNoProgress = advanced
                     ? 0 : progress.ConsecutiveNoProgress + 1 };
                 awaitingProgressJudgment = false;
