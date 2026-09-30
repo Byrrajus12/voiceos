@@ -173,6 +173,7 @@ public sealed class BrowserEffectTests
 
         var moved = Assert.Single(result.Effects!);
         Assert.Equal(EffectKind.HistoryMoved, moved.Kind);
+        Assert.Equal("back", moved.Get("direction"));
         Assert.Equal("https://a.test/two", moved.Get("from"));
         Assert.Equal("https://a.test/one", moved.Get("to"));
     }

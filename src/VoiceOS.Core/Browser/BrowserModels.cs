@@ -92,7 +92,14 @@ public sealed record BrowserSnapshot(
     [property: JsonPropertyName("elements")] IReadOnlyList<BrowserElement> Elements,
     [property: JsonPropertyName("canGoBack")] bool CanGoBack = false,
     [property: JsonPropertyName("adoptedFromTabId")] int? AdoptedFromTabId = null,
-    [property: JsonIgnore] BrowserActionSignals? Signals = null);
+    [property: JsonIgnore] BrowserActionSignals? Signals = null,
+    // Task-level Back with no same-tab history: the companion returned to the tab this one was opened from.
+    [property: JsonPropertyName("returnedFromTabId")] int? ReturnedFromTabId = null,
+    // Grounded tab facts from the companion (Chrome owns the history itself; these are ownership/lineage).
+    [property: JsonPropertyName("ownedByVoiceOS")] bool? OwnedByVoiceOs = null,
+    [property: JsonPropertyName("adopted")] bool? Adopted = null,
+    [property: JsonPropertyName("openerTabId")] int? OpenerTabId = null,
+    [property: JsonPropertyName("documentId")] string? DocumentId = null);
 
 /// <summary>
 /// Navigation signal the companion reported alongside an ACT snapshot (<c>timings.signal</c>:

@@ -202,15 +202,17 @@ public sealed class BrowserSurface : IInteractionSurface
             var adopted = next.TabId != snapshot.TabId;
             if (adopted)
             {
-                if (action.Kind != InteractionActionKind.Activate
-                    || next.AdoptedFromTabId != snapshot.TabId
+                var returned = action.Kind == InteractionActionKind.GoBack
+                    && next.ReturnedFromTabId == snapshot.TabId;
+                if (!returned && (action.Kind != InteractionActionKind.Activate
+                        || next.AdoptedFromTabId != snapshot.TabId)
                     || !StringComparer.Ordinal.Equals(next.SessionId, _sessionId))
                     throw new ChromeCompanionException("TAB_TOPOLOGY_AMBIGUOUS",
                         "The action changed tabs without a verified task-surface transition.");
                 _tabId = next.TabId;
-                _pendingAcquisition = ("adopted", snapshot.TabId);
-                _logger?.LogInformation("Browser adopted task tab old={OldTab} new={NewTab}",
-                    snapshot.TabId, next.TabId);
+                _pendingAcquisition = (returned ? "returned_to_opener" : "adopted", snapshot.TabId);
+                _logger?.LogInformation("Browser {Transition} task tab old={OldTab} new={NewTab}",
+                    returned ? "returned to opener" : "adopted", snapshot.TabId, next.TabId);
             }
             else ValidateOwnership(next);
             LatestSnapshot = next;
