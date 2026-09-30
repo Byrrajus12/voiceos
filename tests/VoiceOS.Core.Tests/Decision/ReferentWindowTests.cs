@@ -26,6 +26,9 @@ public sealed class ReferentWindowTests
         => new(transcript, "Paint", [], windows, [MediaOperation.Play], [SnapDirection.Left, SnapDirection.Right],
             ReferentWindowIds: referents);
 
+    private static DecisionState StaleState(string transcript, params WindowCandidate[] windows)
+        => State(transcript, null, windows) with { StaleReferentWindow = true };
+
     private static TypeSafeJevDecisionEngine Engine(string json)
         => new("key", new HttpClient(new FakeHttpHandler(json, HttpStatusCode.OK)), "jev-latest", 0.35, 0.40,
             Microsoft.Extensions.Logging.Abstractions.NullLogger<TypeSafeJevDecisionEngine>.Instance);
@@ -93,6 +96,50 @@ public sealed class ReferentWindowTests
     {
         var result = await Engine(Answers("Referent", "w3", windowConfidence: 0.85)).DecideAsync(State("close that one", ["w1", "w3"], Notes, Other, Paint));
         Assert.Equal("w3", result.Plan.WindowCandidateId);
+    }
+
+    [Fact]
+    public void StaleReferentOffersReferentMode_OnlyWhenTheLatestWindowClosed()
+    {
+        var engine = Engine("{}");
+        var stale = engine.BuildBaseRequest(StaleState("maximize it", Paint)).Questions["window_target_mode"].Criteria!;
+        Assert.True(stale.ContainsKey("Referent"));
+        Assert.Contains("since been closed", stale["Referent"]);
+        Assert.False(engine.BuildBaseRequest(State("maximize it", null, Paint)).Questions["window_target_mode"].Criteria!.ContainsKey("Referent"));
+    }
+
+    [Fact]
+    public async Task ContinuingAClosedWindow_NeverFallsBackToTheForegroundWindow()
+    {
+        // The closed window is absent from the candidates; the foreground Paint window is unrelated.
+        var result = await Engine(Answers("Referent", "w2", "MaximizeCurrentWindow")).DecideAsync(StaleState("maximize it", Paint));
+        Assert.True(result.Plan.RequiresClarification);
+        Assert.Null(result.Plan.WindowCandidateId);
+        Assert.Null(result.Plan.WindowAppCandidateId);
+    }
+
+    [Fact]
+    public async Task ContinuingAClosedWindow_WithoutAnyPick_StillClarifies()
+    {
+        var result = await Engine(Answers("Referent", null, "SnapCurrentWindow", ", \"snap_dir\": {\"type\":\"choice\",\"choice\":\"Left\",\"confidence\":0.95}"))
+            .DecideAsync(StaleState("snap it left", Paint));
+        Assert.True(result.Plan.RequiresClarification);
+    }
+
+    [Fact]
+    public async Task OrdinaryForegroundIt_StillWorks_WhenNoClosedWindowIsBeingContinued()
+    {
+        var result = await Engine(Answers("Current", null, "MaximizeCurrentWindow")).DecideAsync(State("maximize it", null, Paint));
+        Assert.False(result.Plan.RequiresClarification);
+        Assert.Equal(WindowTargetMode.Current, result.Plan.WindowTargetMode);
+        Assert.IsType<MaximizeWindowStep>(SemanticProgramPlanner.ToSingleStepProgram(result.Plan)!.Steps[0]);
+    }
+
+    [Fact]
+    public async Task ExplicitCurrentReference_IsUnaffectedByAStaleClosedWindow()
+    {
+        var result = await Engine(Answers("Current", null, "MaximizeCurrentWindow")).DecideAsync(StaleState("maximize this", Paint));
+        Assert.False(result.Plan.RequiresClarification);
     }
 
     [Fact]
@@ -197,5 +244,49 @@ public sealed class NativeReferentTests
         var windows = new[] { new WindowCandidate("w1", "notepad", "old", Hwnd: 11) };
         var valid = store.Validate(new(true, [DocsTab], windows), Now);
         Assert.Empty(NativeReferents.ImplicitWindowIds(valid, windows));
+    }
+
+    [Fact]
+    public void ClosedWindow_IsRemovedFromCandidates_AndMarksTheStaleContinuation()
+    {
+        var store = new ReferentStore();
+        store.Observe(new(ReferentKind.AppWindow, "A", ReferentProvenance.DirectStepResult, Now, Hwnd: 11, ProcessName: "notepad"));
+        store.InvalidateWindow(11);
+        var windows = new[] { new WindowCandidate("w9", "mspaint", "Paint", true, 12) };
+        var valid = store.Validate(new(true, [], windows), Now);
+        Assert.Empty(NativeReferents.ImplicitWindowIds(valid, windows));
+        Assert.True(store.ContinuesClosedWindow(valid, Now));
+    }
+
+    [Fact]
+    public void WindowClosedByTheUser_IsDetectedByValidation_AsStale()
+    {
+        var store = new ReferentStore();
+        store.Observe(new(ReferentKind.AppWindow, "A", ReferentProvenance.DirectStepResult, Now, Hwnd: 11, ProcessName: "notepad"));
+        var valid = store.Validate(new(true, [], []), Now);
+        Assert.Empty(valid);
+        Assert.True(store.ContinuesClosedWindow(valid, Now));
+    }
+
+    [Fact]
+    public void NewerReferentOrExpiry_EndsTheStaleContinuation()
+    {
+        var store = new ReferentStore();
+        store.Observe(new(ReferentKind.AppWindow, "A", ReferentProvenance.DirectStepResult, Now, Hwnd: 11, ProcessName: "notepad"));
+        store.InvalidateWindow(11, Now);
+        Assert.False(store.ContinuesClosedWindow([], Now.AddHours(1)));
+        store.Observe(new(ReferentKind.Page, "docs", ReferentProvenance.NavigationResult, Now, 1, "s", "https://a.test/"));
+        Assert.False(store.ContinuesClosedWindow([], Now));
+    }
+
+    [Fact]
+    public void NeverUsedWindow_OrLiveNewerReferent_IsNotAStaleContinuation()
+    {
+        var store = new ReferentStore();
+        Assert.False(store.ContinuesClosedWindow([], Now));
+        store.Observe(new(ReferentKind.AppWindow, "A", ReferentProvenance.DirectStepResult, Now, Hwnd: 11, ProcessName: "notepad"));
+        store.InvalidateWindow(11);
+        var newer = new Referent(ReferentKind.AppWindow, "B", ReferentProvenance.DirectStepResult, Now, Hwnd: 12, ProcessName: "mspaint") { Seq = 999 };
+        Assert.False(store.ContinuesClosedWindow([newer], Now));
     }
 }

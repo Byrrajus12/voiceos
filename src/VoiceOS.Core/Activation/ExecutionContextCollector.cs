@@ -43,7 +43,8 @@ public static class ExecutionContextCollector
         var state = new DecisionState(transcript, foreground?.Title ?? "", apps, windows,
             [MediaOperation.Play, MediaOperation.Pause, MediaOperation.Toggle, MediaOperation.Next, MediaOperation.Previous],
             [SnapDirection.Left, SnapDirection.Right], topology,
-            ReferentWindowIds: NativeReferents.ImplicitWindowIds(validReferents, windows));
+            ReferentWindowIds: NativeReferents.ImplicitWindowIds(validReferents, windows),
+            StaleReferentWindow: referents?.ContinuesClosedWindow(validReferents, now) == true);
         trace.Record("context", timer.Elapsed.TotalMilliseconds);
         trace.Record("decision_prep", prepMs);
         logger.LogInformation("Decision prep enum={EnumMs} proc={ProcMs} aumid={AumidMs} hit={Hits} miss={Misses}",

@@ -77,6 +77,8 @@ public sealed class ReferentStore(int maxEntries = 32, TimeSpan? ttl = null)
     private readonly object _gate = new();
     private readonly Dictionary<string, Referent> _entries = [];
     private long _seq;
+    private Referent? _closedWindow;
+    private DateTimeOffset _closedAt;
 
     public TimeSpan Ttl { get; } = ttl ?? DefaultTtl;
     public int Count { get { lock (_gate) return _entries.Count; } }
@@ -86,6 +88,7 @@ public sealed class ReferentStore(int maxEntries = 32, TimeSpan? ttl = null)
         lock (_gate)
         {
             var stamped = referent with { Seq = ++_seq };
+            _closedWindow = null; // anything newer supersedes the closed window as the latest thing used
             // A page's identity is its tab; when a tab navigates, the page it showed before is replaced.
             _entries[stamped.Key] = stamped;
             while (_entries.Count > maxEntries)
@@ -103,9 +106,29 @@ public sealed class ReferentStore(int maxEntries = 32, TimeSpan? ttl = null)
     }
 
     /// <summary>Removes the window referent for a handle (e.g. VoiceOS just closed it).</summary>
-    public void InvalidateWindow(nint hwnd)
+    public void InvalidateWindow(nint hwnd, DateTimeOffset? now = null)
     {
-        lock (_gate) _entries.Remove($"win:{hwnd}");
+        lock (_gate)
+        {
+            if (_entries.Remove($"win:{hwnd}", out var closed)) Tombstone(closed, now ?? DateTimeOffset.UtcNow);
+        }
+    }
+
+    private void Tombstone(Referent closed, DateTimeOffset now)
+    {
+        if (closed.Kind != ReferentKind.AppWindow) return;
+        if (_closedWindow is null || closed.Seq >= _closedWindow.Seq) { _closedWindow = closed; _closedAt = now; }
+    }
+
+    /// <summary>
+    /// True when the most recent thing VoiceOS used was a native window that has since closed: an implicit
+    /// follow-up may be continuing it, and must not be silently reinterpreted as some other window.
+    /// </summary>
+    public bool ContinuesClosedWindow(IReadOnlyList<Referent> valid, DateTimeOffset now)
+    {
+        lock (_gate)
+            return _closedWindow is { } closed && now - _closedAt <= Ttl
+                && !valid.Any(r => r.Seq > closed.Seq);
     }
 
     /// <summary>Most recent first, without validating. Test/diagnostic use.</summary>
@@ -128,7 +151,7 @@ public sealed class ReferentStore(int maxEntries = 32, TimeSpan? ttl = null)
                 if (now - entry.LastSeen > Ttl) { _entries.Remove(entry.Key); continue; }
                 switch (Check(entry, inventory))
                 {
-                    case Validity.Invalid: _entries.Remove(entry.Key); break;
+                    case Validity.Invalid: _entries.Remove(entry.Key); Tombstone(entry, now); break;
                     case Validity.Unknown: break;
                     default:
                         var refreshed = Refresh(entry, inventory);

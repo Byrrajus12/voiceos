@@ -323,6 +323,10 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
                     : WindowTargetMode.Current;
                 referentMode = wtmAnswer.SelectedChoice == ReferentMode
                     && state.ReferentWindowIds is { Count: > 0 };
+                // The follow-up continues a window that has since closed: never fall back to the foreground one.
+                if (wtmAnswer.SelectedChoice == ReferentMode && state.ReferentWindowIds is not { Count: > 0 }
+                    && state.StaleReferentWindow)
+                    windowTargetModeUncertain = true;
             }
         }
 
@@ -498,8 +502,9 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         return index == mostRecentFirst.Count - 1 ? "oldest" : $"#{index + 1} newest";
     }
 
-    private static Dictionary<string, string> WindowModeCriteria(bool referentOffered)
+    private static Dictionary<string, string> WindowModeCriteria(bool liveReferent, bool staleReferent)
     {
+        var referentOffered = liveReferent || staleReferent;
         var criteria = new Dictionary<string, string>
         {
             ["Current"] = referentOffered
@@ -507,7 +512,9 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
                 : "User refers to the current or foreground window using words like 'this', 'the current window', 'it', 'the window'. No specific application name is mentioned as the target.",
             ["Named"] = "User names a specific application as the target — 'Chrome', 'VS Code', 'Discord', 'the terminal', 'Google Chrome'. The command is directed at that particular named app's window."
         };
-        if (referentOffered)
+        if (staleReferent && !liveReferent)
+            criteria[ReferentMode] = "User refers back, with a pronoun or description such as 'it' or 'that one', to the window VoiceOS last used, which has since been closed, without naming an app. Never use for 'this' or 'the current window'.";
+        else if (referentOffered)
             criteria[ReferentMode] = "User refers back to a window VoiceOS recently opened or used, with a pronoun or description such as 'it', 'that one', 'the one I just opened', without naming an app. Only windows marked as recently opened or used by VoiceOS qualify. Never use for 'this' or 'the current window'.";
         return criteria;
     }
@@ -626,7 +633,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             ["window_target_mode"] = new JevQuestionDto(
                 "choice",
                 "Assume the user is issuing a window operation (close, maximize, minimize, snap). Is the target the current foreground window, or a specific named application window?",
-                WindowModeCriteria(referentWindows.Count > 0)),
+                WindowModeCriteria(referentWindows.Count > 0, state.StaleReferentWindow)),
 
             ["is_compound"] = new JevQuestionDto(
                 "noul",
