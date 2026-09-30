@@ -205,7 +205,7 @@
       return;
     }
 
-    if (message.action === "BACK") {
+    if (message.action === "BACK" || message.action === "FORWARD") {
       // Only the revision is checked here. The service worker performs the browser-level
       // traversal and confirms it from navigation evidence; a page cannot report it.
       return null;
