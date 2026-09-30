@@ -163,3 +163,26 @@ internal static class ReferentFixtures
 {
     public static Referent OldItem() => VoiceOS.Core.Tests.Interaction.ReferentStoreTests.Item("https://old.example/item", "Old item") with { Seq = 1 };
 }
+
+public sealed class UndecidedPlacementTests
+{
+    private sealed class Undecided : IContextualScopeDecisionSource
+    {
+        public ValueTask<ContextualSurface> SelectAsync(string u, CommandRouteDecision i, ExecutionContextSnapshot c,
+            IReadOnlyList<ContextualSurface> o, CancellationToken t = default) => ValueTask.FromResult(ContextualSurface.Clarify);
+    }
+
+    [Fact]
+    public async Task FreshNamedTask_WhenThePickerCannotDecide_GetsItsOwnTab_NotAQuestion()
+    {
+        var chrome = new WindowCandidate("w", "chrome", "Chrome", true, 42);
+        var context = new ExecutionContextSnapshot(chrome, [chrome], true,
+            [new BrowserTabInfo(3, 1, true, "https://example.org/", "Example", BrowserTabProvenance.User)]);
+        var route = new CommandRouteDecision(CommandRoute.ComputerUse, .98, RequestedEntity: RequestedEntityKind.NamedEntity,
+            TaskRelation: TaskRelation.NewTask, ContextDependency: ContextDependency.Uncertain, GoalShape: GoalShape.SurfaceOnly,
+            MediaRequestKind: MediaRequestKind.None) { TaskRelationEstablished = true };
+        var scope = await new ScopeResolver().ResolveAsync("go to npm and search for express", route, context, new Undecided());
+        Assert.Equal(ExecutionScopeKind.Browser, scope.Kind);
+        Assert.Equal(BrowserScopeKind.NewTaskTab, scope.Browser!.Kind);
+    }
+}

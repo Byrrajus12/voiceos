@@ -171,6 +171,7 @@ public sealed class BrowserSurface : IInteractionSurface
         if (facts.SearchScope is not null) entry["SearchScope"] = facts.SearchScope;
         if (facts.SubmitRef is not null) entry["SubmitRef"] = facts.SubmitRef;
         if (element.Form is not null) entry["Form"] = element.Form;
+        if (element.Submit) entry["Submit"] = true;
         if (facts.Landmark is not null) entry["Landmark"] = facts.Landmark;
         if (facts.Selected is { } selected) entry["Selected"] = selected;
         return entry;
@@ -306,7 +307,7 @@ public sealed class BrowserSurface : IInteractionSurface
                 {
                     actions.Add(new($"r{revision}:insert:{element.Ref}", InteractionActionKind.TypeText, element.Ref));
                     // Enter applies a field that holds text (search boxes without a submit button).
-                    if (element.Search || element.Role == "searchbox")
+                    if (element.Search || element.Role == "searchbox" || facts[element.Ref].Kind == BrowserDomFacts.SearchField)
                         actions.Add(new($"r{revision}:submit:{element.Ref}", InteractionActionKind.PressKey, element.Ref));
                 }
             }

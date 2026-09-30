@@ -223,10 +223,25 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             var fields = elements.Where(e => e.Enabled && e.Editable && e.Kind == BrowserDomFacts.SearchField
                 && e.SearchScope != "local").ToArray();
             var typed = fields.FirstOrDefault(e => string.Equals(e.Value?.Trim(), step.Query.Trim(), StringComparison.OrdinalIgnoreCase));
-            if (typed?.SubmitRef is { } submit && Offered(submit, InteractionActionKind.Activate) is { } click && !AlreadyFailed(click))
+            // The form's own submit controls, real submit buttons first then a control named for searching; one that
+            // already produced no effect is skipped, and Enter follows when none is left.
+            if (typed is not null)
             {
-                _logger?.LogInformation("Browser step shortcut=submit_search target={Target}", submit);
-                return InteractionDecision.Act(click);
+                var submits = elements.Where(e => e.Enabled && e.Id != typed.Id && e.Role is "button" or "link"
+                        && (typed.Form is not null && e.Form == typed.Form || e.Id == typed.SubmitRef)
+                        && (e.Submit && NormalizeName(e.Name).Contains("search") || NormalizeName(e.Name) is "search" or "go" or "find")
+                        && Offered(e.Id, InteractionActionKind.Activate) is not null)
+                    .OrderByDescending(static e => e.Submit)
+                    .ThenByDescending(static e => NormalizeName(e.Name) == "search").ToArray();
+                foreach (var candidate in submits)
+                    if (Offered(candidate.Id, InteractionActionKind.Activate) is { } click && !AlreadyFailed(click)
+                        // A control already tried under this name that changed nothing is not tried again under a new ref.
+                        && !context.RecentHistory.Any(h => h.Result.IsFailure && h.Action.Kind == InteractionActionKind.Activate
+                            && h.TargetLabel is not null && context.Observation.Candidates.FirstOrDefault(c => c.Id == candidate.Id)?.Label == h.TargetLabel))
+                    {
+                        _logger?.LogInformation("Browser step shortcut=submit_search target={Target}", candidate.Id);
+                        return InteractionDecision.Act(click);
+                    }
             }
             // No submit control in the form (a script-driven search box): Enter applies the field.
             if (typed is not null && Offered(typed.Id, InteractionActionKind.PressKey) is { } enter && !AlreadyFailed(enter))
@@ -234,16 +249,30 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                 _logger?.LogInformation("Browser step shortcut=submit_with_enter target={Target}", typed.Id);
                 return InteractionDecision.Act(enter);
             }
-            if (typed is null && fields.Length == 1 && Offered(fields[0].Id, InteractionActionKind.SetText) is { } set)
+            // Several whole-site search boxes (a hero and a header one) do the same thing: take the first one in view.
+            var field = fields.OrderByDescending(static e => e.InViewport).FirstOrDefault();
+            if (typed is null && field is not null && Offered(field.Id, InteractionActionKind.SetText) is { } set)
             {
                 var action = set with { Text = step.Query.Trim() };
                 if (!AlreadyFailed(action))
                 {
-                    _logger?.LogInformation("Browser step shortcut=enter_query target={Target}", fields[0].Id);
+                    _logger?.LogInformation("Browser step shortcut=enter_query target={Target}", field.Id);
                     return InteractionDecision.Act(action);
                 }
             }
             return null;
+        }
+        // Locate: the target is not present yet, so look further down the page while there is more page; no model call.
+        if (step.Kind == PlanStepKind.Locate && BrowserEvidence.CanScrollDown(context.Observation.Evidence)
+            && context.RecentHistory.Count(h => h.Action.Kind == InteractionActionKind.Scroll) < 8)
+        {
+            var down = context.Observation.Candidates.SelectMany(c => c.Actions)
+                .FirstOrDefault(a => a.Kind == InteractionActionKind.Scroll && a.Direction == "down");
+            if (down is not null && !AlreadyFailed(down))
+            {
+                _logger?.LogInformation("Browser step shortcut=scroll_to_locate");
+                return InteractionDecision.Act(down);
+            }
         }
         if (step.Kind == PlanStepKind.Open && NormalizeName(step.Target) is { Length: > 0 } target)
         {

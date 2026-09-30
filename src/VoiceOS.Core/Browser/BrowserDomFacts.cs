@@ -25,6 +25,8 @@ public static class BrowserDomFacts
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex SiteScope = new(@"\b(this\s+(?:site|website)|all\s+of|entire\s+site|everywhere|the\s+web)\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
+    // A text field labelled as a search box (a combobox outside any [role=search] landmark) is still a search field.
+    private static readonly Regex NamedSearch = new(@"search", RegexOptions.IgnoreCase | RegexOptions.Compiled);
     private static readonly Regex SubmitWords = new(@"^\s*(search|go|find|submit|apply|enter)\b|\bsearch\b",
         RegexOptions.IgnoreCase | RegexOptions.Compiled);
 
@@ -34,7 +36,7 @@ public static class BrowserDomFacts
         var result = new Dictionary<string, ElementFacts>(StringComparer.Ordinal);
         foreach (var element in elements)
         {
-            var searchField = element.Editable && (element.Search || element.Role == "searchbox");
+            var searchField = element.Editable && (element.Search || element.Role == "searchbox" || NamedSearch.IsMatch(element.Name ?? ""));
             var kind = searchField ? SearchField
                 : element.Editable ? Field
                 : element.Submit ? SubmitControl

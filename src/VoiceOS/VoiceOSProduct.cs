@@ -139,7 +139,8 @@ public sealed class VoiceOSProduct : IDisposable
                 proofMode: config.BrowserProofMode,
                 compiler: new OpenRouterBrowserStepCompiler(
                     new HttpClient(openRouterHandler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(15) },
-                    Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")),
+                    Environment.GetEnvironmentVariable("OPENROUTER_API_KEY"),
+                    loggerFactory.CreateLogger<OpenRouterBrowserStepCompiler>()),
                 repair: new OpenRouterBrowserStepRepair(
                     new HttpClient(openRouterHandler, disposeHandler: false) { Timeout = TimeSpan.FromSeconds(20) },
                     Environment.GetEnvironmentVariable("OPENROUTER_API_KEY")));

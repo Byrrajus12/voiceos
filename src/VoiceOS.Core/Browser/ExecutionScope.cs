@@ -404,6 +404,13 @@ public sealed class ScopeResolver
         var selected = await Timed("scope_surface", () => contextual.SelectAsync(utterance, route, context, offered, cancellationToken))
             .ConfigureAwait(false);
         if (!offered.Contains(selected)) selected = ContextualSurface.Clarify;
+        // A picker that cannot settle placement is an internal uncertainty, not a question: an established fresh task
+        // that names something to reach, with no dependence on the visible page, simply gets its own tab.
+        if (selected == ContextualSurface.Clarify && route.Route == CommandRoute.ComputerUse && route.RequestsNamedEntity
+            && route.TaskRelationEstablished && route.TaskRelation == TaskRelation.NewTask
+            && route.ContextDependency == ContextDependency.Uncertain
+            && route.SurfacePreference != SurfacePreference.Native && route.TabDisposition == TabDisposition.Unspecified)
+            selected = ContextualSurface.NewBrowserTaskTab;
         return selected switch
         {
             ContextualSurface.ActiveBrowserTab when active is not null => Browser(Select(active, BrowserScopeKind.ActiveTab)),

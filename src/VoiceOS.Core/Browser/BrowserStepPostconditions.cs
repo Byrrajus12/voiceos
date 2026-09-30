@@ -5,7 +5,7 @@ namespace VoiceOS.Core.Browser;
 
 /// <summary>One element as the observation evidence reports it (only what postconditions and shortcuts need).</summary>
 internal sealed record EvidenceElement(string Id, string? Role, string? Name, string? Href, string? Value, bool Editable,
-    bool Enabled, bool InViewport, string? Kind, string? SearchScope, string? SubmitRef);
+    bool Enabled, bool InViewport, string? Kind, string? SearchScope, string? SubmitRef, string? Form = null, bool Submit = false);
 
 internal static class BrowserEvidence
 {
@@ -25,7 +25,7 @@ internal static class BrowserEvidence
                 bool Flag(string name) => e.TryGetProperty(name, out var v) && v.ValueKind == JsonValueKind.True;
                 if (Text("id") is not { } id) continue;
                 list.Add(new(id, Text("Role"), Text("Name"), Text("Href"), Text("Value"), Flag("Editable"), Flag("Enabled"),
-                    Flag("InViewport"), Text("Kind"), Text("SearchScope"), Text("SubmitRef")));
+                    Flag("InViewport"), Text("Kind"), Text("SearchScope"), Text("SubmitRef"), Text("Form"), Flag("Submit")));
             }
         }
         catch { }
@@ -41,6 +41,20 @@ internal static class BrowserEvidence
             return document.RootElement.TryGetProperty("visible_text", out var t) ? t.GetString() : null;
         }
         catch { return null; }
+    }
+
+    /// <summary>More page lies below the viewport (scroll position + viewport height is short of the document height).</summary>
+    public static bool CanScrollDown(string? evidence)
+    {
+        try
+        {
+            if (evidence is null) return false;
+            using var document = JsonDocument.Parse(evidence);
+            if (!document.RootElement.TryGetProperty("viewport", out var v)) return false;
+            int Read(string name) => v.TryGetProperty(name, out var n) && n.ValueKind == JsonValueKind.Number ? n.GetInt32() : 0;
+            return Read("documentHeight") > 0 && Read("scrollY") + Read("height") + 40 < Read("documentHeight");
+        }
+        catch { return false; }
     }
 
     public static string? Url(string? evidence)
@@ -108,8 +122,10 @@ internal sealed class PlannedStepEvaluator(BrowserGoal goal, IProofEvaluator leg
         if (string.IsNullOrWhiteSpace(value) || !StringComparer.OrdinalIgnoreCase.Equals(value, query))
             return ProofVerdict.NotYet(family, "query_not_entered");
         var readback = textSet.Get("readback");
-        if (textSet.Get("matched") != "true" && !(readback is not null
-                && string.Equals(Squash(readback), Squash(value), StringComparison.OrdinalIgnoreCase)))
+        // No readback means the field could not be re-identified after the action (the page changed under it); the
+        // companion reported the entry succeeded. A readback that differs is a refusal of the text.
+        if (textSet.Get("matched") != "true" && readback is not null
+                && !string.Equals(Squash(readback), Squash(value), StringComparison.OrdinalIgnoreCase))
             return ProofVerdict.NotYet(family, "text_not_confirmed");
         // The consequence must come from an action after the one that entered the text: the submit.
         if (StringComparer.Ordinal.Equals(textSet.ActionId, action.Id)) return ProofVerdict.NotYet(family, "not_submitted");

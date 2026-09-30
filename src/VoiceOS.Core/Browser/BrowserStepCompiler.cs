@@ -2,6 +2,7 @@ using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using Microsoft.Extensions.Logging;
 using VoiceOS.Core.Interaction;
 
 namespace VoiceOS.Core.Browser;
@@ -60,7 +61,8 @@ public static class SimpleStepFramer
     }
 }
 
-public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKey) : IBrowserStepCompiler
+public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKey,
+    Microsoft.Extensions.Logging.ILogger? logger = null) : IBrowserStepCompiler
 {
     public const string Prompt =
         "Compile the user's browser request into an ordered plan of semantic steps. Each step is one desired operation or outcome, " +
@@ -147,7 +149,10 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
         {
             throw new InfrastructureUnavailableException(UnavailableReason.BrowserGoalService, "Browser help is unavailable right now.");
         }
-        return Parse(content, utterance);
+        var compiled = Parse(content, utterance);
+        if (compiled is null)
+            logger?.LogWarning("Browser compile rejected provider plan: {Plan}", content.Length > 900 ? content[..900] : content);
+        return compiled;
     }
 
     /// <summary>Validates the provider JSON into a plan; null when any part is unsafe or malformed.</summary>
