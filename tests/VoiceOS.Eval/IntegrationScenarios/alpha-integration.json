@@ -1,0 +1,46 @@
+// Alpha integration dogfood: six bounded tasks, each run once. No sign-in, purchases or forms beyond search.
+[
+  {
+    "id": "int.generic-search", "name": "Generic web search must not invent a service", "family": "alpha-integration",
+    "tags": ["alpha-integration", "browser", "chrome"], "preconditions": [ { "kind": "companionConnected" } ], "timeoutSeconds": 120,
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+    "transcript": "Search for Rust GUI framework.",
+    "expect": { "outcome": "Complete" }
+  },
+  {
+    "id": "int.github-search", "name": "Explicit GitHub search", "family": "alpha-integration",
+    "tags": ["alpha-integration", "browser", "chrome"], "preconditions": [ { "kind": "companionConnected" } ], "timeoutSeconds": 120,
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+    "transcript": "Search GitHub for Rust GUI framework.",
+    "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "github.com/search" } }
+  },
+  {
+    "id": "int.first-result-back", "name": "Open the first result here, then go back", "family": "alpha-integration",
+    "tags": ["alpha-integration", "browser", "chrome"],
+    "setup": [ { "kind": "startProcess", "file": "chrome.exe", "args": "https://github.com/search?q=rust+gui+framework&type=repositories" }, { "kind": "wait", "ms": 5000 }, { "kind": "focusWindow", "process": "chrome" }, { "kind": "wait", "ms": 500 } ],
+    "preconditions": [ { "kind": "companionConnected" }, { "kind": "foregroundProcess", "process": "chrome" } ],
+    "cleanup": [ { "kind": "closeNewTabs" } ], "timeoutSeconds": 120,
+    "turns": [
+      { "transcript": "Open the first result here.", "expect": { "outcome": "Complete", "scope": ["ActiveTab"], "newTabs": { "max": 0 } } },
+      { "transcript": "Go back.", "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "github.com/search" } } }
+    ]
+  },
+  {
+    "id": "int.scroll-down", "name": "Simple current-page request", "family": "alpha-integration",
+    "tags": ["alpha-integration", "browser", "chrome"],
+    "setup": [ { "kind": "startProcess", "file": "chrome.exe", "args": "https://en.wikipedia.org/wiki/Apollo_13" }, { "kind": "wait", "ms": 4000 }, { "kind": "focusWindow", "process": "chrome" }, { "kind": "wait", "ms": 500 } ],
+    "preconditions": [ { "kind": "companionConnected" }, { "kind": "foregroundProcess", "process": "chrome" } ],
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+    "transcript": "Scroll down.",
+    "expect": { "outcome": "Complete", "browserOperations": { "include": ["Scroll"] }, "maxActions": 1 }
+  },
+  {
+    "id": "int.fresh-multistep", "name": "Fresh multi-step task, then voice Back in a VOS-owned tab", "family": "alpha-integration",
+    "tags": ["alpha-integration", "browser", "chrome"], "preconditions": [ { "kind": "companionConnected" } ], "timeoutSeconds": 150,
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+    "turns": [
+      { "transcript": "Go to Wikipedia, search for Ada Lovelace and open the Charles Babbage page.", "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "Charles_Babbage" } } },
+      { "transcript": "Go back.", "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "Ada_Lovelace" } } }
+    ]
+  }
+]
