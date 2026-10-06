@@ -89,15 +89,32 @@ public sealed class BrowserInteractionService(
     }
     public event Action<BrowserActivity>? ActionStarting;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private (string ActivationId, string Utterance, Task<CompiledBrowserTask?> Task, Stopwatch Clock)? _prefetch;
+    private (string ActivationId, string Utterance, Task<CompiledBrowserTask?> Task, Stopwatch Clock, CancellationTokenSource Cts)? _prefetch;
     private readonly double _preparedFreshnessThresholdMs = preparedFreshnessThresholdMs;
 
     public void PrefetchNormalization(string utterance, string activationId, CancellationToken cancellationToken = default)
     {
         if (_compiler is null) return;
+        // The same utterance in the same activation is compiled once (a re-route must not start a second call).
+        if (_prefetch is { } existing && existing.ActivationId == activationId && string.Equals(existing.Utterance, utterance, StringComparison.Ordinal))
+        {
+            logger?.LogInformation("Browser normalization prefetch=reused");
+            return;
+        }
+        _prefetch?.Cts.Cancel();
         var clock = Stopwatch.StartNew();
-        var task = CompileAsync(utterance, cancellationToken);
-        _prefetch = (activationId, utterance, task, clock);
+        var cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _prefetch = (activationId, utterance, CompileAsync(utterance, cts.Token), clock, cts);
+    }
+
+    /// <summary>A prefetched compile the run turned out not to need (the request was framed in code): stop paying for it.</summary>
+    private void DropPrefetch(string? activationId, string reason)
+    {
+        if (_prefetch is not { } p || p.ActivationId != activationId) return;
+        _prefetch = null;
+        p.Cts.Cancel();
+        Observe(p.Task);
+        logger?.LogInformation("Browser normalization prefetch=unused reason={Reason}", reason);
     }
 
     public async ValueTask<BrowserInteractionOutcome> RunAsync(
@@ -170,7 +187,10 @@ public sealed class BrowserInteractionService(
             // One known page operation (Back, Forward, scroll) is executed once, directly: no compile, no decision model.
             if (scope is { PageOperation: not PageOperation.None, TabId: not null } && selectionTask is not null
                 && RevealIntent.Parse(utterance) is null)
+            {
+                DropPrefetch(activationId, "page_operation");
                 return await RunPageOperationAsync(goal, scope, sessionId, selectionTask, cancellationToken).ConfigureAwait(false);
+            }
 
             var normalizationTimer = Stopwatch.StartNew();
             if (scope?.IsSurfaceOnly != true)
@@ -181,7 +201,10 @@ public sealed class BrowserInteractionService(
                     ? (Task.FromResult<CompiledBrowserTask?>(simple), null)
                     : BeginNormalization(goal.OriginalUtterance, activationId, cancellationToken);
                 if (simple is not null)
+                {
                     logger?.LogInformation("Browser compile=skipped reason=simple_step kind={Kind}", simple.Plan.Current.Kind);
+                    DropPrefetch(activationId, "simple_step");
+                }
                 CompiledBrowserTask? compiled = null;
                 if (selectionTask is not null)
                 {
@@ -222,6 +245,7 @@ public sealed class BrowserInteractionService(
             else
             {
                 logger?.LogInformation("Browser normalization=skipped reason=surface_only");
+                DropPrefetch(activationId, "surface_only");
                 if (selectionTask is not null)
                 {
                     var selection = await selectionTask.ConfigureAwait(false);

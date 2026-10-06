@@ -222,6 +222,18 @@ public sealed class BrowserOverlapTests
         Assert.Equal(2, normalizer.Calls);
     }
 
+    [Fact]
+    public async Task ADuplicatePrefetchOfTheSameUtteranceInOneActivation_CompilesOnce_AndAnUnusedOneIsCancelled()
+    {
+        var normalizer = new ControlledNormalizer();
+        var service = new BrowserInteractionService(new ControlledTransport(), BlockedGateway(), normalizer);
+        service.PrefetchNormalization("find ripgrep", "a1");
+        service.PrefetchNormalization("find ripgrep", "a1");   // a re-route reaches the same point again
+        Assert.Equal(1, normalizer.Calls);
+        normalizer.Complete(ControlledNormalizer.Result);
+        await Task.CompletedTask;
+    }
+
     private static FakeGateway BlockedGateway()
         => new((_, _) => Answers(("operation", Choice("BLOCKED", .99)), ("stuck", Noul(.99))));
 
