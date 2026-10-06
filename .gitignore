@@ -49,6 +49,10 @@ coverage/
 *.tmp
 *.log
 
+# Python caches
+__pycache__/
+*.py[cod]
+
 # Docs (except companion publishing/privacy guides and canonical icons)
 docs/*
 !docs/chrome-web-store.md
