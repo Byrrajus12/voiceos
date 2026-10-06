@@ -50,7 +50,7 @@ public sealed class BrowserInteractionService(
     ILogger<BrowserInteractionService>? logger = null,
     IBrowserTextValueResolver? textValues = null,
     Func<nint, bool>? foregroundVerifier = null,
-    double preparedFreshnessThresholdMs = 150,
+    double preparedFreshnessThresholdMs = 10_000,
     IBrowserStepRepair? repair = null,
     IBrowserValueExtractor? extractor = null,
     IBrowserBlockerAssessor? blocker = null) : IBrowserInteractionService, IBrowserActivitySource
@@ -442,8 +442,8 @@ public sealed class BrowserInteractionService(
 
         var decisions = new TypeSafeBrowserDecisionSource(gateway, goal, logger: logger, textValues: textValues);
         var surface = CreateSurface(goal, scope, decisions, sessionId, tabId: null, expectedFirstUrl: null);
-        // The page kept hydrating while normalization ran; only reuse the startup snapshot as the
-        // first observation when it finished at (or after) normalization, within a small margin.
+        // The prepared startup observation is consumed once whichever finished first; only one so old that the page has surely
+        // moved on (well beyond any normal compile) is observed again.
         var reuse = startupDoneAtMs is not { } doneAt || (normalizationDoneAtMs - doneAt) <= _preparedFreshnessThresholdMs;
         surface.Prepare(startupSnapshot, reuse);
         ActionStarting?.Invoke(ActivityFor(goal, scope, null) with { StepText = goal.Plan?.Current.Progress });

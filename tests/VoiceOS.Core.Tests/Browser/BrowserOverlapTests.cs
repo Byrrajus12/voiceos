@@ -234,6 +234,52 @@ public sealed class BrowserOverlapTests
         await Task.CompletedTask;
     }
 
+    // -- the prepared startup is consumed once, whichever finishes first -------------------------------------------
+
+    private sealed class GatedOpenTransport : IChromeCompanionTransport
+    {
+        private readonly TaskCompletionSource _open = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        public int Opens { get; private set; }
+        public int Observes { get; private set; }
+        public void FinishStartup() => _open.TrySetResult();
+        public async ValueTask<BrowserSnapshot> OpenTaskTabAsync(string s, string u, CancellationToken c = default)
+        {
+            Opens++;
+            await _open.Task;
+            return Snap(s, 42);
+        }
+        public ValueTask<BrowserSnapshot> ObserveAsync(string s, int t, CancellationToken c = default) { Observes++; return ValueTask.FromResult(Snap(s, t)); }
+        public ValueTask<BrowserSnapshot> ActAsync(BrowserActionRequest a, CancellationToken c = default) => ValueTask.FromResult(Snap(a.SessionId, a.TabId));
+        public ValueTask SelectTabAsync(string s, int t, string u, bool r, CancellationToken c = default) => ValueTask.CompletedTask;
+        private static BrowserSnapshot Snap(string s, int t) => new(t, s, "r1", "https://example.com/", "Example", "text", false, new(1280, 800, 0, 0), [], false);
+    }
+
+    private static async Task<GatedOpenTransport> RunPrepared(Func<ControlledNormalizer, GatedOpenTransport, Task<Task>> release)
+    {
+        var normalizer = new ControlledNormalizer();
+        var transport = new GatedOpenTransport();
+        var service = new BrowserInteractionService(transport, BlockedGateway(), normalizer);
+        var scope = new BrowserExecutionScope(BrowserScopeKind.NewTaskTab, Destination: new Uri("https://example.com/"));
+        var run = service.RunAsync("search for something", scope: scope).AsTask();
+        await await release(normalizer, transport);
+        await run;
+        Assert.Equal(1, transport.Opens);
+        Assert.Equal(1, transport.Observes);     // only the recovery look: the prepared startup observation was the first one, used once
+        return transport;
+    }
+
+    [Fact]
+    public Task PreparedStartup_IsReused_WhenTheCompileFinishesFirst()
+        => RunPrepared((n, t) => { n.Complete(ControlledNormalizer.Result); t.FinishStartup(); return Task.FromResult(Task.CompletedTask); });
+
+    [Fact]
+    public Task PreparedStartup_IsReused_WhenTheSurfaceFinishesFirst_EvenWellBeforeTheCompile()
+        => RunPrepared(async (n, t) => { t.FinishStartup(); await Task.Delay(300); n.Complete(ControlledNormalizer.Result); return Task.CompletedTask; });
+
+    [Fact]
+    public Task PreparedStartup_IsReused_WhenBothFinishTogether()
+        => RunPrepared((n, t) => { t.FinishStartup(); n.Complete(ControlledNormalizer.Result); return Task.FromResult(Task.CompletedTask); });
+
     private static FakeGateway BlockedGateway()
         => new((_, _) => Answers(("operation", Choice("BLOCKED", .99)), ("stuck", Noul(.99))));
 
