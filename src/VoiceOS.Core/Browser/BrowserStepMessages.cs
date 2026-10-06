@@ -50,11 +50,11 @@ public static class BrowserStepMessages
         if (code == "ambiguous_target") return "I couldn't tell which one you meant on this page.";
         var afterSearch = plan.Completed.Any(static s => s.Kind == PlanStepKind.Search);
         var target = Short(step.Target);
-        // The search for the target ran out of page: say that, not a model's confidence.
+        // Only a document bottom that was actually observed is "the end of the page"; running out of recovery is not.
         if (step.Kind is PlanStepKind.Open or PlanStepKind.Locate && target is not null && observation is not null
             && code is null or "budget_exhausted" or "blocked" or "no_action" or "weak_target" or "low_operation_confidence"
-                or "correction_exhausted" or "unoffered_operation" or "invalid_target"
-            && !BrowserEvidence.CanScrollDown(observation.Evidence))
+                or "correction_exhausted" or "unoffered_operation" or "invalid_target" or "ambiguous_target"
+            && BrowserEvidence.AtDocumentEnd(observation.Evidence))
             return $"I reached the end of the page but couldn't find {target}.";
         switch (step.Kind)
         {

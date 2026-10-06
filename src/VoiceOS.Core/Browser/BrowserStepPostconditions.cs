@@ -80,6 +80,20 @@ internal static class BrowserEvidence
         catch { return false; }
     }
 
+    /// <summary>The viewport was actually observed at the bottom of a document of known height. Missing or zero measurements are not "the end".</summary>
+    public static bool AtDocumentEnd(string? evidence)
+    {
+        try
+        {
+            if (evidence is null) return false;
+            using var document = JsonDocument.Parse(evidence);
+            if (!document.RootElement.TryGetProperty("viewport", out var v)) return false;
+            int Read(string name) => v.TryGetProperty(name, out var n) && n.ValueKind == JsonValueKind.Number ? n.GetInt32() : 0;
+            return Read("documentHeight") > 0 && Read("height") > 0 && Read("scrollY") + Read("height") + 40 >= Read("documentHeight");
+        }
+        catch { return false; }
+    }
+
     public static string? Url(string? evidence)
     {
         try
