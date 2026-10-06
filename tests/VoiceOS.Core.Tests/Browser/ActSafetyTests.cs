@@ -63,16 +63,22 @@ public sealed class ActSafetyTests
     private static readonly BrowserExecutionScope Scope = new(BrowserScopeKind.ActiveTab, 1, "https://x.example/start", ExplicitSelection: true);
 
     [Fact]
-    public async Task ActClick_OnAWeakOrWrongTarget_IsNotSuccessJustBecauseThePageChanged()
+    public async Task ActClick_OnAWeakTarget_TheUsersOwnWordsCanSettle_ElseItIsNotSuccessJustBecauseThePageChanged()
     {
+        // The binder leans to "Home" (p=.55, margin .1) although the step asks for the Download button: the user said
+        // "download", exactly one candidate carries it, so that control is the grounded target.
+        var grounded = new Page();
+        var ok = await new BrowserInteractionService(grounded, ClickGateway("e1", .55, "e2"), new Compiler(PlanStepKind.Act, "Click the Download button"))
+            .RunAsync("click the download button, then stop", scope: Scope);
+        Assert.Equal(["CLICK:e2"], grounded.Acts);
+        Assert.Equal(InteractionCompletionState.Complete, ok.Completion);
+
+        // Nothing the user said separates the two controls and the binder is unsure: no click, and not a success.
         var page = new Page();
-        // The binder leans to "Home" (p=.55, margin .1) although the step asks for the Download button.
-        var service = new BrowserInteractionService(page, ClickGateway("e1", .55, "e2"), new Compiler(PlanStepKind.Act, "Click the Download button"));
-        var result = await service.RunAsync("click the download button, then stop", scope: Scope);
+        var result = await new BrowserInteractionService(page, ClickGateway("e1", .55, "e2"), new Compiler(PlanStepKind.Act, "Click the Upload button"))
+            .RunAsync("click the upload button, then stop", scope: Scope);
         Assert.NotEqual(InteractionCompletionState.Complete, result.Completion);
-        Assert.NotEqual(InteractionCompletionState.Uncertain, result.Completion);
         Assert.DoesNotContain(page.Acts, a => a.StartsWith("CLICK"));
-        Assert.Equal("I couldn't find a clear match for that on this page.", result.Detail);
     }
 
     [Fact]

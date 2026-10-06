@@ -28,7 +28,8 @@ public sealed record ProofVerdict(
         => new(family, ProofStatus.Refuted, rule, detail, effects);
 }
 
-public enum BindingMethod { ExactLabel, JevChoice, UserChoice }
+/// <summary>Grounded: one candidate is singled out by words/position the user actually said (not by model belief).</summary>
+public enum BindingMethod { ExactLabel, JevChoice, UserChoice, Grounded }
 
 /// <summary>How strongly a binding identifies its target. Weak bindings never prove anything.</summary>
 public enum BindingStrength { Weak, Moderate, Strong }
@@ -53,7 +54,7 @@ public sealed record ProofThresholds(
     public BindingStrength Classify(TargetBinding binding)
     {
         // The user picked this control themselves: nothing is stronger evidence of which one is meant.
-        if (binding.Method is BindingMethod.ExactLabel or BindingMethod.UserChoice) return BindingStrength.Strong;
+        if (binding.Method is BindingMethod.ExactLabel or BindingMethod.UserChoice or BindingMethod.Grounded) return BindingStrength.Strong;
         if (binding.P is not { } p || binding.Margin is not { } margin) return BindingStrength.Weak;
         if (p >= StrongP && margin >= StrongMargin) return BindingStrength.Strong;
         if (p >= ModerateP && margin >= ModerateMargin) return BindingStrength.Moderate;

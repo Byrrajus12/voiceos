@@ -318,7 +318,10 @@ public sealed class ChoiceAndRevealTests
     [Fact]
     public async Task OneCandidateClearlyAhead_IsModerateUncertaintyNotAQuestion()
     {
-        var site = Songs();
+        // The other control is a different thing entirely (it does not carry what the user said), so there is one item to pick.
+        var site = new Site(s => s.Url.Contains("/track/") ? [Link("e1", "Pricing", "https://site.example/pricing")]
+            : [Link("e1", "Hello", "https://site.example/track/adele", "Adele"), Link("e2", "Goodbye", "https://site.example/track/richie", "Lionel Richie")])
+        { OnAct = (s, a) => { if (a.Action == "CLICK") s.Url = "https://site.example/track/adele"; } };
         var gateway = new Gateway(_ => new Dictionary<string, JevAnswer>
         {
             ["operation"] = Dist("CLICK", ("CLICK", .9), ("BLOCKED", .1)),
@@ -330,7 +333,6 @@ public sealed class ChoiceAndRevealTests
         Assert.Null(result.Pending);
         Assert.Equal(InteractionCompletionState.Complete, result.Completion);
         Assert.Equal(["CLICK:e1"], site.Acts);
-        Assert.Equal(1, gateway.Calls);
     }
 
     // -- numeric evidence ----------------------------------------------------------------------

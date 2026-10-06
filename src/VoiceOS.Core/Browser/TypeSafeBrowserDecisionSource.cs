@@ -85,13 +85,15 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             _logger?.LogInformation("Browser completion evidence page={Page} evidence={Evidence} reason={Reason} threshold={Threshold:F2} goal_achieved={Goal:F2}",
                 PageSummary(context.Observation), evidence.Strength, evidence.Reason, completionThreshold, achieved);
             var proposed = answers.GetValueOrDefault("operation")?.SelectedChoice;
-            // Two or more real controls each plausibly ARE the target and the binder cannot separate them: that is a
-            // missing user preference. Suspend with exactly those controls; no further model call builds the options.
+            // Target identity is judged on its own, never from how sure the operation head is: several real items that each
+            // plausibly ARE the target and that the user's own words do not separate are a missing preference (asked), a
+            // grounded winner executes, and an ambiguity no honest question can be built from is a binding problem (no guess).
             if (stepMode && bindStep is not null && planStep!.Kind is PlanStepKind.Open or PlanStepKind.Act
-                && AmbiguousChoice(context, space, answers, binding, planStep) is { } pending)
+                && !BrowserMediaState.IsPlayRequest(planStep))   // a bare "play it" never offers state/duration controls as choices
             {
-                _logger?.LogInformation("Browser step choice=user options={Count} step={Step}", pending.Options.Count, pending.StepId);
-                return InteractionDecision.NeedsChoice(pending);
+                var verdict = AssessAmbiguity(context, space, answers, binding, planStep);
+                if (verdict.Summary is not null) _logger?.LogInformation("Browser semantic candidates {Summary} verdict={Verdict} why={Why}", verdict.Summary, verdict.Kind, verdict.Why);
+                if (ResolveTarget(verdict, strict: true) is { } resolved) return resolved;
             }
             // The binder judged nothing on screen to be the target although something looked plausible: look further
             // down (bounded) rather than click a control that is not the target.
@@ -180,6 +182,20 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
                 return Exit("repeated_action",
                     "The next step would repeat an earlier click on this page without reaching the goal.", ProgressChoices());
 
+            // Whatever the operation head chose to click, WHICH item that is was judged first: an item-selecting click never runs while
+            // several real items remain, however the binder fared (NONE or weak). Only a question or a grounded winner changes the
+            // action here; anything else proceeds exactly as before.
+            if (stepMode && planStep!.Kind is PlanStepKind.Open or PlanStepKind.Act && action.Kind == InteractionActionKind.Activate
+                && (binding is null || _thresholds.Classify(binding) != BindingStrength.Strong) && !BrowserMediaState.IsPlayRequest(planStep)
+                && answers.TryGetValue("click_target", out var clickHead) && clickHead.QuestionType == "choice"
+                && space.Targets.TryGetValue("CLICK", out var offeredClicks))
+            {
+                var preAction = TargetAmbiguity.Assess(context.Observation, clickHead.Probabilities, offeredClicks.Keys.ToArray(),
+                    planStep.Target ?? planStep.Description, Plan?.OriginalGoal ?? _goal.OriginalUtterance);
+                if (preAction.Summary is not null) _logger?.LogInformation("Browser semantic candidates {Summary} verdict={Verdict} why={Why} stage=pre_action", preAction.Summary, preAction.Kind, preAction.Why);
+                if (ResolveTarget(preAction, strict: false) is { } beforeClick) return beforeClick;
+            }
+
             // An Act click needs an established binding to the control it clicks: a candidate merely existing, or the page
             // changing afterwards, is not evidence that this was the intended target.
             if (stepMode && planStep!.Kind == PlanStepKind.Act && action.Kind == InteractionActionKind.Activate)
@@ -232,6 +248,39 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
             if (binding is not null)
                 LogBindingAgreement(binding, action, answers);
             return InteractionDecision.Act(action) with { GoalConfidence = achieved, TargetBinding = binding };
+
+            // Acts on an ambiguity verdict. Null means "no decision from this verdict" (Clear, or, when not strict, Unresolvable).
+            InteractionDecision? ResolveTarget(TargetAmbiguity.Verdict verdict, bool strict)
+            {
+                switch (verdict.Kind)
+                {
+                    case TargetAmbiguity.Kind.Ask:
+                        var now = DateTimeOffset.UtcNow;
+                        var pending = new PendingChoice("", context.Goal.Step?.Id ?? "s1", "Which one?", verdict.Options!, now,
+                            now + PendingChoice.Lifetime, ChoiceResolution.SatisfiesStep, context.Observation.Revision);
+                        _logger?.LogInformation("Browser step choice=user options={Count} step={Step}", pending.Options.Count, pending.StepId);
+                        return InteractionDecision.NeedsChoice(pending);
+                    case TargetAmbiguity.Kind.Winner
+                        when space.Targets.TryGetValue("CLICK", out var winnable) && winnable.TryGetValue(verdict.Ref!, out var winnerAction):
+                        _logger?.LogInformation("Browser step bound target={Target} method=Grounded why={Why}", verdict.Ref, verdict.Why);
+                        if (RepeatsEarlierElement(winnerAction, context))
+                            return Exit("repeated_action", "The bound control was already activated without reaching the step.");
+                        return InteractionDecision.Act(winnerAction) with
+                        {
+                            TargetBinding = new TargetBinding(verdict.Ref!, context.Observation.Revision, BindingMethod.Grounded, winnable.Count)
+                        };
+                    // Nothing seen carries the user's words: look further (bounded, in code) before giving up.
+                    case TargetAmbiguity.Kind.Unresolvable when strict && planStep!.Kind == PlanStepKind.Open
+                            && verdict.Why is "no_target_evidence" or "no_candidate_matches_request"
+                            && NextScroll(context, nearby: true) is { } onward:
+                        _logger?.LogInformation("Browser step shortcut=scroll_to_find_target why={Why}", verdict.Why);
+                        return InteractionDecision.Act(onward);
+                    case TargetAmbiguity.Kind.Unresolvable when strict:
+                        _logger?.LogInformation("Browser step ambiguity=unresolvable why={Why} step={Step}", verdict.Why, context.Goal.Step?.Id);
+                        return Exit("ambiguous_target", "Several controls could be the target and nothing on the page tells them apart.");
+                }
+                return null;
+            }
 
             InteractionDecision Exit(string reason, string detail, IReadOnlyList<InteractionChoice>? choices = null)
             {
@@ -422,44 +471,14 @@ public sealed class TypeSafeBrowserDecisionSource : IInteractionDecisionSource, 
 
     // -- a real choice for the user ----------------------------------------------------------
 
-    /// <summary>A candidate needs at least this much of the binder's belief to be offered to the user at all.</summary>
-    internal const double ChoiceFloor = .25;
-    /// <summary>When the best candidate leads the next by at least this much, it simply wins and nothing is asked.</summary>
-    internal const double ChoiceMargin = .20;
-
-    /// <summary>
-    /// Builds the question from the binder's own distribution, reusing what it already answered. It exists only when two to four
-    /// real controls are each plausibly the target, none leads by a safe margin, the best answer is not "none of them", and their
-    /// own words differ. Noise (many weak candidates) and ordinary moderate uncertainty (one candidate ahead) never ask.
-    /// </summary>
-    private PendingChoice? AmbiguousChoice(InteractionDecisionContext context, BrowserDecisionSpace space,
+    private TargetAmbiguity.Verdict AssessAmbiguity(InteractionDecisionContext context, BrowserDecisionSpace space,
         IReadOnlyDictionary<string, JevAnswer> answers, TargetBinding? binding, PlanStep step)
     {
-        if (binding?.Method == BindingMethod.ExactLabel) return null;
+        if (binding?.Method == BindingMethod.ExactLabel) return TargetAmbiguity.Verdict.Clear;
         if (!answers.TryGetValue("bind", out var bind) || bind.QuestionType != "choice"
-            || !space.Targets.TryGetValue("CLICK", out var clickable)) return null;
-        var ranked = bind.Probabilities.Where(item => clickable.ContainsKey(item.Key))
-            .OrderByDescending(static item => item.Value).ToArray();
-        if (ranked.Length < 2 || bind.Probabilities.GetValueOrDefault("NONE") >= ranked[0].Value) return null;
-        var plausible = ranked.Where(static item => item.Value >= ChoiceFloor).ToArray();
-        if (plausible.Length < 2 || plausible.Length > PendingChoice.MaxOptions
-            || plausible[0].Value - plausible[1].Value >= ChoiceMargin) return null;
-        var options = GroundedOptions(context.Observation, plausible.Select(static item => (item.Key, (double?)item.Value)).ToArray());
-        if (options is null) return null;
-        // The control's own words can settle it: when the described target is in some of them and not in others, the others
-        // are not contenders. Only what is left and still plural is a real choice.
-        var evidence = TargetEvidence.From(step.Target ?? step.Description);
-        if (evidence.Informative)
-        {
-            var elements = BrowserEvidence.Elements(context.Observation.Evidence);
-            var matching = options.Where(o => elements.FirstOrDefault(e => e.Id == o.TargetRef) is { } e
-                && TargetEvidence.Matches(evidence, e, elements)).ToArray();
-            if (matching.Length is > 0 && matching.Length < options.Count) options = matching;
-            if (options.Count < 2) return null;
-        }
-        var now = DateTimeOffset.UtcNow;
-        return new PendingChoice("", context.Goal.Step?.Id ?? "s1", "Which one?", options, now, now + PendingChoice.Lifetime,
-            ChoiceResolution.SatisfiesStep, context.Observation.Revision);
+            || !space.Targets.TryGetValue("CLICK", out var clickable)) return TargetAmbiguity.Verdict.Clear;
+        return TargetAmbiguity.Assess(context.Observation, bind.Probabilities, clickable.Keys.ToArray(),
+            step.Target ?? step.Description, Plan?.OriginalGoal ?? _goal.OriginalUtterance);
     }
 
     /// <summary>
