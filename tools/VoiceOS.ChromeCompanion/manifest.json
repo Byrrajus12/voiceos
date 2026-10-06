@@ -1,8 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "VoiceOS Chrome Companion (Alpha)",
+  "name": "VOS Companion",
+  "short_name": "VOS",
   "version": "0.2.0",
-  "description": "Thin DOM and Native Messaging bridge for bounded VoiceOS browser tasks.",
+  "description": "Browser companion for VOS, enabling voice-driven navigation and interaction with Chrome.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
   "permissions": [
     "nativeMessaging",
     "tabs",
@@ -19,6 +25,11 @@
     "service_worker": "background.js"
   },
   "action": {
-    "default_title": "Reconnect VoiceOS Chrome Companion"
+    "default_title": "Reconnect VOS Companion",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
   }
 }

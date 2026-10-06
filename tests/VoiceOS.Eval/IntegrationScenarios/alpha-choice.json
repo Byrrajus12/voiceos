@@ -1,0 +1,55 @@
+// Alpha correction validation: reveal is not activate, a real choice suspends and resumes the same step, an
+// already-satisfied prerequisite costs no action, pagination ignores durations and counts.
+// Needs the fixture site:  dotnet run --project tests/VoiceOS.Eval -- fixtures
+// Needs the Chrome Companion loaded from THIS tree (it reports page sections and scrolls to one).
+[
+  {
+    "id": "ch.reveal-section", "name": "Scroll to the reviews section; the (4 Reviews) link must not be used", "family": "alpha-choice",
+    "tags": ["alpha-choice", "browser", "chrome", "setup-page"],
+    "setup": [ { "kind": "startProcess", "file": "chrome.exe", "args": "http://localhost:18777/validate/reveal" }, { "kind": "wait", "ms": 3000 }, { "kind": "focusWindow", "process": "chrome" }, { "kind": "wait", "ms": 500 } ],
+    "preconditions": [ { "kind": "companionConnected" }, { "kind": "foregroundProcess", "process": "chrome" }, { "kind": "activeTabOrigin", "contains": "localhost:18777" } ],
+    "cleanup": [ { "kind": "closeNewTabs" } ], "timeoutSeconds": 90,
+    "transcript": "Scroll to the customer reviews section on this page.",
+    "expect": { "outcome": "Complete", "newTabs": { "max": 0 }, "final": { "activeTabUrlContains": "/validate/reveal" } }
+  },
+  {
+    "id": "ch.two-hellos", "name": "Two real options: pause, show their words, resume the same step on the pick, continue", "family": "alpha-choice",
+    "tags": ["alpha-choice", "browser", "chrome", "setup-page"],
+    "setup": [ { "kind": "startProcess", "file": "chrome.exe", "args": "http://localhost:18777/validate/choice" }, { "kind": "wait", "ms": 3000 }, { "kind": "focusWindow", "process": "chrome" }, { "kind": "wait", "ms": 500 } ],
+    "preconditions": [ { "kind": "companionConnected" }, { "kind": "foregroundProcess", "process": "chrome" }, { "kind": "activeTabOrigin", "contains": "localhost:18777" } ],
+    "cleanup": [ { "kind": "closeNewTabs" } ], "timeoutSeconds": 120,
+    "turns": [
+      { "transcript": "Click the Hello link, then click Lyrics.", "expect": { "outcome": "Clarify", "newTabs": { "max": 0 } } },
+      { "choose": "Adele", "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "/validate/track/adele/lyrics" } } }
+    ]
+  },
+  {
+    "id": "ch.age-gate-choice", "name": "A gate that needs a preference: surface its own two buttons, then finish the step", "family": "alpha-choice",
+    "tags": ["alpha-choice", "browser", "chrome", "setup-page"],
+    "setup": [ { "kind": "startProcess", "file": "chrome.exe", "args": "http://localhost:18777/validate/gate" }, { "kind": "wait", "ms": 3000 }, { "kind": "focusWindow", "process": "chrome" }, { "kind": "wait", "ms": 500 } ],
+    "preconditions": [ { "kind": "companionConnected" }, { "kind": "foregroundProcess", "process": "chrome" }, { "kind": "activeTabOrigin", "contains": "localhost:18777" } ],
+    "cleanup": [ { "kind": "closeNewTabs" } ], "timeoutSeconds": 120,
+    "turns": [
+      { "transcript": "Click See the plans, then stop.", "expect": { "outcome": "Clarify", "newTabs": { "max": 0 } } },
+      { "choose": "over 18", "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "/validate/gate/pricing" } } }
+    ]
+  },
+  {
+    "id": "ch.prerequisite-already-true", "name": "The gate was already cleared: its step completes with zero actions", "family": "alpha-choice",
+    "tags": ["alpha-choice", "browser", "chrome", "setup-page"],
+    "setup": [ { "kind": "startProcess", "file": "chrome.exe", "args": "http://localhost:18777/validate/gate?page=aged" }, { "kind": "wait", "ms": 3000 }, { "kind": "focusWindow", "process": "chrome" }, { "kind": "wait", "ms": 500 } ],
+    "preconditions": [ { "kind": "companionConnected" }, { "kind": "foregroundProcess", "process": "chrome" }, { "kind": "activeTabOrigin", "contains": "localhost:18777" } ],
+    "cleanup": [ { "kind": "closeNewTabs" } ], "timeoutSeconds": 120,
+    "transcript": "Dismiss the age check, then click See the plans.",
+    "expect": { "outcome": "Complete", "maxActions": 1, "final": { "activeTabUrlContains": "/validate/gate/pricing" } }
+  },
+  {
+    "id": "ch.page-four", "name": "Go to page 4 among durations (4:08) and counts (4 reviews)", "family": "alpha-choice",
+    "tags": ["alpha-choice", "browser", "chrome", "setup-page"],
+    "setup": [ { "kind": "startProcess", "file": "chrome.exe", "args": "http://localhost:18777/validate/paginated" }, { "kind": "wait", "ms": 3000 }, { "kind": "focusWindow", "process": "chrome" }, { "kind": "wait", "ms": 500 } ],
+    "preconditions": [ { "kind": "companionConnected" }, { "kind": "foregroundProcess", "process": "chrome" }, { "kind": "activeTabOrigin", "contains": "localhost:18777" } ],
+    "cleanup": [ { "kind": "closeNewTabs" } ], "timeoutSeconds": 90,
+    "transcript": "Go to page 4.",
+    "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "page=4" } }
+  }
+]

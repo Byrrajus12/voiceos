@@ -10,7 +10,7 @@ public sealed class ApplicationInteractionSnapshotTests
     {
         Assert.Equal([
             "Listening", "Transcribing", "Routing", "Observing", "Deciding",
-            "Executing", "NeedsChoice", "Succeeded", "Failed", "Idle"
+            "Executing", "NeedsChoice", "Succeeded", "Failed", "Idle", "Unavailable"
         ], Enum.GetNames<ApplicationInteractionPhase>());
     }
 }

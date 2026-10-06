@@ -1,0 +1,2688 @@
+[
+  {
+    "id": "fx.docs-guide",
+    "name": "unique link -> same-tab navigation",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/docs"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the getting started guide.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "docs/getting-started"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.docs-api",
+    "name": "unique link -> same-tab navigation",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/docs"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Go to the API reference.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "docs/api"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.docs-changelog",
+    "name": "unique link, terse",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/docs"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Show me the changelog.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "docs/changelog"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.docs-faq",
+    "name": "unique link by meaning",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/docs"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the frequently asked questions.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "docs/faq"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.docs-quickstart-redirect",
+    "name": "same-origin redirect",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "redirect"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/docs"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the quick start page.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "docs/getting-started"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.docs-partner-elsewhere",
+    "name": "cross-origin redirect (wrong origin)",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "redirect",
+      "adversarial"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/docs"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Click the partner integration link.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "acceptedOutcomes": [
+        "Complete",
+        "Failed",
+        "Clarify"
+      ]
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.docs-protected",
+    "name": "interstitial/login redirect",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "redirect",
+      "adversarial"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/docs"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the protected reference.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Failed",
+      "newTabs": {
+        "max": 1
+      },
+      "acceptedOutcomes": [
+        "Failed",
+        "Clarify",
+        "Complete"
+      ]
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.shop-backpack",
+    "name": "exact label",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/shop"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the Alpine Trail Backpack.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "shop/p/alpine-trail-backpack"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.shop-tent",
+    "name": "partial name",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/shop"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Show me the lightweight tent.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "shop/p/ridge-lightweight-tent"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.shop-third",
+    "name": "ordinal on listing",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "ordinal"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/shop"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the third product.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "shop/p/ridge-lightweight-tent"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.shop-bottle",
+    "name": "descriptive",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/shop"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "I want to look at the insulated bottle.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "shop/p/summit-insulated-bottle"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.news-ferry",
+    "name": "by topic",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/news"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the story about the ferry terminal.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "news/ferry-terminal"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.news-top",
+    "name": "top story ordinal",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "ordinal"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/news"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Read the top story.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "news/ferry-terminal"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.news-bakery",
+    "name": "by topic 2",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/news"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the bakery award article.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "news/bakery-award"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.video-tides",
+    "name": "content by topic",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "content"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/videos"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Play the video about tides.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "videos/watch/how-tides-work"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.video-second",
+    "name": "second video",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "content",
+      "ordinal"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/videos"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Play the second video.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "videos/watch/sourdough-basics"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.video-octopus",
+    "name": "semantic meaning",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "content"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/videos"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the octopus camouflage video.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "videos/watch/cephalopod-camouflage"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.search-widgets",
+    "name": "site search",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "find"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/search"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Search this site for widgets.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "search/results?q=widgets"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.search-turbines",
+    "name": "site search multi-word",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "find"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/search"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Look up wind turbines here.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "q=wind"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.search-open-second",
+    "name": "search then open",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "find",
+      "activate",
+      "multistep"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/search"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Search this site for gadgets and open the second result.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "item/2"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.same-page-details",
+    "name": "same-page content change",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "samepage"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/same-page"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Show the shipping details.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "interact/same-page"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.same-page-dismiss",
+    "name": "target vanishes (banner)",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "samepage"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/same-page"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Dismiss the cookie banner.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "interact/same-page"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.same-page-faq",
+    "name": "toggle relabels",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "samepage"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/same-page"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Expand the FAQ.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "interact/same-page"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.same-page-subscribe",
+    "name": "button changes text elsewhere",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "samepage"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/same-page"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Click subscribe.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "interact/same-page"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.noop-submit",
+    "name": "click succeeds but nothing changes",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "noop",
+      "adversarial"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/noop"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Click the submit report button.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Failed",
+      "newTabs": {
+        "max": 1
+      },
+      "acceptedOutcomes": [
+        "Failed",
+        "Clarify",
+        "Complete"
+      ]
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.noop-details",
+    "name": "hash link no-op",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "noop",
+      "adversarial"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/noop"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the view details panel.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Failed",
+      "newTabs": {
+        "max": 1
+      },
+      "acceptedOutcomes": [
+        "Failed",
+        "Clarify",
+        "Complete"
+      ]
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.noop-self",
+    "name": "link to the current page",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "noop",
+      "adversarial"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/noop"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Click the reload this page link.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Failed",
+      "newTabs": {
+        "max": 1
+      },
+      "acceptedOutcomes": [
+        "Failed",
+        "Clarify",
+        "Complete"
+      ]
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.ambiguous-plans",
+    "name": "two plausible controls",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "ambiguous"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/ambiguous"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open pricing.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Clarify",
+      "newTabs": {
+        "max": 1
+      },
+      "acceptedOutcomes": [
+        "Clarify",
+        "Complete"
+      ]
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.ambiguous-exact",
+    "name": "one exact of two similar",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "ambiguous"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/ambiguous"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the pricing plans.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "acceptedOutcomes": [
+        "Complete",
+        "Clarify"
+      ],
+      "final": {
+        "activeTabUrlContains": "ambiguous/a"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.zero-contact",
+    "name": "no matching control",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "zero",
+      "adversarial"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/zero"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the contact sales page.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Clarify",
+      "newTabs": {
+        "max": 1
+      },
+      "acceptedOutcomes": [
+        "Clarify",
+        "Failed",
+        "Complete"
+      ]
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.vanishing",
+    "name": "control disappears before use",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "vanishing",
+      "adversarial"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/vanishing"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Claim the special offer.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "acceptedOutcomes": [
+        "Complete",
+        "Failed",
+        "Clarify"
+      ]
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.spa-pricing",
+    "name": "same-document navigation",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "samedoc"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/spa"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Show the pricing view.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "spa/pricing"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.spa-team",
+    "name": "same-document navigation 2",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "samedoc"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/spa"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the team view.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "spa/team"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.tab-guide",
+    "name": "target=_blank adopted tab",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "adopted"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/tabs"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Click the link that opens the guide.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "docs/getting-started"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.tab-api",
+    "name": "noopener new tab",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "adopted"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/tabs"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Follow the API reference link.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "docs/api"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.external-sso",
+    "name": "external link -> login interstitial",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "redirect",
+      "adversarial"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/external"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Click the partner portal link.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Failed",
+      "newTabs": {
+        "max": 1
+      },
+      "acceptedOutcomes": [
+        "Failed",
+        "Clarify",
+        "Complete"
+      ]
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.external-short",
+    "name": "external shortener -> legit page",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "redirect"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/external"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Follow the short link to the API reference.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "docs/api"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.external-mirror",
+    "name": "external link exact",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "redirect"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/external"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Click the partner mirror of the guide.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "docs/getting-started"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.decoy-windows",
+    "name": "decoy download button",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "confusable"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/decoys"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Click Download for Windows.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "files/windows"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.decoy-mac",
+    "name": "decoy download button 2",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "confusable"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/decoys"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Click the Download for Mac link.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "files/mac"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.readmore-bakery",
+    "name": "identical link text",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "confusable"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/read-more"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Read more about the bakery.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "news/bakery-award"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.readmore-rail",
+    "name": "identical link text 2",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "confusable"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/read-more"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the rail story.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "news/rail-reopens"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.siblings-pro",
+    "name": "prefix-sibling names",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "confusable"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/siblings"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the Alpine Trail Backpack Pro.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "alpine-trail-backpack-pro"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.siblings-kids",
+    "name": "prefix-sibling names 2",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "confusable"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/interact/siblings"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Show me the kids backpack.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "alpine-trail-backpack-kids"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.index-docs",
+    "name": "nav from index",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Click the docs link.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "/docs"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fx.index-videos",
+    "name": "nav from index 2",
+    "family": "pass2-fixture",
+    "tags": [
+      "pass2",
+      "fixture",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Click on videos.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "/videos"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  }
+]

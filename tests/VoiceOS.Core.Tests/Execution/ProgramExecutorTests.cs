@@ -65,6 +65,23 @@ public class ProgramExecutorTests
     }
 
     [Fact]
+    public async Task StepStartCallbackRunsBeforeEachCompoundAction()
+    {
+        var events = new List<string>();
+        var media = new StubMediaService { Result = ExecutionResult.Ok("ok") };
+        var program = new VoiceProgram([
+            new MediaControlStep("s1", MediaOperation.Play),
+            new MediaControlStep("s2", MediaOperation.Pause)
+        ]);
+
+        var result = await Build(media: media).ExecuteAsync(program, EmptySnapshot,
+            onStepStarting: step => events.Add(step.StepId));
+
+        Assert.True(result.AllSucceeded);
+        Assert.Equal(["s1", "s2"], events);
+    }
+
+    [Fact]
     public async Task SingleStep_SetVolume_ReturnsSuccess()
     {
         var vol = new StubVolumeService { SetResult = ExecutionResult.Ok("50%") };

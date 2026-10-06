@@ -14,7 +14,8 @@ public enum ApplicationInteractionPhase
     NeedsChoice,
     Succeeded,
     Failed,
-    Idle
+    Idle,
+    Unavailable
 }
 
 public sealed record ApplicationInteractionSnapshot(
@@ -24,7 +25,8 @@ public sealed record ApplicationInteractionSnapshot(
     string? Status = null,
     IReadOnlyList<InteractionChoice>? Choices = null,
     InteractionCompletionState? Completion = null,
-    InteractionResultStatus? Failure = null)
+    InteractionResultStatus? Failure = null,
+    UnavailableReason? Unavailable = null)
 {
     public static ApplicationInteractionSnapshot Idle { get; } = new(ApplicationInteractionPhase.Idle);
 }

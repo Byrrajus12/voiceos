@@ -5,7 +5,9 @@ using VoiceOS.Core.Decision;
 namespace VoiceOS.Core.Browser;
 
 public enum CommandRoute { DirectCapability, ComputerUse, NativeInteraction, TextTransform, Clarify }
-public enum RoutingReason { None, MediaTransport, NewContentTarget, IncompleteIntent, LowConfidence, AmbiguousIntent, RouterFailure }
+public enum RoutingReason { None, MediaTransport, NewContentTarget, IncompleteIntent, LowConfidence, AmbiguousIntent, RouterFailure,
+    /// <summary>Going back was requested but neither media playback nor navigation was established.</summary>
+    UnresolvedReturn, DirectRescue }
 public enum MediaRequestKind { None, Transport, ContentSelection, Uncertain }
 public enum SemanticDestinationKind { None, KnownService, ExplicitUrl, NamedTab }
 public enum TabDisposition { Unspecified, CurrentTab, NewTab, ExistingNamedTab }
@@ -14,6 +16,12 @@ public enum SemanticEndState { Unspecified, SurfaceReady, ResultsVisible, Resour
 public enum GoalShape { Uncertain, SurfaceOnly, ActionOnSurface }
 public enum TaskRelation { NewTask, ContinueRecent, RequiresRecent, Uncertain }
 public enum ContextDependency { Uncertain, SelfContained, RequiresCurrentSurface }
+/// <summary>What a back/previous request returns through; separates media Previous from navigation Back.</summary>
+public enum ReturnTarget { Uncertain, None, MediaPlayback, NavigationHistory }
+/// <summary>A request that is exactly one known page operation, framed by the router so no further model call is needed.</summary>
+public enum PageOperation { None, Back, Forward, ScrollDown, ScrollUp }
+/// <summary>The requested thing to open or use, independent of the surface that could host it.</summary>
+public enum RequestedEntityKind { Uncertain, None, BrowserItself, NamedEntity }
 public sealed record CommandRouteDecision(CommandRoute Route, double Confidence, string? Detail = null,
     RoutingReason Reason = RoutingReason.None, MediaOperation? MediaOperation = null,
     MediaRequestKind MediaRequestKind = MediaRequestKind.Uncertain,
@@ -25,7 +33,28 @@ public sealed record CommandRouteDecision(CommandRoute Route, double Confidence,
     TaskRelation TaskRelation = TaskRelation.NewTask,
     string? NamedTabTarget = null,
     GoalShape GoalShape = GoalShape.Uncertain,
-    ContextDependency ContextDependency = ContextDependency.Uncertain);
+    ContextDependency ContextDependency = ContextDependency.Uncertain,
+    RequestedEntityKind RequestedEntity = RequestedEntityKind.Uncertain)
+{
+    public IReadOnlyDictionary<string, JevAnswer>? RawAnswers { get; init; }
+    public bool TaskRelationEstablished { get; init; }
+    /// <summary>The router judged that the request denotes something opened or used earlier (asked only when earlier referents exist).</summary>
+    public bool ReferencesEarlier { get; init; }
+    public bool IntentActionable { get; init; }
+    /// <summary>The coarse head proposed browser execution before its confidence gate.
+    /// This is corroboration only, never sufficient to select a surface.</summary>
+    public bool CoarseBrowserCandidate { get; init; }
+    public bool CoarseNonBrowserCandidate { get; init; }
+    public ReturnTarget ReturnTarget { get; init; } = ReturnTarget.Uncertain;
+    /// <summary>The whole request is one history traversal or scroll of the current page.</summary>
+    public PageOperation PageOperation { get; init; }
+    /// <summary>A service the classifier proposed but the user did not name; never authoritative.</summary>
+    public string? SuggestedDestination { get; init; }
+    /// <summary>A specific non-browser app, service, or site was requested. A generic browser
+    /// host (e.g. Chrome itself) cannot satisfy it.</summary>
+    public bool RequestsNamedEntity => RequestedEntity == RequestedEntityKind.NamedEntity
+        || DestinationKind == SemanticDestinationKind.KnownService;
+}
 public interface ICommandRouter
 {
     ValueTask<CommandRouteDecision> RouteAsync(string transcript, CancellationToken cancellationToken = default);
@@ -47,7 +76,17 @@ public sealed record BrowserElement(
     [property: JsonPropertyName("value")] string? Value,
     [property: JsonPropertyName("href")] string? Href,
     [property: JsonPropertyName("geometry")] BrowserGeometry Geometry,
-    [property: JsonPropertyName("context")] string Context);
+    [property: JsonPropertyName("context")] string Context,
+    [property: JsonPropertyName("search")] bool Search = false,
+    [property: JsonPropertyName("form")] string? Form = null,
+    [property: JsonPropertyName("submit")] bool Submit = false,
+    [property: JsonPropertyName("formAction")] string? FormAction = null,
+    [property: JsonPropertyName("landmark")] string? Landmark = null,
+    [property: JsonPropertyName("inList")] bool InList = false,
+    [property: JsonPropertyName("selected")] bool? Selected = null,
+    [property: JsonPropertyName("collection")] string? Collection = null,
+    [property: JsonPropertyName("position")] int? Position = null,
+    [property: JsonPropertyName("collectionSize")] int? CollectionSize = null);
 
 public sealed record BrowserViewport(
     [property: JsonPropertyName("width")] int Width,
@@ -67,7 +106,36 @@ public sealed record BrowserSnapshot(
     [property: JsonPropertyName("viewport")] BrowserViewport Viewport,
     [property: JsonPropertyName("elements")] IReadOnlyList<BrowserElement> Elements,
     [property: JsonPropertyName("canGoBack")] bool CanGoBack = false,
-    [property: JsonPropertyName("adoptedFromTabId")] int? AdoptedFromTabId = null);
+    [property: JsonPropertyName("adoptedFromTabId")] int? AdoptedFromTabId = null,
+    [property: JsonIgnore] BrowserActionSignals? Signals = null,
+    // Task-level Back with no same-tab history: the companion returned to the tab this one was opened from.
+    [property: JsonPropertyName("returnedFromTabId")] int? ReturnedFromTabId = null,
+    // Grounded tab facts from the companion (Chrome owns the history itself; these are ownership/lineage).
+    [property: JsonPropertyName("ownedByVoiceOS")] bool? OwnedByVoiceOs = null,
+    [property: JsonPropertyName("adopted")] bool? Adopted = null,
+    [property: JsonPropertyName("openerTabId")] int? OpenerTabId = null,
+    [property: JsonPropertyName("documentId")] string? DocumentId = null,
+    // Longer body text than VisibleText, used only to read a value a later plan step needs.
+    [property: JsonPropertyName("pageText")] string? PageText = null,
+    // Headings and labelled regions of the whole page (not only those in view): where a section is, and whether it is in view.
+    [property: JsonPropertyName("headings")] IReadOnlyList<BrowserSection>? Headings = null);
+
+/// <summary>A non-interactive landmark of the content, in the page's own words. Revealing it is a scroll.</summary>
+public sealed record BrowserSection(
+    [property: JsonPropertyName("ref")] string Ref,
+    [property: JsonPropertyName("text")] string Text,
+    [property: JsonPropertyName("level")] int? Level = null,
+    [property: JsonPropertyName("inViewport")] bool InViewport = false);
+
+/// <summary>
+/// Navigation signal the companion reported alongside an ACT snapshot (<c>timings.signal</c>:
+/// none | cross_document | same_document | new_tab). "none" is a meaningful negative only for
+/// CLICK and BACK; text and scroll actions have no navigation watcher and always report it.
+/// </summary>
+public sealed record BrowserActionSignals(string Navigation, string? SettleReason = null)
+{
+    public static bool IsMeaningfulFor(string protocolAction) => protocolAction is "CLICK" or "BACK" or "FORWARD" or "SUBMIT";
+}
 
 public sealed record BrowserActionRequest(
     int TabId, string SessionId, string Revision, string Action,
@@ -75,6 +143,8 @@ public sealed record BrowserActionRequest(
 
 public sealed class ChromeCompanionException(string code, string message) : Exception(message)
 {
+    /// <summary>The connection to Chrome itself failed (disconnected, or the extension errored without a protocol code): not a semantic failure.</summary>
+    public bool IsInfrastructure => Code is "TRANSPORT_DISCONNECTED" or "EXTENSION_ERROR";
     public string Code { get; } = code;
 }
 
@@ -86,6 +156,10 @@ public interface IChromeCompanionTransport
     ValueTask<BrowserSnapshot> ObserveAsync(string sessionId, int tabId, CancellationToken cancellationToken = default);
     ValueTask<BrowserSnapshot> ActAsync(BrowserActionRequest action, CancellationToken cancellationToken = default);
     ValueTask FocusTaskTabAsync(string sessionId, int tabId, CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
+    /// <summary>Best-effort cleanup of a task tab this session started but never used (e.g. normalization
+    /// failed while startup was overlapped). The extension refuses to close adopted user tabs or other
+    /// sessions' tabs, so failures here are swallowed by the caller.</summary>
+    ValueTask CloseTaskTabAsync(string sessionId, int tabId, CancellationToken cancellationToken = default) => ValueTask.CompletedTask;
     bool IsConnected => false;
     ValueTask<IReadOnlyList<BrowserTabInfo>> ListTabsAsync(CancellationToken cancellationToken = default)
         => ValueTask.FromResult<IReadOnlyList<BrowserTabInfo>>([]);
@@ -97,22 +171,50 @@ public interface IChromeCompanionTransport
         => SelectTabAsync(sessionId, tabId, expectedUrl, requireActive, cancellationToken);
 }
 
-public enum ContextualSurface { ActiveBrowserTab, RecentOwnedBrowserTab, NewBrowserTaskTab, ForegroundNativeWindow, Clarify }
+public enum ContextualSurface { ActiveBrowserTab, RecentOwnedBrowserTab, NewBrowserTaskTab, ForegroundNativeWindow, Clarify, DirectCapability }
+
+/// <summary>How the real tab inventory settled a named-tab claim.</summary>
+public enum NamedTabSelectionKind
+{
+    /// <summary>Exactly one open tab is the named tab.</summary>
+    Selected,
+    /// <summary>No open tab matches: the named-tab claim is refuted.</summary>
+    NoMatch,
+    /// <summary>Several open tabs plausibly match.</summary>
+    Ambiguous,
+    /// <summary>The inventory could not be judged (no picker, invalid or low-confidence answer).</summary>
+    Unavailable
+}
+
+public sealed record NamedTabSelection(NamedTabSelectionKind Kind, int? TabId = null, string? Reason = null)
+{
+    public static NamedTabSelection Select(int tabId) => new(NamedTabSelectionKind.Selected, tabId);
+    public static NamedTabSelection NoMatch(string reason) => new(NamedTabSelectionKind.NoMatch, Reason: reason);
+    public static NamedTabSelection Ambiguous(string reason) => new(NamedTabSelectionKind.Ambiguous, Reason: reason);
+    public static NamedTabSelection Unavailable(string reason) => new(NamedTabSelectionKind.Unavailable, Reason: reason);
+}
 public interface IContextualScopeDecisionSource
 {
     ValueTask<ContextualSurface> SelectAsync(string utterance, CommandRouteDecision intent,
         ExecutionContextSnapshot context, IReadOnlyList<ContextualSurface> offered,
         CancellationToken cancellationToken = default);
-    ValueTask<int?> SelectNamedTabAsync(string utterance, IReadOnlyList<BrowserTabInfo> tabs,
+    ValueTask<NamedTabSelection> SelectNamedTabAsync(string utterance, IReadOnlyList<BrowserTabInfo> tabs,
         CancellationToken cancellationToken = default)
-        => ValueTask.FromResult<int?>(null);
+        => ValueTask.FromResult(NamedTabSelection.Unavailable("no_named_tab_picker"));
     ValueTask<string?> SelectInstalledAppAsync(string utterance,
         IReadOnlyList<VoiceOS.Core.Candidates.AppCandidate> apps, CancellationToken cancellationToken = default)
         => ValueTask.FromResult<string?>(null);
+    /// <summary>Focused choice over typed, validated referents; one request with two heads, no generation.</summary>
+    ValueTask<ReferentChoice> SelectReferentAsync(string utterance, IReadOnlyList<ReferentCandidate> candidates,
+        CancellationToken cancellationToken = default)
+        => ValueTask.FromResult(new ReferentChoice(ReferentChoiceKind.Unavailable));
 }
 
 public sealed record BrowserInteractionOutcome(
     InteractionCompletionState Completion, string? Detail,
     IReadOnlyList<InteractionChoice>? Choices, string? Url, string? Title,
     int Decisions = 0, int Actions = 0, int? TabId = null, string? SessionId = null,
-    string? SemanticGoal = null);
+    string? SemanticGoal = null, UnavailableReason? Unavailable = null,
+    IReadOnlyList<Referent>? Referents = null,
+    PendingChoice? Pending = null,
+    string? Resolved = null);

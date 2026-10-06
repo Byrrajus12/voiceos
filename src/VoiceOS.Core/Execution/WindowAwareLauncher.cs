@@ -10,8 +10,10 @@ namespace VoiceOS.Core.Execution;
 /// Real IWindowAwareLauncher: focuses an existing window or launches and polls for the resulting window.
 ///
 /// After launching, polls at a fixed interval until a window matching app identity appears that was
-/// NOT present before the launch. Never returns a pre-existing window as the launch result.
-/// Never assumes the foreground window is the result.
+/// NOT present before the launch. Shell-namespace items and console programs are confirmed by a new
+/// window of their host process (shell or terminal), since they have no window of their own. Never returns a pre-existing window as the launch result.
+/// Never assumes the foreground window is the result. A confirmed launch result is focused before
+/// success is reported, so focusing an existing window and launching a new one end the same way.
 /// Validate with physical testing; do not unit-test the polling loop directly.
 /// </summary>
 public sealed class WindowAwareLauncher : IWindowAwareLauncher
@@ -96,7 +98,7 @@ public sealed class WindowAwareLauncher : IWindowAwareLauncher
     {
         // Snapshot HWNDs already matching this app before launch so we can identify the NEW window.
         var preLaunchHwnds = AppWindowMatcher
-            .FindMatching(entry.ProcessName, entry.AppUserModelId, _getWindows())
+            .FindLaunchCandidates(entry, _getWindows())
             .Select(w => w.Hwnd)
             .ToHashSet();
 
@@ -135,12 +137,17 @@ public sealed class WindowAwareLauncher : IWindowAwareLauncher
                 await Task.Delay(PollInterval, timeoutCts.Token).ConfigureAwait(false);
                 var windows = _getWindows();
                 var newWindow = AppWindowMatcher
-                    .FindMatching(entry.ProcessName, entry.AppUserModelId, windows)
+                    .FindLaunchCandidates(entry, windows)
                     .FirstOrDefault(w => !preLaunchHwnds.Contains(w.Hwnd));
                 if (newWindow != null)
                 {
-                    _logger.LogInformation("New window appeared for '{App}'", entry.DisplayName);
-                    return AppWindowResult.Ok(newWindow, $"Launched {entry.DisplayName}");
+                    // A launched window is not necessarily foreground (e.g. a new Explorer window
+                    // opened by the running shell). Launch ends like focus: the result is in front.
+                    _logger.LogInformation("New window appeared for '{App}' — focusing", entry.DisplayName);
+                    var focus = _windows.Focus(newWindow.Id, windows);
+                    return focus.Status == ExecutionStatus.Success
+                        ? AppWindowResult.Ok(newWindow, $"Launched {entry.DisplayName}")
+                        : AppWindowResult.Fail(focus.Status, focus.Detail ?? "Focus failed");
                 }
             }
         }

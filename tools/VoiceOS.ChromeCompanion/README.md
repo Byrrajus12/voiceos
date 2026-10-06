@@ -1,15 +1,16 @@
-# VoiceOS Chrome Companion — Alpha 0.1 proof
+# VOS Companion — browser Alpha
 
-This directory is a thin, unpacked Manifest V3 extension. It has no model, API key,
-planner, site-specific workflow, remote-debugging access, or Windows UI Automation
-dependency. VoiceOS owns the proof sequence; the extension only creates its task tab,
-observes DOM semantics, validates scoped actions, and executes `CLICK` or `TYPE_TEXT`.
+VOS Companion is a Manifest V3 extension for VoiceOS browser interaction in the user's normal Chrome profile. It has no model, API key, planner, remote-debugging access, or Windows UI Automation dependency. VoiceOS chooses the scope and executes a bounded semantic plan; the companion supplies DOM observations and validates offered actions.
 
-The extension action (toolbar icon) is the explicit developer gesture that opens the
-Native Messaging port. Chrome requires the extension side to initiate that port. Chrome
-then starts `VoiceOS.ChromeNativeHost.exe`, which bridges length-prefixed JSON over a
-same-machine named pipe to the already-running VoiceOS process. VoiceOS sends the first
-browser command over that established connection.
+Chrome initiates a Native Messaging connection to `VoiceOS.ChromeNativeHost.exe`, which bridges length-prefixed JSON over a same-machine named pipe to VoiceOS. The extension reconnects automatically; its toolbar action can request reconnection.
+
+For Chrome Web Store packaging, icons, and native-host origin setup, see [the publishing guide](../../docs/chrome-web-store.md). From the repository root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\VoiceOS.ChromeCompanion\package.ps1
+```
+
+This packages only runtime files into `artifacts/vos-companion.zip`. Tests, documentation, and packaging tooling are excluded.
 
 ## One-time developer setup
 
@@ -45,107 +46,70 @@ To remove only the registry registration:
 powershell -ExecutionPolicy Bypass -File tools\VoiceOS.ChromeNativeHost\uninstall-host.ps1
 ```
 
-## Physical validation
+## Validation
 
-1. Start the user's normal Chrome profile and leave two recognizable existing tabs open.
-   The profile may stay signed in; do not enable remote debugging.
-2. Start VoiceOS from a terminal so proof logs remain visible:
+Start VoiceOS and normal Chrome after setup, then check that the companion is connected. Use the configured command activation key to try a scoped search/open task, a section reveal, and voice Back/Forward. Existing user tabs should be preserved unless selected for interaction. Check the choice panel on a genuinely ambiguous result and confirm only the selected item is activated after resume.
 
-   ```powershell
-   dotnet run --project src\VoiceOS\VoiceOS.csproj --no-build
-   ```
+The original Alpha 0.1 deterministic search proof is historical; its proof text and environment variables are not the current product workflow. Automated protocol regressions run separately:
 
-3. Note the current tab count, pin the VoiceOS extension if desired, then click its
-   toolbar action once.
-4. Confirm exactly one new Google task tab appears and the pre-existing tabs are
-   unchanged.
-5. In the VoiceOS console, confirm the initial snapshot logs a real editable DOM control
-   and the selected observation-scoped `eN` ref.
-6. Watch the literal text `VoiceOS Chrome companion proof alpha 0.1` appear in the search
-   control. No Enter key is synthesized.
-7. Confirm the post-type snapshot contains that exact current value and has a new
-   revision.
-8. Watch the extension click the newly observed Google Search control. Confirm the final
-   snapshot URL/title/text represents results.
-9. Confirm the normal account/cookies remain present in the task tab. Cookie values are
-   never requested or logged by the proof.
-10. Confirm the VoiceOS log reports proof completion and disconnect. Chrome and the
-    result tab must remain open.
+```powershell
+node --test tools/VoiceOS.ChromeCompanion/companion.test.js
+```
 
-Set `VOICEOS_CHROME_PROOF_URL` or `VOICEOS_CHROME_PROOF_TEXT` before starting VoiceOS to
-override the two proof literals. The deterministic control selection is intentionally
-generic but the completion check expects a visible search/text field and a visible
-button named Search, Google Search, or Submit.
+Automated tests do not replace microphone, foreground-window, or live-site validation.
 
 ## Requested Chrome permissions
 
 - `nativeMessaging`: connect to the allow-listed local VoiceOS host.
-- `tabs`: create one task tab and wait for its navigation state.
-- `scripting`: inject the isolated-world DOM observer into only the owned task tab.
-- `http://*/*`, `https://*/*`: observe and act on ordinary web task pages after the task
-  tab navigates. Chrome-internal pages and other restricted schemes are not allowed.
+- `tabs`: inventory, create, select, focus, and manage task tabs.
+- `webNavigation`: observe navigation and history signals.
+- `scripting`: inject the DOM observer into the selected task/adopted surface.
+- `alarms`: support reconnection.
+- `storage`: retain task ownership and opener lineage in Chrome session storage across worker restarts.
+- `http://*/*`, `https://*/*`: observe and act on ordinary web pages after scope selection. Chrome-internal and other restricted schemes are excluded.
 
 ## Protocol
 
-All Native Messaging and internal pipe frames are UTF-8 JSON prefixed by a four-byte
-little-endian length. The proof caps every frame at 1 MiB.
+Native Messaging and internal pipe frames are UTF-8 JSON prefixed by a four-byte little-endian length, bounded to 1 MiB. Commands are `{type:"command", id, command, payload}`; responses are `{type:"response", id, ok, result}` or carry `{error:{code,message}}`.
 
-Commands are `{type:"command", id, command, payload}`. Responses are
-`{type:"response", id, ok, result}` or include `{error:{code,message}}`.
+- `LIST_TABS` supplies lightweight inventory for scope resolution.
+- `CREATE_NEW_TAB` and `OPEN_TASK_TAB` create session-owned tabs; `OPEN_TASK_TAB` returns a prepared snapshot.
+- `SELECT_TAB` checks the expected URL and active-tab requirement and can adopt an existing user tab for a session.
+- `FOCUS_TASK_TAB` and `OBSERVE` operate only within the selected session.
+- `ACT` supports `CLICK`, `REPLACE_TEXT`, `INSERT_TEXT`, `SUBMIT`, `SCROLL`, `BACK`, and `FORWARD`. Element actions require a current observation reference. `SUBMIT` applies Enter to an offered editable control; text replacement/insertion alone does not submit.
+- `CLOSE_TASK_TAB` closes owned task tabs and refuses to close adopted user tabs.
 
-- `OPEN_TASK_TAB {url}` creates exactly one owned HTTP(S) tab and returns `snapshot`.
-- `OBSERVE {tabId}` accepts only a tab created on the current extension connection.
-- `ACT {tabId,revision,elementRef,action,text?}` accepts only `CLICK` or `TYPE_TEXT` and
-  always returns a newly observed `snapshot`. `TYPE_TEXT` never submits or presses Enter.
+Snapshots include tab/session identity, revision, URL, title, visible text, viewport/document height, controls, sections, and available navigation facts. Observations are bounded to 100 controls, 40 sections, and 3,500 characters of visible text. Controls expose grounded names, values, addresses, geometry, nearby context, and structural facts such as list position. Section references allow reveal scrolling without activation.
 
-A snapshot is bounded to 100 visible controls and 3,500 characters of visible body text:
+References are valid only for their exact revision. The content script keeps the reference-to-element map privately; VoiceOS does not supply selectors or JavaScript. Actions recheck scope, revision, element connection, visibility, enabled state, and compatibility, then return a new observation. Ownership persists through worker restarts using session storage; DOM references still require fresh observation.
 
-```json
-{
-  "tabId": 123,
-  "revision": "observation nonce",
-  "url": "https://www.google.com/",
-  "title": "Google",
-  "visibleText": "...",
-  "truncated": false,
-  "viewport": { "width": 1280, "height": 720, "scrollX": 0, "scrollY": 0 },
-  "elements": [{
-    "ref": "e1",
-    "role": "searchbox",
-    "name": "Search",
-    "enabled": true,
-    "editable": true,
-    "value": "",
-    "href": null,
-    "geometry": { "x": 100, "y": 200, "width": 500, "height": 40, "inViewport": true },
-    "context": "..."
-  }]
-}
-```
+## Alpha limitations
 
-Refs are valid only for the exact `revision` that returned them. The content script keeps
-the ref-to-element map privately; VoiceOS cannot supply selectors or JavaScript. Before
-acting it rechecks revision, connection, geometry, enabled state, and action compatibility.
-Text is literal and capped at 2,000 characters. Navigation creates a new document and a
-new injected observer.
+- Only the top document is observed; cross-origin iframe controls and shadow-root traversal are not included.
+- Visibility uses geometry/style checks, not a complete occlusion model. Accessible names cover common HTML/ARIA sources, not the full accessibility-name algorithm.
+- DOM clicks and value setters are synthetic. File pickers, browser chrome, permission prompts, and trusted-user-gesture controls remain out of scope.
+- Authentication, CAPTCHA, consent, changing markup, or model interpretation can prevent completion.
+- The named pipe is an Alpha transport boundary for the current desktop user, not a hardened authenticated IPC design.
 
-## Proof limitations
+## Back / Forward and Chrome's skippable history entries
 
-- It handles only the top frame; cross-origin iframe controls and shadow-root traversal
-  are not included.
-- Visibility is geometry/style based, not a complete occlusion or hit-test model.
-- Accessible-name calculation covers common HTML/ARIA sources but is not the full browser
-  accessibility-name algorithm.
-- DOM `.click()` and native value setters work on ordinary pages but are not trusted-user
-  gestures; file pickers, permission prompts, browser chrome, and gesture-gated controls
-  remain out of scope.
-- A changed Google locale, consent interstitial, bot check, or page markup can prevent the
-  intentionally small deterministic selector in VoiceOS from finding the proof controls.
-- The in-memory owned-tab set and refs intentionally disappear when the MV3 worker/native
-  connection restarts. Existing tabs remain open and must be deliberately adopted by a
-  future product protocol if desired.
-- The named pipe is an Alpha transport boundary for the current desktop user, not a
-  hardened authenticated IPC design.
+VoiceOS clicks with synthetic `element.click()`, which carries no trusted user activation.
+Chrome's history-manipulation intervention can therefore treat the entries those clicks create
+as skippable: `chrome.tabs.goBack()` (and possibly the toolbar Back button) may skip or reject
+them even though the session history contains them. VoiceOS does not try to change that.
+Its own `BACK`/`FORWARD` actions run `history.back()`/`history.forward()` in the page, which
+walks the real session history (including VoiceOS-generated entries and the user's earlier
+pages in an adopted tab), and succeed only on an observed traversal. `chrome.tabs.goBack()`
+is used only when the page cannot be scripted. Only a genuine new child tab (opened by a
+VoiceOS action) with no same-tab history falls back to returning to its opener.
 
-No observed limitation in this basic proof requires `chrome.debugger`; ordinary
-content-script DOM mechanisms cover its snapshot, typing, and click scope.
+## Known Alpha limitation: Chrome's toolbar Back button
+
+VOS "Go back" / "Go forward" call the page's own `history.back()` / `history.forward()`,
+which work in adopted user tabs and VOS-owned tabs alike. Chromium's history-manipulation
+intervention marks session-history entries created by scripted (untrusted, synthetic)
+clicks as skippable for its own Back/Forward UI. After VOS has clicked through a site, the
+toolbar Back button can therefore look enabled yet do nothing, while the long-press history
+menu still lists the entries. This is Chrome behavior, not lost history; VOS voice Back is
+unaffected. The Alpha does not work around it: no `chrome.debugger`, CDP, OS-level mouse
+input or OCR is used for this purpose.

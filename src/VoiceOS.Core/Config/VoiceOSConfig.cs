@@ -17,6 +17,20 @@ public class VoiceOSConfig
     public double JevActionThreshold { get; set; } = 0.40;
     public string TypeSafeModel { get; set; } = "jev-latest";
 
+    public bool FrontDoorGrounding { get; set; } = true;
+    public bool SpeculativeDirectDecision { get; set; } = true;
+    public bool DirectRescue { get; set; } = true;
+    /// <summary>How long after routing a confident browser route waits for the speculative direct decision to be ready.</summary>
+    public int DirectFirstGraceMs { get; set; } = 400;
+    public void ApplyEnvironmentOverrides()
+    {
+        static bool Read(string name, bool fallback)
+            => bool.TryParse(Environment.GetEnvironmentVariable(name), out var value) ? value : fallback;
+        FrontDoorGrounding = Read("VOICEOS_FRONT_DOOR_GROUNDING", FrontDoorGrounding);
+        SpeculativeDirectDecision = Read("VOICEOS_SPECULATIVE_DIRECT_DECISION", SpeculativeDirectDecision);
+        DirectRescue = Read("VOICEOS_DIRECT_RESCUE", DirectRescue);
+    }
+
     public TimeSpan HoldThreshold => TimeSpan.FromMilliseconds(HoldThresholdMs);
     public TimeSpan GracePeriod => TimeSpan.FromMilliseconds(GracePeriodMs);
 }

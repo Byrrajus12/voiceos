@@ -52,7 +52,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         if (baseResp == null)
         {
             totalSw.Stop();
-            return ErrorResult(totalSw.Elapsed.TotalMilliseconds, "Base Jev request failed");
+            return ErrorResult(totalSw.Elapsed.TotalMilliseconds, "Base Jev request failed", providerFailed: true);
         }
 
         // ── Pass 2: compound-detail request (only when is_compound fires) ──────────────
@@ -72,6 +72,8 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
 
             var compoundHttpSw = Stopwatch.StartNew();
             compoundResp = await SendAndParseAsync(compoundReq, ct);
+            if (compoundResp is null)
+                return ErrorResult(totalSw.Elapsed.TotalMilliseconds, "Compound Jev request failed", providerFailed: true);
             compoundHttpSw.Stop();
             compoundHttpMs = compoundHttpSw.Elapsed.TotalMilliseconds;
         }
@@ -104,13 +106,15 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         using var req = new HttpRequestMessage(HttpMethod.Post, Endpoint);
         req.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", _apiKey);
         req.Content = JsonContent.Create(request, options: JsonOptions);
+        using var modelCall = Activation.LatencyTrace.Current?.BeginModelCall(
+            request.Questions.ContainsKey("is_compound") ? "direct_base" : "direct_compound");
 
         HttpResponseMessage resp;
         try
         {
             resp = await _http.SendAsync(req, ct).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             _logger.LogError(ex, "Jev HTTP request failed");
             return null;
@@ -121,7 +125,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         {
             body = await resp.Content.ReadAsStringAsync(ct).ConfigureAwait(false);
         }
-        catch (Exception ex)
+        catch (Exception ex) when (ex is not OperationCanceledException || !ct.IsCancellationRequested)
         {
             _logger.LogError(ex, "Failed to read Jev response body");
             return null;
@@ -176,6 +180,8 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         try
         {
             var textCandidates = TextCandidateExtractor.Extract(state.Transcript);
+            foreach (var head in answers)
+                JevDiagnostics.Log(_logger, "Direct head", head.Key, head.Value);
             var plan = BuildPlan(answers, state, textCandidates);
             var program = _planner.TryBuildProgram(answers, state, textCandidates);
             return new DecisionResult(plan, program, answers, durationMs, inputTokens, outputTokens);
@@ -242,13 +248,15 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         string? appCandidateId = null;
         string? appProcessName = null;
         string? appUserModelId = null;
-        if (answers.TryGetValue("target_app", out var appAnswer) && appAnswer.SelectedChoice != null)
+        AppCandidate? appMatch = null;
+        if (answers.TryGetValue("target_app", out var appAnswer) && appAnswer.SelectedChoice != null
+            && appAnswer.SelectedChoice != NoAppChoice
+            && (appMatch = state.InstalledApps.FirstOrDefault(a => a.Id == appAnswer.SelectedChoice)) is { } selectedApp)
         {
-            var match = state.InstalledApps.FirstOrDefault(a => a.Id == appAnswer.SelectedChoice);
-            appCandidate = match?.DisplayName ?? appAnswer.SelectedChoice;
-            appCandidateId = match?.Id;
-            appProcessName = match?.ProcessName;
-            appUserModelId = match?.AppUserModelId;
+            appCandidate = selectedApp.DisplayName;
+            appCandidateId = selectedApp.Id;
+            appProcessName = selectedApp.ProcessName;
+            appUserModelId = selectedApp.AppUserModelId;
             if (action == VoiceAction.OpenApp)
                 confidence = Math.Min(confidence, appAnswer.Confidence);
         }
@@ -291,6 +299,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         //   Missing or low-confidence → uncertain (RequiresClarification; never default to foreground).
         WindowTargetMode windowTargetMode = WindowTargetMode.Current;
         bool windowTargetModeUncertain = false;
+        bool referentMode = false;
 
         if (action == VoiceAction.FocusWindow)
         {
@@ -309,8 +318,32 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             else
             {
                 windowTargetMode = wtmAnswer.SelectedChoice == "Named"
+                    || wtmAnswer.SelectedChoice == ReferentMode && state.ReferentWindowIds is { Count: > 0 }
                     ? WindowTargetMode.Named
                     : WindowTargetMode.Current;
+                referentMode = wtmAnswer.SelectedChoice == ReferentMode
+                    && state.ReferentWindowIds is { Count: > 0 };
+                // The follow-up continues a window that has since closed: never fall back to the foreground one.
+                if (wtmAnswer.SelectedChoice == ReferentMode && state.ReferentWindowIds is not { Count: > 0 }
+                    && state.StaleReferentWindow)
+                    windowTargetModeUncertain = true;
+            }
+        }
+
+        // A reference back to earlier work is honored only for a window VoiceOS itself established and that
+        // still exists. A pick outside that set is not a reference; a single candidate needs no pick.
+        if (referentMode)
+        {
+            var known = state.ReferentWindowIds!;
+            // Acting on a coin flip between windows is worse than asking: a referent pick needs a firm answer
+            // whenever it is one of several.
+            if (known.Count > 1 && (winAnswer?.Confidence ?? 0) < ReferentPickFloor) windowCandidateId = null;
+            if (windowCandidateId is null || !known.Contains(windowCandidateId))
+            {
+                windowCandidateId = known.Count == 1 ? known[0] : null;
+                windowCandidate = windowCandidateId is null ? null
+                    : state.OpenWindows.FirstOrDefault(w => w.Id == windowCandidateId)?.Title;
+                if (windowCandidateId is null) windowTargetModeUncertain = true;
             }
         }
 
@@ -428,8 +461,11 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
 
         // For Named-mode window ops, carry the app candidate ID so PlanToStep can use AppTarget
         // (enabling execution-time ambiguity detection at the shared resolution boundary).
+        // The app is used only when its identity corroborates the resolved window; an unrelated
+        // forced app choice must never replace the exact resolved window.
         string? windowAppCandidateId = null;
-        if (isWindowTargetedAction && windowTargetMode == WindowTargetMode.Named)
+        if (isWindowTargetedAction && windowTargetMode == WindowTargetMode.Named && !referentMode
+            && AppCorroboratesWindow(appMatch, state.OpenWindows.FirstOrDefault(w => w.Id == windowCandidateId)))
             windowAppCandidateId = appCandidateId;
 
         return new VoicePlan(
@@ -454,6 +490,60 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             VolumeAdjustAmount: volumeAdjustAmount);
     }
 
+    internal const string ReferentMode = "Referent";
+    private const double ReferentPickFloor = 0.7;
+
+    /// <summary>Typed order of establishment, so "the first one" and "the last one" have something to be matched against.</summary>
+    private static string RecencyLabel(IReadOnlyList<string> mostRecentFirst, string id)
+    {
+        var index = mostRecentFirst.ToList().IndexOf(id);
+        if (mostRecentFirst.Count == 1) return "the only such window";
+        if (index == 0) return "newest";
+        return index == mostRecentFirst.Count - 1 ? "oldest" : $"#{index + 1} newest";
+    }
+
+    private static Dictionary<string, string> WindowModeCriteria(bool liveReferent, bool staleReferent)
+    {
+        var referentOffered = liveReferent || staleReferent;
+        var criteria = new Dictionary<string, string>
+        {
+            ["Current"] = referentOffered
+                ? "User refers to the current or foreground window using words like 'this', 'the current window', 'the window'. No specific application name is mentioned as the target."
+                : "User refers to the current or foreground window using words like 'this', 'the current window', 'it', 'the window'. No specific application name is mentioned as the target.",
+            ["Named"] = "User names a specific application as the target — 'Chrome', 'VS Code', 'Discord', 'the terminal', 'Google Chrome'. The command is directed at that particular named app's window."
+        };
+        if (staleReferent && !liveReferent)
+            criteria[ReferentMode] = "User refers back, with a pronoun or description such as 'it' or 'that one', to the window VoiceOS last used, which has since been closed, without naming an app. Never use for 'this' or 'the current window'.";
+        else if (referentOffered)
+            criteria[ReferentMode] = "User refers back to a window VoiceOS recently opened or used, with a pronoun or description such as 'it', 'that one', 'the one I just opened', without naming an app. Only windows marked as recently opened or used by VoiceOS qualify. Never use for 'this' or 'the current window'.";
+        return criteria;
+    }
+
+    /// <summary>The target_app choice key meaning no offered app is the target. A forced choice
+    /// over installed apps must never manufacture an executable target by itself.</summary>
+    public const string NoAppChoice = "none";
+
+    internal static Dictionary<string, string> AppChoices(DecisionState state)
+    {
+        var choices = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var app in state.InstalledApps)
+            if (app.Id != NoAppChoice) choices.TryAdd(app.Id, app.DisplayName);
+        if (choices.Count > 0)
+            choices[NoAppChoice] = "No offered application is the named target; the requested app is not installed or not listed.";
+        return choices;
+    }
+
+    /// <summary>A named window operation may carry an app target only when that app's identity
+    /// corroborates the already-resolved window; otherwise the resolved window itself is the target.</summary>
+    internal static bool AppCorroboratesWindow(AppCandidate? app, WindowCandidate? window)
+    {
+        if (app is null || window is null) return false;
+        if (app.AppUserModelId is not null && window.AppUserModelId is not null)
+            return string.Equals(app.AppUserModelId, window.AppUserModelId, StringComparison.OrdinalIgnoreCase);
+        return app.ProcessName is not null
+            && string.Equals(app.ProcessName, window.ProcessName, StringComparison.OrdinalIgnoreCase);
+    }
+
     private static readonly string[] Ordinals = ["first", "second", "third", "fourth"];
     private static string Ordinal(int i) => i >= 1 && i <= 4 ? Ordinals[i - 1] : i.ToString();
 
@@ -465,8 +555,11 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
     public JevRequestDto BuildBaseRequest(DecisionState state)
     {
         var textCandidates = TextCandidateExtractor.Extract(state.Transcript);
-        var appCandidates = state.InstalledApps.ToDictionary(a => a.Id, a => a.DisplayName);
-        var windowCandidates = state.OpenWindows.ToDictionary(w => w.Id, w => w.Title);
+        var appCandidates = AppChoices(state);
+        var referentWindows = state.ReferentWindowIds ?? [];
+        var windowCandidates = state.OpenWindows.ToDictionary(w => w.Id,
+            w => referentWindows.Contains(w.Id)
+                ? $"{w.Title} (recently opened or used by VoiceOS, {RecencyLabel(referentWindows, w.Id)})" : w.Title);
 
         var questions = new Dictionary<string, JevQuestionDto>
         {
@@ -507,7 +600,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
                     ["Pause"] = "Pause or stop playback (e.g. 'pause', 'pause this', 'stop')",
                     ["Toggle"] = "Toggle play/pause state",
                     ["Next"] = "Skip to next track (e.g. 'next', 'skip this', 'next song', 'skip')",
-                    ["Previous"] = "Go to previous track (e.g. 'previous', 'go back', 'last song')",
+                    ["Previous"] = "Go to previous track (e.g. 'previous track', 'previous song', 'last song')",
                 }),
 
             ["snap_dir"] = new JevQuestionDto(
@@ -540,11 +633,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             ["window_target_mode"] = new JevQuestionDto(
                 "choice",
                 "Assume the user is issuing a window operation (close, maximize, minimize, snap). Is the target the current foreground window, or a specific named application window?",
-                new Dictionary<string, string>
-                {
-                    ["Current"] = "User refers to the current or foreground window using words like 'this', 'the current window', 'it', 'the window'. No specific application name is mentioned as the target.",
-                    ["Named"] = "User names a specific application as the target — 'Chrome', 'VS Code', 'Discord', 'the terminal', 'Google Chrome'. The command is directed at that particular named app's window.",
-                }),
+                WindowModeCriteria(referentWindows.Count > 0, state.StaleReferentWindow)),
 
             ["is_compound"] = new JevQuestionDto(
                 "noul",
@@ -575,7 +664,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         {
             questions["target_app"] = new JevQuestionDto(
                 "choice",
-                "Which application is the target of the command?",
+                "Which application is the target of the command? Choose an offered app only when it is the application the user names or refers to. Choose none when the named application is not offered; never substitute a different app.",
                 appCandidates);
         }
 
@@ -583,7 +672,9 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         {
             questions["target_window"] = new JevQuestionDto(
                 "choice",
-                "Which open window is the target of the command?",
+                referentWindows.Count == 0
+                    ? "Which open window is the target of the command?"
+                    : "Which open window is the target of the command? Windows marked as recently opened or used by VoiceOS carry their order of use (newest, oldest); a reference back to earlier work denotes one of those, and a reference to the first or earliest one means the oldest.",
                 windowCandidates);
         }
 
@@ -603,7 +694,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
     /// </summary>
     public JevRequestDto BuildCompoundRequest(DecisionState state)
     {
-        var appCandidates = state.InstalledApps.ToDictionary(a => a.Id, a => a.DisplayName);
+        var appCandidates = AppChoices(state);
         var textCandidates = TextCandidateExtractor.Extract(state.Transcript);
 
         var questions = new Dictionary<string, JevQuestionDto>
@@ -736,7 +827,7 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
             {
                 questions[$"unit_{i}_target_app"] = new JevQuestionDto(
                     "choice",
-                    $"Which application is the target of the {ord} action unit in `utterance`?",
+                    $"Which application is the target of the {ord} action unit in `utterance`? Choose none when the named application is not offered; never substitute a different app.",
                     appCandidates);
             }
         }
@@ -757,10 +848,10 @@ public sealed class TypeSafeJevDecisionEngine : IDecisionEngine
         return criteria;
     }
 
-    private static DecisionResult ErrorResult(double durationMs, string reason)
+    private static DecisionResult ErrorResult(double durationMs, string reason, bool providerFailed = false)
         => new(new VoicePlan(VoiceAction.Rejected, RejectionReason: reason),
                null,
-               new Dictionary<string, JevAnswer>(), durationMs, 0, 0);
+               new Dictionary<string, JevAnswer>(), durationMs, 0, 0) { ProviderFailed = providerFailed };
 
     private static readonly JsonSerializerOptions JsonOptions = new()
     {

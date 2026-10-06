@@ -1,6 +1,7 @@
 using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using VoiceOS.Core.Activation;
+using VoiceOS.UI;
 
 namespace VoiceOS;
 
@@ -15,13 +16,18 @@ public sealed class TrayApplication : ApplicationContext
 
     private readonly ActivationOrchestrator _orchestrator;
     private readonly NotifyIcon _trayIcon;
+    private readonly ProductUiOverlay _ui;
+    private readonly ChoicePanel _choices = new();
     private SynchronizationContext? _uiContext;
     private Icon? _currentIcon;
     private bool _disposed;
+    private long _lastUiGeneration;
 
-    public TrayApplication(ActivationOrchestrator orchestrator)
+    public TrayApplication(ActivationOrchestrator orchestrator,
+        Microsoft.Extensions.Logging.ILogger? productUiLogger = null)
     {
         _orchestrator = orchestrator;
+        _ui = new ProductUiOverlay(productUiLogger);
 
         var menu = new ContextMenuStrip();
         menu.Items.Add("Exit", null, (_, _) => Application.Exit());
@@ -35,6 +41,10 @@ public sealed class TrayApplication : ApplicationContext
         SetIcon(ActivationState.Idle);
 
         _orchestrator.StateChanged += OnStateChanged;
+        _orchestrator.ProductUiChanged += OnProductUiChanged;
+        // Answering a question resumes the suspended execution directly; it is never routed as a new command.
+        _choices.Selected += id => _ = _orchestrator.ResolvePendingChoiceAsync(id);
+        _choices.Dismissed += _orchestrator.DismissPendingChoice;
 
         // Install hook after the message pump is running.
         Application.Idle += OnFirstIdle;
@@ -71,6 +81,39 @@ public sealed class TrayApplication : ApplicationContext
             ActivationState.Understanding => "VoiceOS — Understanding",
             _ => "VoiceOS — Idle"
         };
+    }
+
+    private void OnProductUiChanged(object? sender, ProductUiLifecycle update)
+    {
+        if (_disposed) return;
+        var ctx = _uiContext;
+        if (ctx != null) ctx.Post(_ => ApplyProductUi(update), null);
+    }
+
+    private void ApplyProductUi(ProductUiLifecycle update)
+    {
+        if (_disposed || update.Generation < _lastUiGeneration) return;
+        _lastUiGeneration = update.Generation;
+        // The options of a real question stay clickable until it is answered, dismissed or expires; any later phase of the
+        // same or a new run (except merely listening, when a spoken answer may be coming) replaces it.
+        if (update.Phase == ProductUiPhase.Clarify && update.Choice is { } choice) _choices.Show(choice);
+        else if (update.Phase != ProductUiPhase.Listening) _choices.Hide();
+        if (update.Phase == ProductUiPhase.Acting)
+            _ui.SetActingMessage(update.Message);
+        else if (update.Phase == ProductUiPhase.Clarify)
+            _ui.SetClarificationMessage(update.Message ?? "Could you clarify that request?");
+        else if (update.Phase == ProductUiPhase.Error)
+            _ui.SetErrorMessage(update.Message ?? "Couldn't complete that action.");
+        _ui.SetState(update.Phase switch
+        {
+            ProductUiPhase.Listening => ProductUiState.Listening,
+            ProductUiPhase.Understanding => ProductUiState.Understanding,
+            ProductUiPhase.Acting => ProductUiState.Acting,
+            ProductUiPhase.Success => ProductUiState.Success,
+            ProductUiPhase.Clarify => ProductUiState.Clarify,
+            ProductUiPhase.Error => ProductUiState.Error,
+            _ => ProductUiState.Idle
+        });
     }
 
     private void SetIcon(ActivationState state)
@@ -115,7 +158,10 @@ public sealed class TrayApplication : ApplicationContext
         {
             _disposed = true;
             _orchestrator.StateChanged -= OnStateChanged;
+            _orchestrator.ProductUiChanged -= OnProductUiChanged;
             _orchestrator.Dispose();
+            _choices.Dispose();
+            _ui.Dispose();
             _trayIcon.Visible = false;
             _trayIcon.Dispose();
             _currentIcon?.Dispose();

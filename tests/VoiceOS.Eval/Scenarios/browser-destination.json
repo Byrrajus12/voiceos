@@ -1,0 +1,205 @@
+// Browser destinations and discovery. Mixes: registered known service (GitHub, Spotify),
+// unregistered-but-obvious sites (Hacker News, IMDb, Stack Overflow, USPS, MIT), an explicit
+// domain (weather.com), explicit web vs native preference, native-unavailable, and installed
+// Chrome web apps. Final origin is asserted; how the product got there (direct URL vs search)
+// is not, except that a registered known service should not need several browser decisions.
+[
+  {
+    "id": "dest.hacker-news",
+    "name": "Unregistered but well-known site by name",
+    "family": "browser-destination",
+    "tags": ["generalization", "browser", "chrome", "discovery"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Take me to Hacker News.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "noMediaCommand": true,
+      "newTabs": { "max": 1 },
+      "final": { "activeTabOriginContains": "news.ycombinator.com" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "dest.imdb-terse",
+    "name": "Terse open of a site whose name is an acronym",
+    "family": "browser-destination",
+    "tags": ["generalization", "browser", "chrome", "discovery"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "IMDb, please.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      // A terse bare name: opening is preferred, clarifying is safe for Alpha.
+      "acceptedOutcomes": ["Complete", "Clarify"],
+      "newTabs": { "max": 1 },
+      "final": { "activeTabOriginContains": "imdb.com" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "dest.stack-overflow",
+    "name": "Developer Q&A site by name",
+    "family": "browser-destination",
+    "tags": ["generalization", "browser", "chrome", "discovery"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Pull up Stack Overflow.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 1 },
+      "final": { "activeTabOriginContains": "stackoverflow.com" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "dest.usps-by-need",
+    "name": "Site named as a need rather than a command",
+    "family": "browser-destination",
+    "tags": ["generalization", "browser", "chrome", "discovery"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "I need the USPS website.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      // A need rather than a command: opening is preferred, clarifying is safe for Alpha.
+      "acceptedOutcomes": ["Complete", "Clarify"],
+      "newTabs": { "max": 1 },
+      "final": { "activeTabOriginContains": "usps.com" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "dest.university-site",
+    "name": "Institution website by informal name",
+    "family": "browser-destination",
+    "tags": ["generalization", "browser", "chrome", "discovery"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Go to MIT's website.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 1 },
+      "final": { "activeTabOriginContains": "mit.edu" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "dest.explicit-domain",
+    "name": "Explicit domain spoken as a URL",
+    "family": "browser-destination",
+    "tags": ["generalization", "browser", "chrome"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Go to weather dot com.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "route": ["ComputerUse"],
+      "newTabs": { "max": 1 },
+      "maxBrowserDecisions": 2,
+      // Reaching weather.com is correct; extra decisions (e.g. via search) are an efficiency miss.
+      "efficiencyAdvisory": true,
+      "final": { "activeTabOriginContains": "weather.com" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    // Registered known service: reaching it should not need a search-and-click loop.
+    "id": "dest.known-service-github",
+    "name": "Registered known service opens directly",
+    "family": "browser-destination",
+    "tags": ["generalization", "browser", "chrome", "known-service"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Head over to GitHub.",
+    "expect": {
+      "outcome": "Complete",
+      "scope": ["NewTaskTab", "ExistingNamedTab"],
+      "newTabs": { "max": 1 },
+      "maxBrowserDecisions": 1,
+      "browserOperations": { "exclude": ["SetText", "TypeText"] },
+      "final": { "activeTabOriginContains": "github.com" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    // Discord is installed natively; the explicit "in the browser" must win.
+    "id": "dest.explicit-web-over-native",
+    "name": "Explicit web preference overrides an installed native app",
+    "family": "browser-destination",
+    "tags": ["generalization", "browser", "chrome", "surface-preference", "requires-app"],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "appInstalled", "app": "Discord" },
+    ],
+    "transcript": "Open Discord in the browser.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "route": ["ComputerUse"],
+      "directSteps": { "exclude": ["OpenApp", "FocusWindow"] },
+      "newTabs": { "max": 1 },
+      "final": { "activeTabOriginContains": "discord.com" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "dest.explicit-native-notion",
+    "name": "Explicit desktop-app preference for a service that also has a website",
+    "family": "browser-destination",
+    "tags": ["generalization", "surface-preference", "requires-app"],
+    "preconditions": [ { "kind": "appInstalled", "app": "Notion" } ],
+    "transcript": "Open the Notion desktop app.",
+    "settleMs": 4000,
+    "expect": {
+      "outcome": "Complete",
+      "route": ["DirectCapability", "NativeInteraction"],
+      "newTabs": { "max": 0 },
+      "final": { "foregroundProcess": "Notion" },
+    },
+  },
+  {
+    // Spotify desktop is not installed; the known service has a web player.
+    "id": "dest.native-missing-web-fallback",
+    "name": "Service without an installed app opens on the web",
+    "family": "browser-destination",
+    "tags": ["generalization", "browser", "chrome", "known-service"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Open Spotify.",
+    "expect": {
+      "outcome": "Complete",
+      "noMediaCommand": true,
+      "newTabs": { "max": 1 },
+      "final": { "activeTabOriginContains": "open.spotify.com" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    // Explicitly the desktop app, which is not installed: opening the web player silently would
+    // contradict the request.
+    "id": "dest.native-requested-but-missing",
+    "name": "Explicit desktop app that is not installed should clarify",
+    "family": "browser-destination",
+    "tags": ["generalization", "surface-preference", "clarify"],
+    "transcript": "Launch the Spotify desktop app.",
+    "expect": {
+      "outcome": "Clarify",
+      "newTabs": { "max": 0 },
+    },
+  },
+  {
+    // Google Sheets is installed as a Chrome web app. Either the app window or a Sheets tab is a
+    // correct result; both put "Sheets" in the foreground title.
+    "id": "dest.installed-web-app-sheets",
+    "name": "Service with an installed Chrome web app",
+    "family": "browser-destination",
+    "tags": ["generalization", "browser", "requires-app"],
+    "preconditions": [ { "kind": "appInstalled", "app": "Sheets" } ],
+    "transcript": "Open Google Sheets.",
+    "settleMs": 3000,
+    "expect": {
+      "outcome": "Complete",
+      "final": { "foregroundTitleContains": "Sheets" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+]

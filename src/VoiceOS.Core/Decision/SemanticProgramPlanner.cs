@@ -173,7 +173,8 @@ public sealed class SemanticProgramPlanner
 
         // App candidate (used for OpenApp and Named window ops)
         string? appCandidateId = null;
-        if (unitAnswers.TryGetValue("target_app", out var appAnswer) && appAnswer.SelectedChoice != null)
+        if (unitAnswers.TryGetValue("target_app", out var appAnswer) && appAnswer.SelectedChoice != null
+            && appAnswer.SelectedChoice != TypeSafeJevDecisionEngine.NoAppChoice)
             appCandidateId = state.InstalledApps.FirstOrDefault(a => a.Id == appAnswer.SelectedChoice)?.Id;
 
         // Window target mode
@@ -181,13 +182,15 @@ public sealed class SemanticProgramPlanner
         if (unitAnswers.TryGetValue("window_target_mode", out var wtm) && wtm.SelectedChoice != null)
             windowMode = wtm.SelectedChoice == "Named" ? WindowTargetMode.Named : WindowTargetMode.Current;
 
-        VoiceTarget BuildWindowTarget()
+        // A named unit without a resolved app has no target; it never falls back to the foreground window.
+        VoiceTarget? BuildWindowTarget()
         {
             if (priorRef != null) return priorRef;
-            if (windowMode == WindowTargetMode.Named && appCandidateId != null)
-                return new AppTarget(appCandidateId);
+            if (windowMode == WindowTargetMode.Named)
+                return appCandidateId != null ? new AppTarget(appCandidateId) : null;
             return new CurrentWindowTarget();
         }
+        var windowTarget = BuildWindowTarget();
 
         // Snap direction
         SnapDirection? snapDir = null;
@@ -244,20 +247,20 @@ public sealed class SemanticProgramPlanner
             VoiceAction.OpenApp when appCandidateId != null =>
                 new OpenAppStep(stepId, new AppTarget(appCandidateId), activationMode),
 
-            VoiceAction.FocusWindow =>
-                new FocusWindowStep(stepId, BuildWindowTarget()),
+            VoiceAction.FocusWindow when windowTarget != null =>
+                new FocusWindowStep(stepId, windowTarget),
 
-            VoiceAction.CloseCurrentWindow =>
-                new CloseWindowStep(stepId, BuildWindowTarget()),
+            VoiceAction.CloseCurrentWindow when windowTarget != null =>
+                new CloseWindowStep(stepId, windowTarget),
 
-            VoiceAction.MaximizeCurrentWindow =>
-                new MaximizeWindowStep(stepId, BuildWindowTarget()),
+            VoiceAction.MaximizeCurrentWindow when windowTarget != null =>
+                new MaximizeWindowStep(stepId, windowTarget),
 
-            VoiceAction.MinimizeCurrentWindow =>
-                new MinimizeWindowStep(stepId, BuildWindowTarget()),
+            VoiceAction.MinimizeCurrentWindow when windowTarget != null =>
+                new MinimizeWindowStep(stepId, windowTarget),
 
-            VoiceAction.SnapCurrentWindow when snapDir.HasValue =>
-                new SnapWindowStep(stepId, BuildWindowTarget(), snapDir.Value),
+            VoiceAction.SnapCurrentWindow when snapDir.HasValue && windowTarget != null =>
+                new SnapWindowStep(stepId, windowTarget, snapDir.Value),
 
             VoiceAction.MediaControl when mediaOp.HasValue =>
                 new MediaControlStep(stepId, mediaOp.Value),
@@ -268,8 +271,8 @@ public sealed class SemanticProgramPlanner
             VoiceAction.AdjustVolume when volDir.HasValue =>
                 new AdjustVolumeStep(stepId, volDir.Value, volumeAdjustAmount),
 
-            VoiceAction.MoveWindow when monitorTarget != null =>
-                new MoveWindowStep(stepId, BuildWindowTarget(), monitorTarget),
+            VoiceAction.MoveWindow when monitorTarget != null && windowTarget != null =>
+                new MoveWindowStep(stepId, windowTarget, monitorTarget),
 
             _ => null
         };

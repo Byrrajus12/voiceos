@@ -1,0 +1,141 @@
+// Media transport and volume. Expectations assert the exact operation the executor attempted
+// (mediaOperation / setVolume / adjustVolume, read from the executed VoiceSteps), plus the
+// absence of browser side effects. LIMITATION: actual playback state and system volume are not
+// probed, so a correctly issued command that the media app ignores is not detectable.
+// Volume scenarios change the real system volume (local and reversible). "Resume" expects Play:
+// Toggle could also resume, but only Play is unambiguous about the intended end state.
+// Best run with some media session present (e.g. a paused song); no precondition can check it.
+[
+  {
+    "id": "media.pause-conversational",
+    "name": "Pause playback with conversational framing",
+    "family": "media",
+    "tags": ["generalization", "media"],
+    "transcript": "Hold on, pause the music for a second.",
+    "expect": {
+      "outcome": "Complete",
+      "mediaOperation": "Pause",
+      "route": ["DirectCapability"],
+      "directSteps": { "include": ["MediaControl"] },
+      "browserOperations": { "exclude": ["Activate", "SetText", "TypeText", "GoBack"] },
+      "newTabs": { "max": 0 },
+    },
+  },
+  {
+    "id": "media.resume-podcast",
+    "name": "Resume playback referring to the content type",
+    "family": "media",
+    "tags": ["generalization", "media"],
+    "transcript": "Okay, resume the podcast.",
+    "expect": {
+      "outcome": "Complete",
+      "mediaOperation": "Play",
+      "route": ["DirectCapability"],
+      "directSteps": { "include": ["MediaControl"] },
+      "newTabs": { "max": 0 },
+    },
+  },
+  {
+    "id": "media.skip-terse",
+    "name": "Terse skip",
+    "family": "media",
+    "tags": ["generalization", "media"],
+    "transcript": "Skip this track.",
+    "expect": {
+      "outcome": "Complete",
+      "mediaOperation": "Next",
+      "directSteps": { "include": ["MediaControl"] },
+      "browserOperations": { "exclude": ["Activate", "GoBack"] },
+      "newTabs": { "max": 0 },
+    },
+  },
+  {
+    "id": "media.previous-track",
+    "name": "Previous track with explicit media noun",
+    "family": "media",
+    "tags": ["generalization", "media"],
+    "transcript": "Go to the previous song.",
+    "expect": {
+      "outcome": "Complete",
+      "mediaOperation": "Previous",
+      "route": ["DirectCapability"],
+      "directSteps": { "include": ["MediaControl"] },
+      "browserOperations": { "exclude": ["GoBack"] },
+      "newTabs": { "max": 0 },
+    },
+  },
+  {
+    "id": "media.volume-absolute",
+    "name": "Set an absolute volume level",
+    "family": "media",
+    "tags": ["generalization", "media", "volume"],
+    "safety": { "note": "Changes system volume to 35%." },
+    "transcript": "Set the volume to 35 percent.",
+    "expect": {
+      "outcome": "Complete",
+      "setVolume": 35,
+      "directSteps": { "include": ["SetVolume"], "exclude": ["MediaControl"] },
+      "newTabs": { "max": 0 },
+    },
+  },
+  {
+    "id": "media.volume-up-relative",
+    "name": "Relative volume up with a pronoun",
+    "family": "media",
+    "tags": ["generalization", "media", "volume"],
+    "safety": { "note": "Raises system volume by one step." },
+    "transcript": "Turn it up a little.",
+    "expect": {
+      "outcome": "Complete",
+      "adjustVolume": { "direction": "Up" },
+      "directSteps": { "include": ["AdjustVolume"], "exclude": ["MediaControl"] },
+      "newTabs": { "max": 0 },
+    },
+  },
+  {
+    "id": "media.volume-down-complaint",
+    "name": "Relative volume down phrased as a complaint",
+    "family": "media",
+    "tags": ["generalization", "media", "volume"],
+    "safety": { "note": "Lowers system volume by one step." },
+    "transcript": "That's way too loud.",
+    "expect": {
+      "outcome": "Complete",
+      // A complaint rather than a command: lowering is preferred, clarifying is safe.
+      "acceptedOutcomes": ["Complete", "Clarify"],
+      "adjustVolume": { "direction": "Down" },
+      "directSteps": { "include": ["AdjustVolume"], "exclude": ["MediaControl"] },
+      "newTabs": { "max": 0 },
+    },
+  },
+  {
+    // Content selection, not transport: pressing Play on whatever is loaded would be wrong.
+    // Any reasonable music surface (browser or the installed YouTube Music app) is acceptable,
+    // so neither route nor destination is asserted; playback itself is not observable.
+    "id": "media.content-not-transport",
+    "name": "Request for new content must not press Play on the current session",
+    "family": "media",
+    "tags": ["generalization", "media", "chrome"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Play some lo-fi beats to study to.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "noMediaCommand": true,
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    // Could mean skip, pause, lower volume, or dislike. Guessing would be arbitrary.
+    "id": "media.ambiguous-do-something",
+    "name": "Vague complaint about the current song should clarify",
+    "family": "media",
+    "tags": ["generalization", "media", "clarify"],
+    "transcript": "Can you do something about this song?",
+    "expect": {
+      "outcome": "Clarify",
+      "noMediaCommand": true,
+      "newTabs": { "max": 0 },
+    },
+  },
+]

@@ -36,6 +36,21 @@ public sealed class JevGatewayRetryTests
         Assert.Equal(1, handler.Calls);
     }
 
+    [Fact]
+    public async Task DiagnosticsCountFailedProviderAttemptsWithoutInventingPipelineStages()
+    {
+        var trace = VoiceOS.Core.Activation.LatencyTrace.Begin("retry-accounting");
+        var handler = new Responses(HttpStatusCode.ServiceUnavailable, HttpStatusCode.OK);
+        await Gateway(handler).AskAsync(new { }, new Dictionary<string, JevQuestionDto> {
+            ["route"] = new("choice", "route", new Dictionary<string, string>()) });
+        Assert.Equal(2, trace.ModelCalls.Count);
+        Assert.All(trace.ModelCalls, call => {
+            Assert.Equal("route", call.Name);
+            Assert.True(call.StartMs >= 0 && call.ElapsedMs >= 0);
+        });
+        Assert.Empty(trace.Stages);
+    }
+
     private static TypeSafeJevGateway Gateway(HttpMessageHandler handler)
         => new("placeholder", "test-model", new HttpClient(handler), NullLogger<TypeSafeJevGateway>.Instance);
 

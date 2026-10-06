@@ -10,6 +10,46 @@ namespace VoiceOS.Core.Tests.Browser;
 
 public sealed class BrowserSemanticTests
 {
+    [Fact]
+    public void BootstrapUrl_UsesCorroboratedNormalizedServiceUrl()
+        => Assert.Equal("https://www.imdb.com/", BrowserGoal.BootstrapUrl(new("Search IMDb for Dune",
+            Normalization: FakeNormalizer.Normalized with { PreferredService = "IMDb", PreferredServiceUrl = "https://www.imdb.com/" })));
+
+    [Fact]
+    public void BootstrapUrl_RegistryScopedAndExplicitStillWin()
+    {
+        var goal = new BrowserGoal("search", NamedServiceHint: "YouTube", Normalization:
+            FakeNormalizer.Normalized with { PreferredService = "IMDb", PreferredServiceUrl = "https://www.imdb.com/" });
+        Assert.Equal("https://www.youtube.com/", BrowserGoal.BootstrapUrl(goal));
+        goal = goal with { ScopedDestination = new("https://example.org/") };
+        Assert.Equal("https://example.org/", BrowserGoal.BootstrapUrl(goal));
+        Assert.Equal("https://example.com/", BrowserGoal.BootstrapUrl(goal with { ExplicitUrl = new("https://example.com/") }));
+    }
+
+    [Theory]
+    [InlineData("IMDb", "https://evil.example/")]
+    [InlineData(null, "https://www.imdb.com/")]
+    [InlineData("IMDb", "http://www.imdb.com/")]
+    [InlineData("IMDb", "https://www.imdb.com/title/123")]
+    [InlineData("IMDb", "https://user@www.imdb.com/")]
+    [InlineData("IMDb", "https://www.imdb.com/?q=x")]
+    [InlineData("IMDb", "https://www.imdb.com/#x")]
+    [InlineData("The New York Times", "https://www.nytimes.com/")]
+    public void BootstrapUrl_UncorroboratedOrInvalidUrl_FallsBackToGoogle(string? service, string url)
+        => Assert.Equal("https://www.google.com/", BrowserGoal.BootstrapUrl(new("search",
+            Normalization: FakeNormalizer.Normalized with { PreferredService = service, PreferredServiceUrl = url })));
+
+    [Fact]
+    public async Task SearchIMDb_OpensImdbTaskTab()
+    {
+        var transport = new StaticTransport();
+        var gateway = new FakeGateway((_, _) => Answers(("operation", Choice("BLOCKED", .99)), ("stuck", Noul(.99))));
+        var service = new BrowserInteractionService(transport, gateway, new FakeNormalizer { Result =
+            FakeNormalizer.Normalized with { PreferredService = "IMDb", PreferredServiceUrl = "https://www.imdb.com/" } });
+        await service.RunAsync("Search IMDb for Dune");
+        Assert.Equal("https://www.imdb.com/", transport.LastOpenUrl);
+    }
+
     [Theory]
     [InlineData("play", MediaOperation.Play)]
     [InlineData("play the song", MediaOperation.Play)]
@@ -33,13 +73,100 @@ public sealed class BrowserSemanticTests
             return Answers(("route", Choice("CLARIFY", .51)),
                 ("intent_completeness", Choice("Actionable", .98)),
                 ("media_request_kind", Choice("Transport", .94)),
-                ("media_op", Choice(expected.ToString(), .96)));
+                ("media_op", Choice(expected.ToString(), .96)),
+                ("return_target", Choice(expected == MediaOperation.Previous ? "MediaPlayback" : "None", .9)));
         });
         var route = await new TypeSafeCommandRouter(gateway).RouteAsync(utterance);
         Assert.Equal(CommandRoute.DirectCapability, route.Route);
         Assert.Equal(RoutingReason.MediaTransport, route.Reason);
         Assert.Equal(MediaRequestKind.Transport, route.MediaRequestKind);
         Assert.Equal(expected, route.MediaOperation);
+    }
+
+    [Theory]
+    [InlineData(MediaOperation.Play)]
+    [InlineData(MediaOperation.Pause)]
+    [InlineData(MediaOperation.Next)]
+    public async Task Router_NonPreviousTransportIsUnaffectedByReturnTargetHead(MediaOperation operation)
+    {
+        // The Previous gate must not require any new head for other transport operations.
+        var gateway = new FakeGateway((_, _) => Answers(("route", Choice("CLARIFY", .51)),
+            ("intent_completeness", Choice("Actionable", .98)),
+            ("media_request_kind", Choice("Transport", .94)),
+            ("media_op", Choice(operation.ToString(), .96))));
+        var route = await new TypeSafeCommandRouter(gateway).RouteAsync("media transport");
+        Assert.Equal(CommandRoute.DirectCapability, route.Route);
+        Assert.Equal(operation, route.MediaOperation);
+    }
+
+    [Theory]
+    [InlineData("RequiresCurrentSurface")]
+    [InlineData("SelfContained")]
+    public async Task Router_PreviousPredictionWithNavigationBackIsBrowserNotMedia(string contextDependency)
+    {
+        var gateway = new FakeGateway((_, questions) =>
+        {
+            Assert.Contains("return_target", questions.Keys);
+            return Answers(("route", Choice("DIRECT_CAPABILITY", .8)),
+                ("intent_completeness", Choice("Actionable", .98)),
+                ("media_request_kind", Choice("Transport", .9)),
+                ("media_op", Choice("Previous", .95)),
+                ("return_target", Choice("NavigationHistory", .9)),
+                ("context_dependency", Choice(contextDependency, .9)));
+        });
+        var route = await new TypeSafeCommandRouter(gateway).RouteAsync("could you go back?");
+        Assert.Equal(CommandRoute.ComputerUse, route.Route);
+        Assert.Null(route.MediaOperation);
+        Assert.NotEqual(RoutingReason.MediaTransport, route.Reason);
+        Assert.Equal(MediaRequestKind.None, route.MediaRequestKind);
+        Assert.Equal(ContextDependency.RequiresCurrentSurface, route.ContextDependency);
+    }
+
+    [Theory]
+    [InlineData("Uncertain")]
+    [InlineData("None")]
+    [InlineData(null)]
+    public async Task Router_PreviousPredictionWithoutAffirmativeMediaClarifies(string? returnTarget)
+    {
+        var gateway = new FakeGateway((_, _) =>
+        {
+            var answers = new List<(string, JevAnswer)> { ("route", Choice("DIRECT_CAPABILITY", .8)),
+                ("intent_completeness", Choice("Actionable", .98)),
+                ("media_request_kind", Choice("Transport", .9)), ("media_op", Choice("Previous", .95)) };
+            if (returnTarget is not null) answers.Add(("return_target", Choice(returnTarget, .9)));
+            return Answers([.. answers]);
+        });
+        var route = await new TypeSafeCommandRouter(gateway).RouteAsync("go back");
+        Assert.Equal(CommandRoute.Clarify, route.Route);
+        Assert.Null(route.MediaOperation);
+    }
+
+    [Fact]
+    public async Task Router_NavigationBackIsNeverADirectCapability()
+    {
+        var gateway = new FakeGateway((_, _) => Answers(("route", Choice("DIRECT_CAPABILITY", .9)),
+            ("intent_completeness", Choice("Actionable", .98)),
+            ("media_request_kind", Choice("None", .9)),
+            ("return_target", Choice("NavigationHistory", .9))));
+        var route = await new TypeSafeCommandRouter(gateway).RouteAsync("go back a page");
+        Assert.Equal(CommandRoute.ComputerUse, route.Route);
+        Assert.Equal(ContextDependency.RequiresCurrentSurface, route.ContextDependency);
+    }
+
+    [Theory]
+    [InlineData("None", "NamedEntity", CommandRoute.ComputerUse)]
+    [InlineData("Instagram", "Uncertain", CommandRoute.ComputerUse)]
+    [InlineData("None", "BrowserItself", CommandRoute.DirectCapability)]
+    public async Task Router_ExplicitWebPreferenceForNamedEntityIsNotADirectCapability(string destination,
+        string entity, CommandRoute expected)
+    {
+        var gateway = new FakeGateway((_, _) => Answers(("route", Choice("DIRECT_CAPABILITY", .9)),
+            ("intent_completeness", Choice("Actionable", .98)),
+            ("media_request_kind", Choice("None", .9)), ("destination", Choice(destination, .9)),
+            ("surface_preference", Choice("Browser", .9)), ("requested_entity", Choice(entity, .9)),
+            ("goal_shape", Choice("SurfaceOnly", .9)), ("end_state", Choice("SurfaceReady", .9))));
+        var route = await new TypeSafeCommandRouter(gateway).RouteAsync($"open {(destination == "None" ? "it" : destination)} on the web");
+        Assert.Equal(expected, route.Route);
     }
 
     [Theory]
@@ -235,8 +362,12 @@ public sealed class BrowserSemanticTests
         var gateway = new FakeGateway((_, questions) =>
         {
             calls++;
-            Assert.Contains("particular existing browser tab", questions["tab_disposition"].Instructions);
+            Assert.Contains("particular already-open browser tab", questions["tab_disposition"].Instructions);
+            Assert.Contains("is a destination, classified by the separate destination head",
+                questions["tab_disposition"].Instructions);
             Assert.Contains("descriptive identity", questions["tab_disposition"].Criteria!["ExistingNamedTab"]);
+            Assert.Contains("destination to go to is not a tab reference",
+                questions["tab_disposition"].Criteria!["ExistingNamedTab"]);
             return Answers(("route", Choice("COMPUTER_USE")),
                 ("intent_completeness", Choice("Actionable")),
                 ("media_request_kind", Choice("None")),
@@ -265,9 +396,10 @@ public sealed class BrowserSemanticTests
         var router = new TypeSafeCommandRouter(gateway);
         var one = new BrowserTabInfo(8, 1, false, "https://forum.example/",
             "Community forum", BrowserTabProvenance.User);
-        Assert.Equal(8, await router.SelectNamedTabAsync("use the community tab", [one]));
+        Assert.Equal(NamedTabSelection.Select(8), await router.SelectNamedTabAsync("use the community tab", [one]));
         var duplicate = one with { TabId = 9 };
-        Assert.Null(await router.SelectNamedTabAsync("use the community tab", [one, duplicate]));
+        Assert.Equal(NamedTabSelection.Ambiguous("duplicate_title_and_origin"),
+            await router.SelectNamedTabAsync("use the community tab", [one, duplicate]));
     }
 
     [Theory]
@@ -308,10 +440,15 @@ public sealed class BrowserSemanticTests
         var decision = await new ScopeResolver().ResolveAsync(utterance,
             route, context, new TypeSafeCommandRouter(gateway, logger: log));
         Assert.Equal(1, calls);
-        Assert.Equal(BrowserScopeKind.ExistingNamedTab, decision.Browser?.Kind);
         Assert.Equal(tabId, decision.Browser?.TabId);
         Assert.Equal(tabs.Single(t => t.TabId == tabId).Url, decision.Browser?.ExpectedUrl);
-        Assert.Equal(title, decision.Browser?.ExpectedTitle);
+        // A named tab that is already the visible active tab is the current surface.
+        var selectedIsActive = tabs.Single(t => t.TabId == tabId).Active;
+        Assert.Equal(selectedIsActive ? BrowserScopeKind.ActiveTab : BrowserScopeKind.ExistingNamedTab,
+            decision.Browser?.Kind);
+        Assert.Equal(selectedIsActive ? null : title, decision.Browser?.ExpectedTitle);
+        Assert.True(decision.Browser?.ExplicitSelection);
+        Assert.False(decision.Browser?.TabClaimRefuted);
         Assert.Contains(log.Messages, message => message.Contains($"candidate_id={selectedId}")
             && message.Contains(title)
             && message.Contains("www.google.com") && message.Contains("service=Google"));
@@ -319,12 +456,51 @@ public sealed class BrowserSemanticTests
             && message.Contains("confidence=0.92") && message.Contains("confidence_floor=0.70"));
     }
 
+    [Fact]
+    public async Task EmptyInventoryRefutesNamedTabClaimWithoutASemanticCall()
+    {
+        var router = new TypeSafeCommandRouter(new FakeGateway((_, _) => throw new Exception("No semantic call expected")));
+        var internalOnly = new BrowserTabInfo(3, 1, true, "chrome://newtab/", "New Tab", BrowserTabProvenance.User);
+        Assert.Equal(NamedTabSelectionKind.NoMatch,
+            (await router.SelectNamedTabAsync("go to the Gmail tab", [internalOnly])).Kind);
+    }
+
+    [Fact]
+    public async Task NamedTabCandidatesCarryActivityProvenanceAndRecency()
+    {
+        IReadOnlyDictionary<string, string>? offered = null;
+        var gateway = new FakeGateway((_, questions) =>
+        {
+            offered = questions["tab"].Criteria!;
+            return Answers(("tab", Choice("NONE", .9)));
+        });
+        var tabs = new[]
+        {
+            new BrowserTabInfo(1, 1, true, "https://www.imdb.com/find?q=sharp", "Sharp Objects - IMDb", BrowserTabProvenance.User),
+            new BrowserTabInfo(2, 1, false, "https://docs.python.org/3/", "Python docs", BrowserTabProvenance.VoiceOs, "s2", 40),
+            new BrowserTabInfo(3, 1, false, "https://docs.djangoproject.com/", "Django docs", BrowserTabProvenance.VoiceOs, "s3", 55)
+        };
+        await new TypeSafeCommandRouter(gateway).SelectNamedTabAsync("that docs page", tabs);
+        Assert.Contains("active=yes; opened_by=user; recency_rank=unknown", offered!["tab_1"]);
+        Assert.Contains("active=no; opened_by=VoiceOS; recency_rank=2", offered["tab_2"]);
+        Assert.Contains("active=no; opened_by=VoiceOS; recency_rank=1", offered["tab_3"]);
+        Assert.Contains("service=unknown", offered["tab_1"]);
+    }
+
     [Theory]
-    [InlineData("Open the Vue tab", "NONE", .95, "no_plausible_match")]
-    [InlineData("Open the React tab", "AMBIGUOUS", .95, "multiple_plausible_matches")]
-    [InlineData("Open the React tab", "tab_8", .44, "choice_confidence_below_floor")]
-    public async Task NamedTabSelectionClarifiesForNoneOrAmbiguous(
-        string utterance, string choice, double confidence, string reason)
+    [InlineData("Open the React tab", "tab_8", .95, NamedTabSelectionKind.Selected, "-")]
+    [InlineData("Open the Vue tab", "NONE", .95, NamedTabSelectionKind.NoMatch, "no_plausible_match")]
+    [InlineData("Open the React tab", "AMBIGUOUS", .95, NamedTabSelectionKind.Ambiguous, "multiple_plausible_matches")]
+    // A switch needs a confident unique match; a weak selection is not one.
+    [InlineData("Open the React tab", "tab_8", .6, NamedTabSelectionKind.Ambiguous, "selection_confidence_below_floor")]
+    // NoMatch and Ambiguous stay distinct; refuting a claim needs only ordinary confidence
+    // (tabs.result-from-vendor recorded NONE at .69).
+    [InlineData("Click the Keychron result", "NONE", .69, NamedTabSelectionKind.NoMatch, "no_plausible_match")]
+    [InlineData("Open the Vue tab", "NONE", .44, NamedTabSelectionKind.Unavailable, "choice_confidence_below_threshold")]
+    [InlineData("Open the React tab", "tab_8", .44, NamedTabSelectionKind.Unavailable, "choice_confidence_below_threshold")]
+    [InlineData("Open the React tab", "tab_77", .95, NamedTabSelectionKind.Unavailable, "candidate_not_offered")]
+    public async Task NamedTabSelectionIsTyped(string utterance, string choice, double confidence,
+        NamedTabSelectionKind expected, string reason)
     {
         var log = new CaptureLogger();
         var gateway = new FakeGateway((_, questions) =>
@@ -341,10 +517,11 @@ public sealed class BrowserSemanticTests
             new BrowserTabInfo(9, 1, false, "https://example.org/react",
                 "React documentation", BrowserTabProvenance.User)
         };
-        Assert.Null(await new TypeSafeCommandRouter(gateway, logger: log).SelectNamedTabAsync(
-            utterance, tabs));
+        var result = await new TypeSafeCommandRouter(gateway, logger: log).SelectNamedTabAsync(utterance, tabs);
+        Assert.Equal(expected, result.Kind);
+        Assert.Equal(expected == NamedTabSelectionKind.Selected ? 8 : null, result.TabId);
         Assert.Contains(log.Messages, message => message.Contains($"selected_semantic_value={choice}"));
-        Assert.Contains(log.Messages, message => message.Contains($"reason={reason}"));
+        Assert.Contains(log.Messages, message => message.Contains($"outcome={expected} reason={reason}"));
     }
 
     [Fact]
@@ -362,6 +539,134 @@ public sealed class BrowserSemanticTests
         Assert.Equal(InteractionCompletionState.Complete, outcome.Completion);
         Assert.Contains(log.Messages, message => message.Contains("candidate_id=tab_8")
             && message.Contains("atomic_url_title_verification=passed"));
+    }
+
+    [Fact]
+    public async Task RefutedNamedTabFallbackNeverCompletesOnArrival()
+    {
+        var utterance = "Click on Sharp Objects";
+        var route = new CommandRouteDecision(CommandRoute.ComputerUse, .9,
+            TabDisposition: TabDisposition.ExistingNamedTab,
+            ContextDependency: ContextDependency.RequiresCurrentSurface,
+            EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly);
+        var foreground = new VoiceOS.Core.Candidates.WindowCandidate("chrome", "chrome", "Results", true, 42);
+        var scope = await new ScopeResolver().ResolveAsync(utterance, route,
+            new(foreground, [foreground], true, [
+                new(42, 1, true, "https://www.goodreads.com/list", "Books", BrowserTabProvenance.User),
+                new(8, 1, false, "https://docs.github.com/", "GitHub docs", BrowserTabProvenance.User)]),
+            new RefutingPicker());
+        Assert.Equal(BrowserScopeKind.ActiveTab, scope.Browser!.Kind);
+        Assert.Equal(42, scope.Browser.TabId);
+        Assert.True(scope.Browser.TabClaimRefuted);
+        Assert.False(scope.Browser.ExplicitSelection);
+        Assert.False(scope.Browser.IsSurfaceOnly);
+
+        // Arrival on the current tab proves no click, with or without a refuted tab claim.
+        foreach (var refuted in new[] { false, true })
+        {
+            var transport = new ClickPageTransport();
+            var normalizer = new FakeNormalizer { Result = SharpObjectsGoal with {
+                ResourceType = "website", Entity = null, EndState = SemanticEndState.SurfaceReady } };
+            var service = new BrowserInteractionService(transport,
+                new FakeGateway((_, _) => Answers(("operation", Choice("DONE", .99)), ("goal_achieved", Noul(.99)))),
+                normalizer, foregroundVerifier: _ => true);
+            var result = await service.RunAsync(utterance, scope: scope.Browser with { TabClaimRefuted = refuted });
+            Assert.Equal(InteractionCompletionState.Incomplete, result.Completion);
+            Assert.Equal(0, result.Actions);
+            Assert.Equal(0, transport.Opens);
+            Assert.Equal(new[] { 42 }, transport.SelectedTabs);
+        }
+
+        var clickTransport = new ClickPageTransport();
+        var clickNormalizer = new FakeNormalizer { Result = SharpObjectsGoal };
+        var clickService = new BrowserInteractionService(clickTransport, new FakeGateway((_, questions) =>
+            questions.ContainsKey("operation") && clickTransport.Actions == 0
+                ? Answers(("operation", Choice("CLICK", .99)), ("click_target", Choice("e5", .99)), ("goal_achieved", Noul(.01)))
+                : Answers(("operation", Choice("DONE", .99)), ("goal_achieved", Noul(.99)))),
+            clickNormalizer, foregroundVerifier: _ => true);
+        var clicked = await clickService.RunAsync(utterance, scope: scope.Browser);
+        Assert.Equal(InteractionCompletionState.Complete, clicked.Completion);
+        Assert.Equal(1, clicked.Actions);
+        Assert.Equal(1, clickTransport.Actions);
+        Assert.Equal("e5", clickTransport.ClickedRef);
+        Assert.Equal(new[] { 42 }, clickTransport.SelectedTabs);
+        Assert.Equal(0, clickTransport.Opens);
+        Assert.Equal(1, clickNormalizer.Calls);
+    }
+
+    private static BrowserGoalNormalization SharpObjectsGoal => new(
+        "Open Sharp Objects", "Sharp Objects", "book", "Goodreads", "https://www.goodreads.com/",
+        [], "Sharp Objects book page open", [], SemanticEndState.ResourceOpened);
+
+    [Theory]
+    [InlineData(RoutingReason.LowConfidence, false)]
+    [InlineData(RoutingReason.AmbiguousIntent, false)]
+    [InlineData(RoutingReason.LowConfidence, true)]
+    public async Task PreliminaryClarifyRefutedPageEntryStillRequiresMatchingAction(RoutingReason reason, bool missingTarget)
+    {
+        const string utterance = "Open the cobalt entry";
+        var route = new CommandRouteDecision(CommandRoute.Clarify, .35, Reason: reason,
+            MediaRequestKind: MediaRequestKind.None, TabDisposition: TabDisposition.ExistingNamedTab,
+            ContextDependency: ContextDependency.RequiresCurrentSurface,
+            EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly)
+            { IntentActionable = true, CoarseBrowserCandidate = true, ReturnTarget = ReturnTarget.None };
+        var foreground = new VoiceOS.Core.Candidates.WindowCandidate("chrome", "chrome", "Results", true, 42);
+        var scope = await new ScopeResolver().ResolveAsync(utterance, route,
+            new(foreground, [foreground], true,
+                [new(42, 1, true, "https://www.goodreads.com/list", "Books", BrowserTabProvenance.User)]),
+            new RefutingPicker());
+        Assert.True(scope.Browser!.TabClaimRefuted);
+        var transport = new ClickPageTransport();
+        var normalizer = new FakeNormalizer { Result = SharpObjectsGoal with {
+            Entity = "cobalt entry", EndState = SemanticEndState.SurfaceReady } };
+        var service = new BrowserInteractionService(transport,
+            new FakeGateway((_, _) => missingTarget
+                ? Answers(("operation", Choice("CLICK", .99)), ("click_target", Choice("NONE", .99)), ("goal_achieved", Noul(.01)))
+                : Answers(("operation", Choice("DONE", .99)), ("goal_achieved", Noul(.99)))),
+            normalizer, foregroundVerifier: _ => true);
+        var result = await service.RunAsync(utterance, scope: scope.Browser);
+        Assert.NotEqual(InteractionCompletionState.Complete, result.Completion);
+        Assert.Equal(0, result.Actions);
+        Assert.Equal(0, transport.Opens);
+        Assert.Equal(new[] { 42 }, transport.SelectedTabs);
+        Assert.Equal(1, normalizer.Calls);
+    }
+
+    private sealed class RefutingPicker : IContextualScopeDecisionSource
+    {
+        public ValueTask<NamedTabSelection> SelectNamedTabAsync(string utterance, IReadOnlyList<BrowserTabInfo> tabs,
+            CancellationToken cancellationToken = default) => ValueTask.FromResult(NamedTabSelection.NoMatch("content_reference_not_tab"));
+        public ValueTask<ContextualSurface> SelectAsync(string utterance, CommandRouteDecision intent,
+            ExecutionContextSnapshot context, IReadOnlyList<ContextualSurface> offered, CancellationToken cancellationToken = default)
+            => throw new InvalidOperationException("Current-page rule should resolve without a picker.");
+    }
+
+    private sealed class ClickPageTransport : IChromeCompanionTransport
+    {
+        public int Opens;
+        public int Actions;
+        public string? ClickedRef;
+        public List<int> SelectedTabs = [];
+        public ValueTask SelectTabAsync(string sessionId, int tabId, string expectedUrl, bool requireActive,
+            CancellationToken cancellationToken = default)
+        { SelectedTabs.Add(tabId); return ValueTask.CompletedTask; }
+        public ValueTask<BrowserSnapshot> OpenTaskTabAsync(string sessionId, string url, CancellationToken cancellationToken = default)
+        { Opens++; throw new InvalidOperationException("Must preserve the current page."); }
+        public ValueTask<BrowserSnapshot> ObserveAsync(string sessionId, int tabId, CancellationToken cancellationToken = default)
+            => ValueTask.FromResult(Snapshot(sessionId));
+        public ValueTask<BrowserSnapshot> ActAsync(BrowserActionRequest action, CancellationToken cancellationToken = default)
+        {
+            Assert.Equal(42, action.TabId);
+            Assert.Equal("CLICK", action.Action);
+            Actions++; ClickedRef = action.ElementRef;
+            return ValueTask.FromResult(Snapshot(action.SessionId));
+        }
+        private BrowserSnapshot Snapshot(string session) => Actions == 0
+            ? new(42, session, "r1", "https://www.goodreads.com/list", "Books", "Books",
+                false, new(1280, 800, 0, 0), [new("e5", "link", "Sharp Objects", true, false, null,
+                    "https://www.goodreads.com/book/sharp-objects", new(10, 10, 100, 30, true), "Books")])
+            : new(42, session, "r2", "https://www.goodreads.com/book/sharp-objects", "Sharp Objects book", "Sharp Objects book",
+                false, new(1280, 800, 0, 0), []);
     }
 
     [Fact]
@@ -498,12 +803,54 @@ public sealed class BrowserSemanticTests
         var transport = new StaticTransport();
         var gateway = new FakeGateway((_, _) => throw new Exception("No action decision expected"));
         var service = new BrowserInteractionService(transport, gateway);
-        var outcome = await service.RunAsync("make a fresh tab", scope: new(
+        var outcome = await service.RunAsync("make a fresh tab", scope: new BrowserExecutionScope(
             BrowserScopeKind.NewTaskTab, EndState: SemanticEndState.SurfaceReady,
-            GoalShape: GoalShape.SurfaceOnly));
+            GoalShape: GoalShape.SurfaceOnly) { BlankTabRequested = true });
         Assert.Equal(InteractionCompletionState.Complete, outcome.Completion);
         Assert.Equal(1, transport.NormalTabs);
         Assert.Equal(0, transport.Opens);
+    }
+
+    [Fact]
+    public async Task SurfaceOnlyWithPendingNamedDestinationDoesNotCompleteOnBlankTab()
+    {
+        var transport = new StaticTransport();
+        var normalizer = new FakeNormalizer
+        {
+            Result = FakeNormalizer.Normalized with
+            {
+                Objective = "open the service", Entity = null, PreferredService = "Reddit",
+                SearchQueries = [], CorrectedTerms = [], EndState = SemanticEndState.SurfaceReady
+            }
+        };
+        var gateway = new FakeGateway((_, _) => Answers(("operation", Choice("BLOCKED", .99)), ("stuck", Noul(.99))));
+        var service = new BrowserInteractionService(transport, gateway, normalizer);
+        await service.RunAsync("open Reddit", scope: new(BrowserScopeKind.NewTaskTab,
+            EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly,
+            DestinationPending: true));
+        Assert.Equal(0, transport.NormalTabs);
+        Assert.Equal(1, normalizer.Calls);
+        Assert.Equal("https://www.reddit.com/", transport.LastOpenUrl);
+    }
+
+    [Fact]
+    public async Task SurfaceOnlyKnownDestinationCompletesOnlyOnceDestinationContentLoads()
+    {
+        var reached = new StaticTransport();
+        var service = new BrowserInteractionService(reached,
+            new FakeGateway((_, _) => throw new Exception("No action decision expected")));
+        var scope = new BrowserExecutionScope(BrowserScopeKind.NewTaskTab,
+            Destination: new("https://www.instagram.com/"), NamedServiceHint: "Instagram",
+            EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly);
+        var ok = await service.RunAsync("open the service on the web", scope: scope);
+        Assert.Equal(InteractionCompletionState.Complete, ok.Completion);
+        Assert.Equal("https://www.instagram.com/", reached.LastOpenUrl);
+
+        var blank = new StaticTransport { SnapshotUrl = "chrome://newtab/" };
+        var failed = await new BrowserInteractionService(blank,
+            new FakeGateway((_, _) => throw new Exception("No action decision expected")))
+            .RunAsync("open the service on the web", scope: scope);
+        Assert.Equal(InteractionCompletionState.Incomplete, failed.Completion);
     }
 
     [Fact]
@@ -596,18 +943,8 @@ public sealed class BrowserSemanticTests
             new FakeGateway((_, _) => throw new Exception("Jev should not be called")),
             new FakeNormalizer { Fail = true });
         var result = await service.RunAsync("Find the Ripcrap repository on github");
-        Assert.Equal(InteractionCompletionState.Uncertain, result.Completion);
+        Assert.Equal(InteractionCompletionState.Incomplete, result.Completion);
         Assert.Equal(0, transport.Opens);
-    }
-
-    [Fact]
-    public async Task MalformedProviderResponse_FailsWithoutLeakingCredential()
-    {
-        var handler = new StubHttpHandler();
-        var normalizer = new OpenRouterBrowserGoalNormalizer(new HttpClient(handler), "placeholder-credential");
-        var result = await normalizer.NormalizeAsync("find a repository on a service");
-        Assert.Null(result);
-        Assert.Equal(1, handler.Requests);
     }
 
     private sealed class StubHttpHandler : HttpMessageHandler
@@ -618,7 +955,7 @@ public sealed class BrowserSemanticTests
             Requests++;
             Assert.Equal("https://openrouter.ai/api/v1/chat/completions", request.RequestUri!.ToString());
             return Task.FromResult(new HttpResponseMessage(HttpStatusCode.OK)
-            { Content = new StringContent("{\"choices\":[{\"message\":{\"content\":\"invalid json\"}}]") });
+            { Content = new StringContent("{\"choices\":[{\"message\":{\"content\":\"invalid json\"}}]}") });
         }
     }
 
@@ -744,6 +1081,57 @@ public sealed class BrowserSemanticTests
         Assert.Equal(2, calls);
     }
 
+    [Theory]
+    [InlineData("Click on Sharp Objects")]
+    [InlineData("Open the third result")]
+    public async Task ImplicitActiveTab_ZeroActionCompletion_IsNeverComplete(string utterance)
+    {
+        var transport = new StaticTransport();
+        var normalizer = new FakeNormalizer { Result = FakeNormalizer.Normalized with {
+            Objective = "Use current page", PreferredService = "Google", Entity = null,
+            SearchQueries = [], EndState = SemanticEndState.SurfaceReady } };
+        var service = new BrowserInteractionService(transport, new FakeGateway((_, _) =>
+            Answers(("operation", Choice("DONE", .99)), ("goal_achieved", Noul(.99)))), normalizer);
+        var result = await service.RunAsync(utterance, scope: new(BrowserScopeKind.ActiveTab, 42, "https://www.google.com/",
+            EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly));
+        Assert.Equal(1, normalizer.Calls);
+        Assert.Equal(InteractionCompletionState.Incomplete, result.Completion);
+        Assert.Equal("I couldn't do that on this page.", result.Detail);
+        Assert.Equal(0, result.Actions);
+        Assert.Equal(0, transport.Opens);
+    }
+
+    [Fact]
+    public async Task ExplicitBlankTab_FastPathRemainsCheap()
+    {
+        var transport = new StaticTransport();
+        var normalizer = new FakeNormalizer();
+        var service = new BrowserInteractionService(transport,
+            new FakeGateway((_, _) => throw new Exception("No model call expected")), normalizer);
+        var result = await service.RunAsync("Open a new tab", scope: new BrowserExecutionScope(BrowserScopeKind.NewTaskTab,
+            EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly) { BlankTabRequested = true });
+        Assert.Equal(InteractionCompletionState.Complete, result.Completion);
+        Assert.Equal(1, transport.NormalTabs);
+        Assert.Equal(0, transport.Opens);
+        Assert.Equal(0, normalizer.Calls);
+    }
+
+    [Fact]
+    public async Task OpenYouTube_SurfaceAcquisition_FastPathRemainsCheap()
+    {
+        var transport = new StaticTransport { SnapshotUrl = "https://www.youtube.com/" };
+        var normalizer = new FakeNormalizer();
+        var service = new BrowserInteractionService(transport,
+            new FakeGateway((_, _) => throw new Exception("No decision expected")), normalizer);
+        var result = await service.RunAsync("Open YouTube", scope: new(BrowserScopeKind.NewTaskTab,
+            Destination: new("https://www.youtube.com/"), NamedServiceHint: "YouTube",
+            EndState: SemanticEndState.SurfaceReady, GoalShape: GoalShape.SurfaceOnly));
+        Assert.Equal(InteractionCompletionState.Complete, result.Completion);
+        Assert.Equal(1, transport.Opens);
+        Assert.Equal(0, normalizer.Calls);
+        Assert.Equal(0, result.Decisions);
+    }
+
     private sealed class CompletionSurface(TypeSafeBrowserDecisionSource source, params InteractionObservation[] observations) : IInteractionSurface
     {
         public int Observations { get; private set; }
@@ -767,7 +1155,7 @@ public sealed class BrowserSemanticTests
         private sealed class NullScope : IDisposable { public static NullScope Instance { get; } = new(); public void Dispose() { } }
     }
 
-    private sealed class FakeNormalizer : IBrowserGoalNormalizer
+    private sealed class FakeNormalizer : NormalizingCompiler
     {
         public static BrowserGoalNormalization Normalized => new(
             "view the ripgrep repository on GitHub", "ripgrep", "repository", "GitHub",
@@ -776,7 +1164,7 @@ public sealed class BrowserSemanticTests
         public int Calls { get; private set; }
         public bool Fail { get; set; }
         public BrowserGoalNormalization Result { get; set; } = Normalized;
-        public ValueTask<BrowserGoalNormalization?> NormalizeAsync(string utterance, CancellationToken cancellationToken = default)
+        public override ValueTask<BrowserGoalNormalization?> NormalizeAsync(string utterance, CancellationToken cancellationToken = default)
         {
             Calls++;
             return ValueTask.FromResult<BrowserGoalNormalization?>(Fail ? null : Result);
@@ -789,6 +1177,8 @@ public sealed class BrowserSemanticTests
         public int Opens { get; private set; }
         public int NormalTabs { get; private set; }
         public int Selections { get; private set; }
+        public string? LastOpenUrl { get; private set; }
+        public string SnapshotUrl { get; init; } = "https://www.google.com/";
         public ValueTask SelectTabAsync(string sessionId, int tabId, string expectedUrl,
             bool requireActive, CancellationToken cancellationToken = default)
         {
@@ -806,13 +1196,14 @@ public sealed class BrowserSemanticTests
         {
             Opens++;
             LastSession = sessionId;
+            LastOpenUrl = url;
             return ValueTask.FromResult(Snapshot(sessionId));
         }
         public ValueTask<BrowserSnapshot> ObserveAsync(string sessionId, int tabId, CancellationToken cancellationToken = default)
             => ValueTask.FromResult(Snapshot(sessionId));
         public ValueTask<BrowserSnapshot> ActAsync(BrowserActionRequest action, CancellationToken cancellationToken = default)
             => ValueTask.FromResult(Snapshot(action.SessionId));
-        private static BrowserSnapshot Snapshot(string session) => new(42, session, "r1", "https://www.google.com/", "Google", "Search",
+        private BrowserSnapshot Snapshot(string session) => new(42, session, "r1", SnapshotUrl, "Google", "Search",
             false, new(1280, 800, 0, 0), [], false);
     }
 

@@ -6,6 +6,62 @@ const path = require("node:path");
 
 const source = (name) => fs.readFileSync(path.join(__dirname, name), "utf8");
 
+// Shared mock factory for background.js tests. `fire(name, ...args)` invokes every
+// listener registered under that event name; `overrides` deep-merges one level into
+// the relevant chrome.* namespace (e.g. { tabs: { get: async () => ... } }).
+function createMockChrome(overrides = {}) {
+  const registry = new Map();
+  function evt(name) {
+    if (!registry.has(name)) registry.set(name, new Set());
+    return {
+      addListener(fn) { registry.get(name).add(fn); },
+      removeListener(fn) { registry.get(name).delete(fn); }
+    };
+  }
+  function fire(name, ...args) { for (const fn of [...(registry.get(name) ?? [])]) fn(...args); }
+  const port = { onMessage: evt("port-message"), onDisconnect: evt("port-disconnect"), postMessage() {} };
+  const base = {
+    runtime: { id: "extension", connectNative: () => port,
+      onStartup: evt("runtime-startup"), onInstalled: evt("runtime-installed") },
+    alarms: { onAlarm: evt("alarm"), clear: async () => {}, create() {} },
+    action: { onClicked: evt("action-clicked") },
+    storage: { session: { get: async () => ({}), set: async () => {} } },
+    tabs: {
+      onRemoved: evt("tabs-removed"), onUpdated: evt("tabs-updated"), onActivated: evt("tabs-activated"),
+      onCreated: evt("tabs-created"),
+      create: async () => ({ id: 1, windowId: 1 }),
+      get: async (id) => ({ id, windowId: 1, active: true, status: "complete" }),
+      update: async (id, properties) => ({ id, windowId: 1, ...properties }),
+      query: async () => [],
+      sendMessage: async () => ({ ok: true }),
+      remove: async () => {},
+      goBack: async () => {}
+    },
+    windows: {
+      onFocusChanged: evt("windows-focus"),
+      get: async () => ({ state: "normal", focused: true }),
+      getLastFocused: async () => ({ id: 1 }),
+      update: async (id, properties) => ({ focused: true, ...properties })
+    },
+    webNavigation: {
+      onBeforeNavigate: evt("nav-before"), onCommitted: evt("nav-committed"),
+      onCompleted: evt("nav-completed"), onErrorOccurred: evt("nav-error"),
+      onHistoryStateUpdated: evt("nav-history"), onDOMContentLoaded: evt("nav-dcl"),
+      onReferenceFragmentUpdated: evt("nav-fragment")
+    },
+    scripting: { executeScript: async () => {} }
+  };
+  const chrome = { ...base };
+  for (const key of Object.keys(overrides)) chrome[key] = { ...base[key], ...overrides[key] };
+  return { chrome, fire };
+}
+
+function backgroundContext(chrome) {
+  const context = vm.createContext({ chrome, console: { info() {}, warn() {} }, setTimeout, clearTimeout, URL, Date });
+  vm.runInContext(source("background.js"), context);
+  return context;
+}
+
 test("surface-only new tab delegates to Chrome default behavior", async () => {
   const event = () => ({ addListener() {}, removeListener() {} });
   const createOptions = [];
@@ -223,4 +279,766 @@ test("observed cross-origin anchor uses its real DOM activation", () => {
   listener({ type: "VOICEOS_ACT", action: "CLICK", revision: observation.revision, elementRef: "e1" }, null, () => {});
   assert.equal(assigned, undefined);
   assert.equal(clicked, 1);
+});
+
+test("sections are reported with their view state and a section is revealed by scrolling, never by a click", () => {
+  let listener;
+  let clicked = 0;
+  let revealed = 0;
+  const scrolls = [];
+  class HTMLElement {
+    isConnected = true;
+    constructor(top) { this.top = top; }
+    getBoundingClientRect() { return { x: 0, y: this.top, width: 100, height: 30, bottom: this.top + 30, right: 100, top: this.top, left: 0 }; }
+    getAttribute() { return null; }
+    closest() { return null; }
+    matches() { return false; }
+  }
+  class HTMLAnchorElement extends HTMLElement {
+    href = "https://shop.example/reviews"; target = ""; download = ""; innerText = "(4 Reviews)";
+    click() { clicked++; }
+  }
+  class Heading extends HTMLElement {
+    tagName = "H2"; innerText = "Customer Reviews";
+    scrollIntoView() { revealed++; }
+  }
+  const link = new HTMLAnchorElement(100);
+  const heading = new Heading(5000);
+  const document = {
+    querySelectorAll: (selector) => selector.startsWith("h1") ? [heading] : [link],
+    body: { innerText: "(4 Reviews) Customer Reviews" }, documentElement: { scrollHeight: 6000 }, title: "Product"
+  };
+  const location = { href: "https://shop.example/p/1", origin: "https://shop.example", assign() {} };
+  const chrome = { runtime: { onMessage: { addListener: (fn) => { listener = fn; } } } };
+  const context = vm.createContext({ chrome, document, location, HTMLElement, HTMLAnchorElement,
+    HTMLButtonElement: class {}, HTMLInputElement: class {}, HTMLTextAreaElement: class {}, HTMLSelectElement: class {},
+    window: { innerWidth: 1280, innerHeight: 800, scrollX: 0, scrollY: 0, scrollBy: (options) => scrolls.push(options.top) },
+    innerWidth: 1280, innerHeight: 800, history: { length: 2 }, URL, Date, crypto: require("node:crypto").webcrypto,
+    getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" }) });
+  vm.runInContext(source("content.js"), context);
+  let observation;
+  listener({ type: "VOICEOS_OBSERVE" }, null, value => { observation = value; });
+  assert.deepEqual(Array.from(observation.headings, h => [h.ref, h.text, h.inViewport]), [["h1", "Customer Reviews", false]]);
+  listener({ type: "VOICEOS_ACT", action: "SCROLL", revision: observation.revision, elementRef: "h1" }, null, () => {});
+  assert.equal(revealed, 1);
+  assert.equal(clicked, 0);
+  // A plain scroll moves by a screen fraction: normal, larger while the target is far, smaller once it is close.
+  for (const text of [undefined, "large", "small"])
+    listener({ type: "VOICEOS_ACT", action: "SCROLL", revision: observation.revision, direction: "down", text }, null, () => {});
+  assert.deepEqual(scrolls, [640, 1280, 320]);
+});
+
+test("openTaskTab resolves after document-ready + SETTLE, focusing while still loading, without waiting for full load", async () => {
+  const focusCalls = [];
+  const { chrome, fire } = createMockChrome({
+    tabs: {
+      create: async () => ({ id: 5, windowId: 1 }),
+      get: async (id) => ({ id, windowId: 1, active: true, status: "loading" }),
+      update: async (id, properties) => { focusCalls.push(properties); return { id, windowId: 1, ...properties }; },
+      sendMessage: async (id, message) => {
+        if (message.type === "VOICEOS_PING") return { ok: true };
+        if (message.type === "VOICEOS_SETTLE")
+          return { settled: true, reason: "quiet", waitedMs: 10, mutations: 0, actionable: true };
+        return { revision: "r1", url: "https://example.com/", title: "Example",
+          visibleText: "", truncated: false, viewport: {}, elements: [] };
+      }
+    }
+  });
+  const context = backgroundContext(chrome);
+  const promise = vm.runInContext('openTaskTab({ sessionId: "task-open-01", url: "https://example.com/" })', context);
+  await new Promise((resolve) => setTimeout(resolve, 15));
+  assert.ok(focusCalls.some((properties) => properties.active === true), "focus happens while the tab is still loading");
+  fire("nav-dcl", { tabId: 5, frameId: 0 });
+  const result = await promise;
+  assert.equal(result.snapshot.url, "https://example.com/");
+  assert.ok(result.timings);
+  assert.ok(Number.isInteger(result.timings.created));
+  assert.ok(Number.isInteger(result.timings.domContentLoaded));
+  assert.ok(Number.isInteger(result.timings.focused));
+  assert.ok(Number.isInteger(result.timings.settled));
+  assert.ok(Number.isInteger(result.timings.observed));
+});
+
+test("waitForDocumentReady rejects with TAB_TIMEOUT when neither DOMContentLoaded nor status complete arrives", async () => {
+  const { chrome } = createMockChrome({ tabs: { get: async (id) => ({ id, windowId: 1, status: "loading" }) } });
+  const context = backgroundContext(chrome);
+  await assert.rejects(
+    vm.runInContext("waitForDocumentReady(42, 30)", context),
+    (error) => error.code === "TAB_TIMEOUT"
+  );
+});
+
+test("ACT cross_document: settles on the new document without waiting for status complete", async () => {
+  const { chrome, fire } = createMockChrome({
+    tabs: {
+      query: async () => [{ id: 7, windowId: 1, active: true, status: "complete", url: "https://source.example/" }],
+      get: async (id) => ({ id, windowId: 1, active: true, status: "loading" }),
+      sendMessage: async (id, message) => {
+        if (message.type === "VOICEOS_PING") return { ok: true };
+        if (message.type === "VOICEOS_ACT") return { navigation: { method: "element.click" } };
+        if (message.type === "VOICEOS_SETTLE")
+          return { settled: true, reason: "quiet", waitedMs: 5, mutations: 0, actionable: true };
+        return { revision: "r1", url: "https://dest.example/", title: "Dest",
+          visibleText: "", truncated: false, viewport: {}, elements: [] };
+      }
+    }
+  });
+  const context = backgroundContext(chrome);
+  vm.runInContext('ownedTaskTabs.set(7, "session-cross-doc")', context);
+  const promise = vm.runInContext(
+    'actInOwnedTab({ tabId: 7, sessionId: "session-cross-doc", revision: "r1", action: "CLICK", elementRef: "e1" })',
+    context);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  fire("nav-before", { tabId: 7, frameId: 0 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  fire("nav-committed", { tabId: 7, frameId: 0 });
+  fire("nav-dcl", { tabId: 7, frameId: 0 });
+  const started = Date.now();
+  const result = await promise;
+  assert.ok(Date.now() - started < 1_000, "should not wait for full page load");
+  assert.equal(result.timings.signal, "cross_document");
+  assert.equal(result.snapshot.url, "https://dest.example/");
+});
+
+test("ACT cross_document never settles on the old document before the new one commits", async () => {
+  const sent = [];
+  const { chrome, fire } = createMockChrome({
+    tabs: {
+      query: async () => [{ id: 12, windowId: 1, active: true, status: "complete", url: "https://old.example/" }],
+      // Right after onBeforeNavigate Chrome still reports the old document as complete.
+      get: async (id) => ({ id, windowId: 1, active: true, status: "complete", url: "https://old.example/" }),
+      sendMessage: async (id, message) => {
+        sent.push(message.type);
+        if (message.type === "VOICEOS_PING") return { ok: true };
+        if (message.type === "VOICEOS_ACT") return { navigation: { method: "element.click" } };
+        if (message.type === "VOICEOS_SETTLE")
+          return { settled: true, reason: "quiet", waitedMs: 5, mutations: 0, actionable: true };
+        return { revision: "r2", url: "https://new.example/", title: "New",
+          visibleText: "", truncated: false, viewport: {}, elements: [] };
+      }
+    }
+  });
+  const context = backgroundContext(chrome);
+  vm.runInContext('ownedTaskTabs.set(12, "session-old-doc")', context);
+  const promise = vm.runInContext(
+    'actInOwnedTab({ tabId: 12, sessionId: "session-old-doc", revision: "r1", action: "CLICK", elementRef: "e1" })',
+    context);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  fire("nav-before", { tabId: 12, frameId: 0 });
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  assert.equal(sent.includes("VOICEOS_SETTLE"), false, "must not settle before the new document commits");
+  assert.equal(sent.includes("VOICEOS_OBSERVE"), false, "must not observe the pre-navigation DOM");
+  fire("nav-committed", { tabId: 12, frameId: 0 });
+  fire("nav-dcl", { tabId: 12, frameId: 0 });
+  const result = await promise;
+  assert.equal(result.timings.signal, "cross_document");
+  assert.equal(result.snapshot.url, "https://new.example/");
+});
+
+test("ACT same_document: settles with requireActionable false and a bounded maxMs", async () => {
+  const seenSettleOptions = [];
+  const { chrome, fire } = createMockChrome({
+    tabs: {
+      query: async () => [{ id: 8, windowId: 1, active: true, status: "complete", url: "https://spa.example/" }],
+      sendMessage: async (id, message) => {
+        if (message.type === "VOICEOS_PING") return { ok: true };
+        if (message.type === "VOICEOS_ACT") return { navigation: { method: "element.click" } };
+        if (message.type === "VOICEOS_SETTLE") {
+          seenSettleOptions.push(message);
+          return { settled: true, reason: "quiet", waitedMs: 5, mutations: 1, actionable: false };
+        }
+        return { revision: "r1", url: "https://spa.example/#tab2", title: "SPA",
+          visibleText: "", truncated: false, viewport: {}, elements: [] };
+      }
+    }
+  });
+  const context = backgroundContext(chrome);
+  vm.runInContext('ownedTaskTabs.set(8, "session-same-doc")', context);
+  const promise = vm.runInContext(
+    'actInOwnedTab({ tabId: 8, sessionId: "session-same-doc", revision: "r1", action: "CLICK", elementRef: "e1" })',
+    context);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  fire("nav-history", { tabId: 8, frameId: 0 });
+  const result = await promise;
+  assert.equal(result.timings.signal, "same_document");
+  assert.equal(seenSettleOptions.length, 1);
+  assert.equal(seenSettleOptions[0].requireActionable, false);
+  assert.ok(seenSettleOptions[0].maxMs <= 800);
+});
+
+test("ACT with no navigation signal waits the ~800ms no-signal budget and reports signal none", async () => {
+  const { chrome } = createMockChrome({
+    tabs: {
+      query: async () => [{ id: 9, windowId: 1, active: true, status: "complete", url: "https://static.example/" }],
+      sendMessage: async (id, message) => {
+        if (message.type === "VOICEOS_PING") return { ok: true };
+        if (message.type === "VOICEOS_ACT") return {};
+        return { revision: "r1", url: "https://static.example/", title: "Static",
+          visibleText: "", truncated: false, viewport: {}, elements: [] };
+      }
+    }
+  });
+  const context = backgroundContext(chrome);
+  vm.runInContext('ownedTaskTabs.set(9, "session-no-signal")', context);
+  const started = Date.now();
+  const result = await vm.runInContext(
+    'actInOwnedTab({ tabId: 9, sessionId: "session-no-signal", revision: "r1", action: "CLICK", elementRef: "e1" })',
+    context);
+  const elapsed = Date.now() - started;
+  assert.ok(elapsed >= 750, `expected >= 750ms, got ${elapsed}`);
+  assert.equal(result.timings.signal, "none");
+});
+
+test("ACT late navigation signal (after 350ms) still switches to the cross_document path", async () => {
+  const { chrome, fire } = createMockChrome({
+    tabs: {
+      query: async () => [{ id: 10, windowId: 1, active: true, status: "complete", url: "https://late.example/" }],
+      get: async (id) => ({ id, windowId: 1, active: true, status: "loading" }),
+      sendMessage: async (id, message) => {
+        if (message.type === "VOICEOS_PING") return { ok: true };
+        if (message.type === "VOICEOS_ACT") return {};
+        if (message.type === "VOICEOS_SETTLE")
+          return { settled: true, reason: "quiet", waitedMs: 5, mutations: 0, actionable: true };
+        return { revision: "r1", url: "https://late.example/next", title: "Next",
+          visibleText: "", truncated: false, viewport: {}, elements: [] };
+      }
+    }
+  });
+  const context = backgroundContext(chrome);
+  vm.runInContext('ownedTaskTabs.set(10, "session-late-nav")', context);
+  const promise = vm.runInContext(
+    'actInOwnedTab({ tabId: 10, sessionId: "session-late-nav", revision: "r1", action: "CLICK", elementRef: "e1" })',
+    context);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  fire("nav-before", { tabId: 10, frameId: 0 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  fire("nav-committed", { tabId: 10, frameId: 0 });
+  fire("nav-dcl", { tabId: 10, frameId: 0 });
+  const result = await promise;
+  assert.equal(result.timings.signal, "cross_document");
+});
+
+test("BACK: commit + onCompleted (bfcache) resolves cross_document without waiting for status complete", async () => {
+  const { chrome, fire } = createMockChrome({
+    tabs: {
+      query: async () => [{ id: 11, windowId: 1, active: true, status: "complete", url: "https://back.example/two" }],
+      get: async (id) => ({ id, windowId: 1, active: true, status: "loading" }),
+      sendMessage: async (id, message) => {
+        if (message.type === "VOICEOS_PING") return { ok: true };
+        if (message.type === "VOICEOS_ACT") return { navigation: { method: "history.back" } };
+        if (message.type === "VOICEOS_SETTLE")
+          return { settled: true, reason: "quiet", waitedMs: 5, mutations: 0, actionable: true };
+        return { revision: "r1", url: "https://back.example/one", title: "One",
+          visibleText: "", truncated: false, viewport: {}, elements: [] };
+      }
+    }
+  });
+  const context = backgroundContext(chrome);
+  vm.runInContext('ownedTaskTabs.set(11, "session-back-nav")', context);
+  const promise = vm.runInContext(
+    'actInOwnedTab({ tabId: 11, sessionId: "session-back-nav", revision: "r1", action: "BACK" })',
+    context);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  fire("nav-committed", { tabId: 11, frameId: 0 });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  fire("nav-completed", { tabId: 11, frameId: 0 });
+  const result = await promise;
+  assert.equal(result.timings.signal, "cross_document");
+  assert.equal(result.snapshot.url, "https://back.example/one");
+});
+
+// BACK harness: the tab starts at `before`; `tabs.get` reports `after()` once the action ran.
+function backChrome({ before = "https://back.example/two", after = () => before, goBack } = {}) {
+  const calls = { goBack: 0, settle: 0 };
+  const created = createMockChrome({
+    tabs: {
+      query: async () => [{ id: 12, windowId: 1, active: true, status: "complete", url: before }],
+      get: async (id) => ({ id, windowId: 1, active: true, status: "complete", url: after() }),
+      goBack: async (id) => { calls.goBack++; if (goBack) await goBack(id); },
+      sendMessage: async (id, message) => {
+        if (message.type === "VOICEOS_PING") return { ok: true };
+        if (message.type === "VOICEOS_ACT") return { acted: true, navigation: null };
+        if (message.type === "VOICEOS_SETTLE") {
+          calls.settle++;
+          return { settled: true, reason: "quiet", waitedMs: 5, mutations: 0, actionable: true };
+        }
+        return { revision: "r2", url: after(), title: "Page", visibleText: "", truncated: false,
+          viewport: {}, elements: [] };
+      }
+    }
+  });
+  const context = backgroundContext(created.chrome);
+  vm.runInContext('ownedTaskTabs.set(12, "session-back-12")', context);
+  const act = () => vm.runInContext(
+    'actInOwnedTab({ tabId: 12, sessionId: "session-back-12", revision: "r1", action: "BACK" })', context);
+  return { ...created, calls, act };
+}
+
+test("BACK: cross-document traversal via the browser succeeds with the previous page's snapshot", async () => {
+  let navigated = false;
+  const { fire, calls, act } = backChrome({ after: () => navigated ? "https://back.example/one" : "https://back.example/two" });
+  const promise = act();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  fire("nav-before", { tabId: 12, frameId: 0 });
+  navigated = true;
+  fire("nav-committed", { tabId: 12, frameId: 0, transitionQualifiers: ["forward_back"] });
+  fire("nav-dcl", { tabId: 12, frameId: 0 });
+  const result = await promise;
+  assert.equal(calls.goBack, 1);
+  assert.equal(result.timings.signal, "cross_document");
+  assert.equal(result.snapshot.url, "https://back.example/one");
+});
+
+test("BACK: same-document history traversal succeeds", async () => {
+  let navigated = false;
+  const { fire, act } = backChrome({ before: "https://spa.example/#/b",
+    after: () => navigated ? "https://spa.example/#/a" : "https://spa.example/#/b" });
+  const promise = act();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  navigated = true;
+  fire("nav-history", { tabId: 12, frameId: 0, transitionQualifiers: ["forward_back"] });
+  const result = await promise;
+  assert.equal(result.timings.signal, "same_document");
+  assert.equal(result.snapshot.url, "https://spa.example/#/a");
+});
+
+test("BACK: a same-document traversal that keeps the URL still succeeds", async () => {
+  const { fire, act } = backChrome({ before: "https://spa.example/feed" });
+  const promise = act();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  fire("nav-history", { tabId: 12, frameId: 0, transitionQualifiers: ["forward_back"] });
+  const result = await promise;
+  assert.equal(result.timings.signal, "same_document");
+});
+
+test("BACK: no prior history entry is NO_HISTORY, never success", async () => {
+  const { calls, act } = backChrome({
+    goBack: async () => { throw new Error("Cannot find a next page in history."); }
+  });
+  await assert.rejects(act(), error => error.code === "NO_HISTORY");
+  assert.equal(calls.goBack, 1);
+  assert.equal(calls.settle, 0);
+});
+
+test("BACK: no navigation signal and unchanged URL is NAVIGATION_NOT_OBSERVED", async () => {
+  const { act } = backChrome();
+  const started = Date.now();
+  await assert.rejects(act(), error => error.code === "NAVIGATION_NOT_OBSERVED");
+  assert.ok(Date.now() - started >= 1_400, "BACK waits its full no-signal budget before failing");
+});
+
+test("BACK: a page's own pushState is not evidence of going back", async () => {
+  const { fire, act } = backChrome();
+  const promise = act();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  fire("nav-history", { tabId: 12, frameId: 0, transitionQualifiers: [] });
+  await assert.rejects(promise, error => error.code === "NAVIGATION_NOT_OBSERVED");
+});
+
+test("BACK: a URL change without a traversal event is accepted as evidence", async () => {
+  let navigated = false;
+  const { act } = backChrome({ after: () => navigated ? "https://back.example/one" : "https://back.example/two",
+    goBack: async () => { navigated = true; } });
+  const result = await act();
+  assert.equal(result.timings.signal, "none");
+  assert.equal(result.snapshot.url, "https://back.example/one");
+});
+
+test("BACK: a started navigation that errors is NAVIGATION_FAILED", async () => {
+  const { fire, act } = backChrome();
+  const promise = act();
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  fire("nav-before", { tabId: 12, frameId: 0 });
+  fire("nav-error", { tabId: 12, frameId: 0 });
+  await assert.rejects(promise, error => error.code === "NAVIGATION_FAILED");
+});
+
+test("CLICK: a page's own pushState still counts as a same-document effect", async () => {
+  const { chrome, fire } = createMockChrome({
+    tabs: {
+      query: async () => [{ id: 13, windowId: 1, active: true, status: "complete", url: "https://spa.example/" }],
+      sendMessage: async (id, message) => {
+        if (message.type === "VOICEOS_PING") return { ok: true };
+        if (message.type === "VOICEOS_ACT") return {};
+        if (message.type === "VOICEOS_SETTLE")
+          return { settled: true, reason: "quiet", waitedMs: 5, mutations: 0, actionable: true };
+        return { revision: "r2", url: "https://spa.example/next", title: "Next",
+          visibleText: "", truncated: false, viewport: {}, elements: [] };
+      }
+    }
+  });
+  const context = backgroundContext(chrome);
+  vm.runInContext('ownedTaskTabs.set(13, "session-click-13")', context);
+  const promise = vm.runInContext(
+    'actInOwnedTab({ tabId: 13, sessionId: "session-click-13", revision: "r1", action: "CLICK", elementRef: "e1" })',
+    context);
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  fire("nav-history", { tabId: 13, frameId: 0, transitionQualifiers: [] });
+  const result = await promise;
+  assert.equal(result.timings.signal, "same_document");
+});
+
+test("CLOSE_TASK_TAB closes an owned task tab but refuses an adopted tab and a tab owned by another session", async () => {
+  const removed = [];
+  const { chrome } = createMockChrome({ tabs: { remove: async (id) => { removed.push(id); } } });
+  const context = backgroundContext(chrome);
+  vm.runInContext(`
+    ownedTaskTabs.set(20, "session-close-01");
+    ownedTaskTabs.set(21, "session-close-01");
+    adoptedUserTabs.add(21);
+    ownedTaskTabs.set(22, "session-other-02");
+  `, context);
+  const result = await vm.runInContext('closeTaskTab({ tabId: 20, sessionId: "session-close-01" })', context);
+  assert.equal(result.closed, true);
+  assert.deepEqual(removed, [20]);
+  await assert.rejects(vm.runInContext('closeTaskTab({ tabId: 21, sessionId: "session-close-01" })', context),
+    (error) => error.code === "TAB_NOT_OWNED");
+  await assert.rejects(vm.runInContext('closeTaskTab({ tabId: 22, sessionId: "session-close-01" })', context),
+    (error) => error.code === "SESSION_MISMATCH");
+  assert.deepEqual(removed, [20]);
+});
+
+test("content SETTLE resolves quiet after the quiet window with no mutations", async () => {
+  let listener;
+  let observedTarget;
+  let observedOptions;
+  class FakeMutationObserver {
+    constructor(callback) { this.callback = callback; }
+    observe(target, options) { observedTarget = target; observedOptions = options; }
+  }
+  const document = { readyState: "loading", querySelectorAll: () => [], addEventListener() {} };
+  const chrome = { runtime: { onMessage: { addListener: (fn) => { listener = fn; } } } };
+  const context = vm.createContext({
+    chrome, document, MutationObserver: FakeMutationObserver,
+    performance: { now: () => Date.now() }, setTimeout, clearTimeout, Date,
+    HTMLElement: class {}, HTMLAnchorElement: class {}, HTMLButtonElement: class {},
+    HTMLInputElement: class {}, HTMLTextAreaElement: class {}, HTMLSelectElement: class {}
+  });
+  vm.runInContext(source("content.js"), context);
+  assert.equal(observedTarget, document);
+  assert.equal(observedOptions.childList, true);
+  assert.equal(observedOptions.subtree, true);
+  const response = await new Promise((resolve) => {
+    listener({ type: "VOICEOS_SETTLE", quietMs: 40, maxMs: 500, requireActionable: false }, null, resolve);
+  });
+  assert.equal(response.settled, true);
+  assert.equal(response.reason, "quiet");
+  assert.equal(response.mutations, 0);
+});
+
+test("content SETTLE resolves max when mutations keep arriving", async () => {
+  let listener;
+  let observerCallback;
+  class FakeMutationObserver {
+    constructor(callback) { observerCallback = callback; }
+    observe() {}
+  }
+  const document = { readyState: "loading", querySelectorAll: () => [], addEventListener() {} };
+  const chrome = { runtime: { onMessage: { addListener: (fn) => { listener = fn; } } } };
+  const context = vm.createContext({
+    chrome, document, MutationObserver: FakeMutationObserver,
+    performance: { now: () => Date.now() }, setTimeout, clearTimeout, Date,
+    HTMLElement: class {}, HTMLAnchorElement: class {}, HTMLButtonElement: class {},
+    HTMLInputElement: class {}, HTMLTextAreaElement: class {}, HTMLSelectElement: class {}
+  });
+  vm.runInContext(source("content.js"), context);
+  const interval = setInterval(() => observerCallback([]), 20);
+  const response = await new Promise((resolve) => {
+    listener({ type: "VOICEOS_SETTLE", quietMs: 40, maxMs: 150, requireActionable: false }, null, resolve);
+  });
+  clearInterval(interval);
+  assert.equal(response.reason, "max");
+  assert.ok(response.mutations > 0);
+});
+
+test("content SETTLE with requireActionable true falls back to max when nothing is actionable", async () => {
+  let listener;
+  class FakeMutationObserver { observe() {} }
+  const document = { readyState: "complete", querySelectorAll: () => [], addEventListener() {} };
+  const chrome = { runtime: { onMessage: { addListener: (fn) => { listener = fn; } } } };
+  const context = vm.createContext({
+    chrome, document, MutationObserver: FakeMutationObserver,
+    performance: { now: () => Date.now() }, setTimeout, clearTimeout, Date,
+    HTMLElement: class {}, HTMLAnchorElement: class {}, HTMLButtonElement: class {},
+    HTMLInputElement: class {}, HTMLTextAreaElement: class {}, HTMLSelectElement: class {}
+  });
+  vm.runInContext(source("content.js"), context);
+  const response = await new Promise((resolve) => {
+    listener({ type: "VOICEOS_SETTLE", quietMs: 20, maxMs: 80, requireActionable: true }, null, resolve);
+  });
+  assert.equal(response.reason, "max");
+  assert.equal(response.actionable, false);
+});
+
+function observeFormControls(specs, pageText = "") {
+  let listener;
+  class HTMLElement {
+    isConnected = true;
+    getBoundingClientRect() { return { x: 0, y: 0, width: 100, height: 30, bottom: 30, right: 100, top: 0, left: 0 }; }
+    getAttribute(name) { return this.attributes?.[name] ?? null; }
+    closest(selector) { return selector.includes("form") ? { innerText: pageText } : null; }
+  }
+  class HTMLInputElement extends HTMLElement { type = "text"; value = ""; }
+  class HTMLTextAreaElement extends HTMLElement { value = ""; }
+  const controls = specs.map(({ textarea, ...spec }) => Object.assign(
+    textarea ? new HTMLTextAreaElement() : new HTMLInputElement(), spec));
+  const document = {
+    querySelectorAll: () => controls, body: { innerText: pageText },
+    documentElement: { scrollHeight: 0 }, title: pageText
+  };
+  const context = vm.createContext({
+    chrome: { runtime: { onMessage: { addListener: (fn) => { listener = fn; } } } },
+    document, location: { href: "https://example.com/login" }, HTMLElement, HTMLInputElement, HTMLTextAreaElement,
+    HTMLAnchorElement: class extends HTMLElement {}, HTMLButtonElement: class {}, HTMLSelectElement: class {},
+    window: { innerWidth: 1280, innerHeight: 800, scrollX: 0, scrollY: 0 }, innerWidth: 1280, innerHeight: 800,
+    history: { length: 1 }, Date, crypto: require("node:crypto").webcrypto,
+    getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" })
+  });
+  vm.runInContext(source("content.js"), context);
+  let observation;
+  listener({ type: "VOICEOS_OBSERVE" }, null, (value) => { observation = value; });
+  assert.equal(observation.__voiceOSError, undefined);
+  return observation;
+}
+
+test("content observation omits password values while preserving editable login controls", () => {
+  for (const value of ["hunter2", "", "a much longer password"]) {
+    const observation = observeFormControls([{ type: "password", value, attributes: { "aria-label": "Password" } }]);
+    const control = observation.elements[0];
+    assert.equal(control.role, "textbox");
+    assert.equal(control.name, "Password");
+    assert.equal(control.editable, true);
+    assert.equal(control.enabled, true);
+    assert.equal(control.ref, "e1");
+    assert.equal(control.value, null);
+    if (value) assert.equal(JSON.stringify(observation).includes(value), false);
+  }
+});
+
+test("content observation removes echoed credentials from labels, context, page text and other values", () => {
+  const observation = observeFormControls([
+    { type: "password", value: "hunter2", attributes: { "aria-label": "Password hunter2" } },
+    { type: "text", value: "echo hunter2", attributes: { placeholder: "hunter2" } }
+  ], "Login hunter2");
+  assert.equal(JSON.stringify(observation).includes("hunter2"), false);
+  assert.equal(observation.elements[0].value, null);
+  assert.equal(observation.elements[1].value, "echo [redacted]");
+});
+
+test("content observation omits explicit credential autocomplete values generically", () => {
+  for (const token of ["current-password", "new-password", "one-time-code", "cc-csc"]) {
+    for (const textarea of [false, true]) {
+      const observation = observeFormControls([{ textarea, type: "text", value: "hunter2",
+        attributes: { autocomplete: `section-login ${token.toUpperCase()}` } }], "Code hunter2");
+      assert.equal(observation.elements[0].value, null);
+      assert.equal(observation.elements[0].editable, true);
+      assert.equal(JSON.stringify(observation).includes("hunter2"), false);
+    }
+  }
+});
+
+test("content observation preserves ordinary form values", () => {
+  for (const type of ["text", "email", "tel", "search", "number"]) {
+    const observation = observeFormControls([{ type, value: "ordinary value" }]);
+    assert.equal(observation.elements[0].value, "ordinary value");
+  }
+  assert.equal(observeFormControls([{ textarea: true, value: "ordinary notes" }]).elements[0].value, "ordinary notes");
+});
+
+test("content observe marks the search field via a [role=search] ancestor, independent of type=search", () => {
+  let listener;
+  class HTMLElement {
+    isConnected = true;
+    focus() {}
+    getBoundingClientRect() { return { x: 0, y: 0, width: 100, height: 30, bottom: 30, right: 100, top: 0, left: 0 }; }
+    getAttribute() { return null; }
+    closest() { return this._searchContainer ? {} : null; }
+  }
+  class HTMLInputElement extends HTMLElement { type = "text"; value = ""; }
+  const searchInput = new HTMLInputElement();
+  searchInput._searchContainer = true;
+  const plainInput = new HTMLInputElement();
+  const document = {
+    querySelectorAll: () => [searchInput, plainInput],
+    body: { innerText: "" }, documentElement: { scrollHeight: 0 }, title: "Page"
+  };
+  const location = { href: "https://example.com/" };
+  const chrome = { runtime: { onMessage: { addListener: (fn) => { listener = fn; } } } };
+  const context = vm.createContext({
+    chrome, document, location, HTMLElement, HTMLAnchorElement: class extends HTMLElement {},
+    HTMLButtonElement: class {}, HTMLInputElement, HTMLTextAreaElement: class {}, HTMLSelectElement: class {},
+    window: { innerWidth: 1280, innerHeight: 800, scrollX: 0, scrollY: 0 }, innerWidth: 1280, innerHeight: 800,
+    history: { length: 1 }, URL, Date, crypto: require("node:crypto").webcrypto,
+    getComputedStyle: () => ({ display: "block", visibility: "visible", opacity: "1" })
+  });
+  vm.runInContext(source("content.js"), context);
+  let observation;
+  listener({ type: "VOICEOS_OBSERVE" }, null, (value) => { observation = value; });
+  assert.equal(observation.elements[0].search, true);
+  assert.equal(observation.elements[1].search, false);
+});
+
+// ---- Chrome-owned session history, task lineage and ownership (browser-history) ----
+// A small stateful model of Chrome's per-tab session history. Entries created by VoiceOS's
+// synthetic clicks are not user-activated, so chrome.tabs.goBack skips them (history-manipulation
+// intervention) while the page's own history.back() traverses them - as observed in real Chrome.
+// VoiceOS therefore traverses through the page first.
+function historyChrome(initialTabs) {
+  const tabsState = new Map();
+  for (const [id, spec] of Object.entries(initialTabs))
+    tabsState.set(Number(id), { entries: [...spec.entries], index: spec.entries.length - 1,
+      activated: new Set(spec.activated ?? []), opener: spec.opener });
+  const calls = { create: 0, remove: 0, goBack: 0, pageTraversals: 0, focused: [] };
+  let fireRef;
+  const current = (id) => tabsState.get(id).entries[tabsState.get(id).index];
+  const tabRecord = (id) => ({ id, windowId: 1, active: true, status: "complete", url: current(id),
+    openerTabId: tabsState.get(id).opener });
+  const move = (id, target) => {
+    tabsState.get(id).index = target;
+    setTimeout(() => {
+      fireRef("nav-before", { tabId: id, frameId: 0 });
+      fireRef("nav-committed", { tabId: id, frameId: 0, transitionQualifiers: ["forward_back"] });
+      fireRef("nav-dcl", { tabId: id, frameId: 0 });
+    }, 5);
+  };
+  const created = createMockChrome({
+    tabs: {
+      query: async () => [...tabsState.keys()].map(tabRecord),
+      get: async (id) => { if (!tabsState.has(id)) throw new Error("No tab"); return tabRecord(id); },
+      create: async () => { calls.create++; return { id: 999, windowId: 1 }; },
+      remove: async (id) => { calls.remove++; tabsState.delete(id); },
+      update: async (id, props) => { calls.focused.push(id); return { ...tabRecord(id), ...props }; },
+      goBack: async (id) => {
+        calls.goBack++;
+        const state = tabsState.get(id);
+        for (let i = state.index - 1; i >= 0; i--)
+          if (state.activated.has(i)) return move(id, i);
+        throw new Error("Cannot find a next page in history.");
+      },
+      sendMessage: async (id, message) => {
+        if (message.type === "VOICEOS_PING") return { ok: true };
+        if (message.type === "VOICEOS_ACT") return { acted: true, navigation: null };
+        if (message.type === "VOICEOS_SETTLE")
+          return { settled: true, reason: "quiet", waitedMs: 5, mutations: 0, actionable: true };
+        return { revision: "r2", url: current(id), title: "Page", visibleText: "", truncated: false,
+          viewport: {}, elements: [] };
+      }
+    },
+    scripting: {
+      executeScript: async ({ target, args }) => {
+        const state = tabsState.get(target.tabId);
+        const length = state.entries.length;
+        const to = state.index + (args[0] === "back" ? -1 : 1);
+        if (length > 1 && to >= 0 && to < length) { calls.pageTraversals++; move(target.tabId, to); }
+        return [{ result: length }];
+      }
+    }
+  });
+  fireRef = created.fire;
+  const context = backgroundContext(created.chrome);
+  return { ...created, context, calls, tabsState, current,
+    navigate: (id, url) => { const s = tabsState.get(id); s.entries.splice(s.index + 1); s.entries.push(url); s.index++; },
+    back: (id, session) => vm.runInContext(
+      `actInOwnedTab({ tabId: ${id}, sessionId: "${session}", revision: "r1", action: "BACK" })`, context) };
+}
+
+test("history: VOS-owned tab A->B->C by programmatic navigation goes back C->B, then B->A (Chrome history, same tab)", async () => {
+  const h = historyChrome({ 5: { entries: ["https://a.test/", "https://b.test/", "https://c.test/"] } });
+  vm.runInContext('ownedTaskTabs.set(5, "session-hist-5")', h.context);
+  const first = await h.back(5, "session-hist-5");
+  assert.equal(first.snapshot.url, "https://b.test/");
+  assert.equal(first.snapshot.tabId, 5);
+  assert.equal(h.calls.pageTraversals, 1);
+  assert.equal(h.calls.goBack, 0, "page-level history is the primary mechanism, not tabs.goBack");
+  const second = await h.back(5, "session-hist-5");
+  assert.equal(second.snapshot.url, "https://a.test/");
+  assert.equal(h.calls.create + h.calls.remove, 0, "the tab is never recreated or closed to simulate history");
+});
+
+test("history: an adopted user tab keeps its pre-existing history and is never recreated or closed", async () => {
+  const h = historyChrome({ 6: { entries: ["https://a.test/", "https://b.test/", "https://c.test/"], activated: [0, 1, 2] } });
+  const selected = await vm.runInContext(
+    'selectTab({ sessionId: "session-hist-6", tabId: 6, expectedUrl: "https://c.test/" })', h.context);
+  assert.equal(selected.tabId, 6);
+  assert.equal(vm.runInContext("adoptedUserTabs.has(6)", h.context), true);
+  h.navigate(6, "https://d.test/"); // VOS navigates within the same adopted tab
+  const observed = await vm.runInContext('observeOwnedTab({ tabId: 6, sessionId: "session-hist-6" })', h.context);
+  assert.equal(observed.adopted, true);
+  assert.equal(observed.ownedByVoiceOS, false);
+  const back = await h.back(6, "session-hist-6");
+  assert.equal(back.snapshot.tabId, 6);
+  assert.equal(back.snapshot.url, "https://c.test/");
+  assert.equal(h.tabsState.get(6).entries.length, 4, "pre-existing entries plus D are intact");
+  assert.equal(h.calls.create + h.calls.remove, 0);
+  await assert.rejects(vm.runInContext('closeTaskTab({ tabId: 6, sessionId: "session-hist-6" })', h.context),
+    error => error.code === "TAB_NOT_OWNED");
+});
+
+test("history: a child tab with no same-tab history returns to its opener; the child is left open", async () => {
+  const h = historyChrome({ 7: { entries: ["https://a.test/"] }, 8: { entries: ["https://child.test/"], opener: 7 } });
+  vm.runInContext('ownedTaskTabs.set(7, "session-hist-7"); ownedTaskTabs.set(8, "session-hist-7"); tabLineage.set(8, { openerTabId: 7, sessionId: "session-hist-7" })', h.context);
+  const result = await h.back(8, "session-hist-7");
+  assert.equal(result.snapshot.tabId, 7);
+  assert.equal(result.snapshot.returnedFromTabId, 8);
+  assert.equal(result.timings.signal, "opener");
+  assert.equal(h.calls.remove, 0);
+  assert.ok(h.calls.focused.includes(7));
+});
+
+test("history: lineage is recorded from Chrome's opener for a child of an owned tab and grants no ownership", async () => {
+  const h = historyChrome({ 9: { entries: ["https://a.test/"] } });
+  await vm.runInContext('selectTab({ sessionId: "session-hist-9", tabId: 9, expectedUrl: "https://a.test/" })', h.context);
+  h.tabsState.set(10, { entries: ["https://child.test/"], index: 0, activated: new Set(), opener: 9 });
+  h.fire("tabs-created", { id: 10, openerTabId: 9 });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  assert.equal(vm.runInContext("tabLineage.get(10)?.openerTabId", h.context), 9);
+  assert.equal(vm.runInContext("ownedTaskTabs.has(10)", h.context), false);
+});
+
+test("history: a fresh tab with no history and no lineage is NO_HISTORY (no previous page)", async () => {
+  const h = historyChrome({ 11: { entries: ["about:blank"] } });
+  vm.runInContext('ownedTaskTabs.set(11, "session-hist-11")', h.context);
+  await assert.rejects(h.back(11, "session-hist-11"), error => error.code === "NO_HISTORY");
+  assert.equal(h.calls.remove, 0);
+});
+
+test("history: a child whose opener is gone, and a tab with only forward entries, are NO_HISTORY", async () => {
+  const h = historyChrome({ 12: { entries: ["https://child.test/"], opener: 7 }, 13: { entries: ["https://x.test/", "https://y.test/"] } });
+  vm.runInContext('ownedTaskTabs.set(12, "session-hist-12"); tabLineage.set(12, { openerTabId: 7, sessionId: "session-hist-12" }); ownedTaskTabs.set(13, "session-hist-13")', h.context);
+  await assert.rejects(h.back(12, "session-hist-12"), error => error.code === "NO_HISTORY");
+  h.tabsState.get(13).index = 0;
+  await assert.rejects(h.back(13, "session-hist-13"), error => error.code === "NO_HISTORY");
+});
+
+test("history: tab identity and ownership stay stable through ordinary same-tab navigation", async () => {
+  const h = historyChrome({ 14: { entries: ["https://a.test/"] } });
+  vm.runInContext('ownedTaskTabs.set(14, "session-hist-14")', h.context);
+  h.navigate(14, "https://b.test/");
+  const observed = await vm.runInContext('observeOwnedTab({ tabId: 14, sessionId: "session-hist-14" })', h.context);
+  assert.equal(observed.tabId, 14);
+  assert.equal(observed.url, "https://b.test/");
+  assert.equal(observed.ownedByVoiceOS, true);
+  assert.equal(vm.runInContext("ownedTaskTabs.get(14)", h.context), "session-hist-14");
+  assert.equal(h.calls.create, 0);
+});
+
+test("history: Forward mirrors Back through the page session history; a Back-less tab has no Forward to fake", async () => {
+  const h = historyChrome({ 15: { entries: ["https://a.test/", "https://b.test/", "https://c.test/"] } });
+  vm.runInContext('ownedTaskTabs.set(15, "session-hist-15")', h.context);
+  await h.back(15, "session-hist-15");
+  const forward = await vm.runInContext(
+    'actInOwnedTab({ tabId: 15, sessionId: "session-hist-15", revision: "r1", action: "FORWARD" })', h.context);
+  assert.equal(forward.snapshot.url, "https://c.test/");
+  await assert.rejects(vm.runInContext(
+    'actInOwnedTab({ tabId: 15, sessionId: "session-hist-15", revision: "r1", action: "FORWARD" })', h.context),
+    error => error.code === "NO_HISTORY");
+});
+
+test("history: when the page cannot be scripted, Chrome's tab API is the fallback for Back", async () => {
+  const h = historyChrome({ 16: { entries: ["https://a.test/", "https://b.test/"], activated: [0] } });
+  h.chrome.scripting.executeScript = async () => { throw new Error("Cannot access contents of the page."); };
+  vm.runInContext('ownedTaskTabs.set(16, "session-hist-16")', h.context);
+  const result = await h.back(16, "session-hist-16");
+  assert.equal(result.snapshot.url, "https://a.test/");
+  assert.equal(h.calls.goBack, 1);
 });

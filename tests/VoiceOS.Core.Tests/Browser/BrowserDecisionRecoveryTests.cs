@@ -208,6 +208,76 @@ public sealed class BrowserDecisionRecoveryTests
     }
 
     [Fact]
+    public async Task SearchFlaggedUnnamedField_GetsGroundedValue_WithoutContextualFallback()
+    {
+        var goal = BrowserGoal.FromUtterance("Search for KSI on YouTube") with
+        {
+            Normalization = new("Search for KSI on YouTube", "KSI", "video", "YouTube",
+                "https://youtube.com/", ["KSI"], "KSI search results visible", [])
+        };
+        var field = new InteractionCandidate("combo1", "combobox '' value='' context='' purpose='search'",
+            [new("text-combo1", InteractionActionKind.SetText, "combo1")]);
+        var page = Page("https://www.youtube.com/", field);
+        var fallback = new CountingResolver("model-value");
+        var resolver = new BrowserTextValueResolver(new GroundedBrowserTextValueResolver(), fallback);
+
+        var value = await resolver.ResolveAsync(new(goal, field, page));
+
+        Assert.Equal("KSI", value);
+        Assert.Equal(0, fallback.Calls);
+    }
+
+    [Fact]
+    public async Task UnnamedFieldWithoutSearchFlag_GroundedReturnsNull_AndFallbackIsCalled()
+    {
+        var goal = BrowserGoal.FromUtterance("Search for KSI on YouTube") with
+        {
+            Normalization = new("Search for KSI on YouTube", "KSI", "video", "YouTube",
+                "https://youtube.com/", ["KSI"], "KSI search results visible", [])
+        };
+        var field = new InteractionCandidate("combo1", "combobox '' value='' context=''",
+            [new("text-combo1", InteractionActionKind.SetText, "combo1")]);
+        var page = Page("https://www.youtube.com/", field);
+        var fallback = new CountingResolver("model-value");
+        var resolver = new BrowserTextValueResolver(new GroundedBrowserTextValueResolver(), fallback);
+
+        var value = await resolver.ResolveAsync(new(goal, field, page));
+
+        Assert.Equal("model-value", value);
+        Assert.Equal(1, fallback.Calls);
+    }
+
+    [Fact]
+    public async Task SearchLandmarkField_WithoutNormalization_ReturnsNull()
+    {
+        var goal = BrowserGoal.FromUtterance("Search for KSI on YouTube");
+        var field = new InteractionCandidate("combo1", "combobox '' value='' context='' purpose='search'",
+            [new("text-combo1", InteractionActionKind.SetText, "combo1")]);
+        var page = Page("https://www.youtube.com/", field);
+
+        var value = await new GroundedBrowserTextValueResolver().ResolveAsync(new(goal, field, page));
+
+        Assert.Null(value);
+    }
+
+    [Fact]
+    public async Task SearchField_WithCurrentValueAlreadyEqual_ReturnsNull()
+    {
+        var goal = BrowserGoal.FromUtterance("Search for KSI on YouTube") with
+        {
+            Normalization = new("Search for KSI on YouTube", "KSI", "video", "YouTube",
+                "https://youtube.com/", ["KSI"], "KSI search results visible", [])
+        };
+        var field = new InteractionCandidate("combo1", "combobox '' value='KSI' context='' purpose='search'",
+            [new("text-combo1", InteractionActionKind.SetText, "combo1")]);
+        var page = Page("https://www.youtube.com/", field);
+
+        var value = await new GroundedBrowserTextValueResolver().ResolveAsync(new(goal, field, page));
+
+        Assert.Null(value);
+    }
+
+    [Fact]
     public async Task ContextualTextHelperGetsSelectedFieldAndReturnsOneBoundedValue()
     {
         var handler = new TextHelperHandler();
@@ -251,6 +321,15 @@ public sealed class BrowserDecisionRecoveryTests
         {
             SelectedField = request.Field.Id;
             return ValueTask.FromResult<string?>("chicken shawarma");
+        }
+    }
+    private sealed class CountingResolver(string value) : IBrowserTextValueResolver
+    {
+        public int Calls { get; private set; }
+        public ValueTask<string?> ResolveAsync(BrowserTextValueRequest request, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return ValueTask.FromResult<string?>(value);
         }
     }
     private sealed class TextHelperHandler : HttpMessageHandler

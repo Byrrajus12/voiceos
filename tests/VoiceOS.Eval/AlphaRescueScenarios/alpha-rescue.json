@@ -1,0 +1,38 @@
+// Alpha-rescue live validation: five bounded tasks, each run once. No sign-in, purchases or forms beyond search.
+[
+  {
+    "id": "ar.github-tauri", "name": "GitHub: search for a Rust GUI framework, open Tauri", "family": "alpha-rescue",
+    "tags": ["alpha-rescue", "browser", "chrome"], "preconditions": [ { "kind": "companionConnected" } ], "timeoutSeconds": 120,
+    "transcript": "Go to GitHub, search for a Rust GUI framework and open the Tauri repository.",
+    "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "tauri" } }
+  },
+  {
+    "id": "ar.wikipedia-lovell", "name": "Wikipedia: Apollo 13 crew, open Jim Lovell", "family": "alpha-rescue",
+    "tags": ["alpha-rescue", "browser", "chrome"], "preconditions": [ { "kind": "companionConnected" } ], "timeoutSeconds": 120,
+    "transcript": "Look up Apollo 13 on Wikipedia, go to the crew section and open Jim Lovell's page.",
+    "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "Jim_Lovell" } }
+  },
+  {
+    "id": "ar.current-page-scroll", "name": "Simple current-page request", "family": "alpha-rescue",
+    "tags": ["alpha-rescue", "browser", "chrome"],
+    "setup": [ { "kind": "startProcess", "file": "chrome.exe", "args": "https://en.wikipedia.org/wiki/Apollo_13" }, { "kind": "wait", "ms": 4000 }, { "kind": "focusWindow", "process": "chrome" }, { "kind": "wait", "ms": 500 } ],
+    "preconditions": [ { "kind": "companionConnected" }, { "kind": "foregroundProcess", "process": "chrome" } ],
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+    "transcript": "Scroll down.",
+    "expect": { "outcome": "Complete", "browserOperations": { "include": ["Scroll"] } }
+  },
+  {
+    "id": "ar.direct-compound", "name": "Direct compound: snap Character Map left then close it", "family": "alpha-rescue",
+    "tags": ["alpha-rescue", "direct"],
+    "setup": [ { "kind": "startProcess", "file": "charmap.exe" }, { "kind": "wait", "ms": 1500 }, { "kind": "focusWindow", "process": "chrome" }, { "kind": "wait", "ms": 500 } ],
+    "preconditions": [ { "kind": "windowOpen", "process": "charmap" } ],
+    "transcript": "Snap Character Map to the left and then close it.",
+    "expect": { "outcome": "Complete", "scope": ["Direct"], "final": { "windows": [ { "process": "charmap", "exists": false } ] } }
+  },
+  {
+    "id": "ar.npm-express", "name": "Fresh task: npm, search express, open the package", "family": "alpha-rescue",
+    "tags": ["alpha-rescue", "browser", "chrome"], "preconditions": [ { "kind": "companionConnected" } ], "timeoutSeconds": 120,
+    "transcript": "Go to npm, search for the express package and open it.",
+    "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "package/express" } }
+  }
+]

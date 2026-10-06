@@ -1,0 +1,1433 @@
+[
+ {
+  "id": "p3.open-that-again",
+  "name": "Open a product, move on, open that one again",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "browser",
+   "fixture",
+   "item"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   },
+   {
+    "kind": "foregroundProcess",
+    "process": "chrome"
+   },
+   {
+    "kind": "activeTabOrigin",
+    "contains": "localhost:18777"
+   }
+  ],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Show me the Ember Camp Stove.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "shop/p/ember-camp-stove"
+     }
+    }
+   },
+   {
+    "transcript": "Show me the Drift Sleeping Bag.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "shop/p/drift-sleeping-bag"
+     }
+    },
+    "before": [
+     {
+      "kind": "startProcess",
+      "file": "chrome.exe",
+      "args": "http://localhost:18777/shop"
+     },
+     {
+      "kind": "wait",
+      "ms": 2500
+     },
+     {
+      "kind": "focusWindow",
+      "process": "chrome"
+     }
+    ]
+   },
+   {
+    "transcript": "Show me the camp stove page again.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "shop/p/ember-camp-stove"
+     }
+    }
+   }
+  ],
+  "setup": [
+   {
+    "kind": "startProcess",
+    "file": "chrome.exe",
+    "args": "http://localhost:18777/shop"
+   },
+   {
+    "kind": "wait",
+    "ms": 2500
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   }
+  ],
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   }
+  ]
+ },
+ {
+  "id": "p3.other-one",
+  "name": "Two concrete products, then the other one",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "browser",
+   "fixture",
+   "other"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   },
+   {
+    "kind": "foregroundProcess",
+    "process": "chrome"
+   },
+   {
+    "kind": "activeTabOrigin",
+    "contains": "localhost:18777"
+   }
+  ],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Show me the Ember Camp Stove.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "shop/p/ember-camp-stove"
+     }
+    }
+   },
+   {
+    "transcript": "Show me the Drift Sleeping Bag.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "shop/p/drift-sleeping-bag"
+     }
+    },
+    "before": [
+     {
+      "kind": "startProcess",
+      "file": "chrome.exe",
+      "args": "http://localhost:18777/shop"
+     },
+     {
+      "kind": "wait",
+      "ms": 2500
+     },
+     {
+      "kind": "focusWindow",
+      "process": "chrome"
+     }
+    ]
+   },
+   {
+    "transcript": "Now show me the other one.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "shop/p/ember-camp-stove"
+     }
+    }
+   }
+  ],
+  "setup": [
+   {
+    "kind": "startProcess",
+    "file": "chrome.exe",
+    "args": "http://localhost:18777/shop"
+   },
+   {
+    "kind": "wait",
+    "ms": 2500
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   }
+  ],
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   }
+  ]
+ },
+ {
+  "id": "p3.property-one",
+  "name": "Property-described alternative among three products",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "browser",
+   "fixture",
+   "property"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   },
+   {
+    "kind": "foregroundProcess",
+    "process": "chrome"
+   },
+   {
+    "kind": "activeTabOrigin",
+    "contains": "localhost:18777"
+   }
+  ],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Show me the Alpine Trail Backpack.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "shop/p/alpine-trail-backpack"
+     }
+    }
+   },
+   {
+    "transcript": "Show me the Ridge Lightweight Tent.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "shop/p/ridge-lightweight-tent"
+     }
+    },
+    "before": [
+     {
+      "kind": "startProcess",
+      "file": "chrome.exe",
+      "args": "http://localhost:18777/shop"
+     },
+     {
+      "kind": "wait",
+      "ms": 2500
+     },
+     {
+      "kind": "focusWindow",
+      "process": "chrome"
+     }
+    ]
+   },
+   {
+    "transcript": "Show me the Beacon Headlamp.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "shop/p/beacon-headlamp"
+     }
+    },
+    "before": [
+     {
+      "kind": "startProcess",
+      "file": "chrome.exe",
+      "args": "http://localhost:18777/shop"
+     },
+     {
+      "kind": "wait",
+      "ms": 2500
+     },
+     {
+      "kind": "focusWindow",
+      "process": "chrome"
+     }
+    ]
+   },
+   {
+    "transcript": "Show me the tent one again.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "shop/p/ridge-lightweight-tent"
+     }
+    }
+   }
+  ],
+  "setup": [
+   {
+    "kind": "startProcess",
+    "file": "chrome.exe",
+    "args": "http://localhost:18777/shop"
+   },
+   {
+    "kind": "wait",
+    "ms": 2500
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   }
+  ],
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   }
+  ]
+ },
+ {
+  "id": "p3.bring-page-back",
+  "name": "Bring an earlier page back after opening another tab",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "browser",
+   "fixture",
+   "return"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   },
+   {
+    "kind": "foregroundProcess",
+    "process": "chrome"
+   },
+   {
+    "kind": "activeTabOrigin",
+    "contains": "localhost:18777"
+   }
+  ],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Open the API reference.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "docs/api"
+     }
+    }
+   },
+   {
+    "transcript": "Show me the Ember Camp Stove.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "shop/p/ember-camp-stove"
+     }
+    },
+    "before": [
+     {
+      "kind": "startProcess",
+      "file": "chrome.exe",
+      "args": "http://localhost:18777/shop"
+     },
+     {
+      "kind": "wait",
+      "ms": 2500
+     },
+     {
+      "kind": "focusWindow",
+      "process": "chrome"
+     }
+    ]
+   },
+   {
+    "transcript": "Bring that API reference page back up.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "docs/api"
+     }
+    }
+   }
+  ],
+  "setup": [
+   {
+    "kind": "startProcess",
+    "file": "chrome.exe",
+    "args": "http://localhost:18777/docs"
+   },
+   {
+    "kind": "wait",
+    "ms": 2500
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   }
+  ],
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   }
+  ]
+ },
+ {
+  "id": "p3.stale-closed-tab",
+  "name": "Reference to a page whose tab was closed",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "browser",
+   "fixture",
+   "stale"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   },
+   {
+    "kind": "foregroundProcess",
+    "process": "chrome"
+   },
+   {
+    "kind": "activeTabOrigin",
+    "contains": "localhost:18777"
+   }
+  ],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Open http://localhost:18777/docs/faq in a new tab.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "docs/faq"
+     }
+    }
+   },
+   {
+    "transcript": "Bring that FAQ page back up.",
+    "expect": {
+     "outcome": "Complete",
+     "acceptedOutcomes": [
+      "Complete",
+      "Clarify"
+     ],
+     "newTabs": {
+      "max": 1
+     },
+     "final": {
+      "activeTabUrlContains": "docs/faq"
+     }
+    },
+    "before": [
+     {
+      "kind": "closeNewTabs"
+     }
+    ]
+   }
+  ],
+  "setup": [
+   {
+    "kind": "startProcess",
+    "file": "chrome.exe",
+    "args": "http://localhost:18777/news"
+   },
+   {
+    "kind": "wait",
+    "ms": 2500
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   }
+  ],
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   }
+  ]
+ },
+ {
+  "id": "p3.current-vs-stored",
+  "name": "Visible link wins over an older, similarly named stored page",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "browser",
+   "fixture",
+   "precedence"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   },
+   {
+    "kind": "foregroundProcess",
+    "process": "chrome"
+   },
+   {
+    "kind": "activeTabOrigin",
+    "contains": "localhost:18777"
+   }
+  ],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Show me the Ember Camp Stove.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "shop/p/ember-camp-stove"
+     }
+    }
+   },
+   {
+    "transcript": "Show me the Ember Camp Stove.",
+    "expect": {
+     "outcome": "Complete",
+     "scope": [
+      "ActiveTab"
+     ],
+     "final": {
+      "activeTabUrlContains": "shop/p/ember-camp-stove"
+     }
+    },
+    "before": [
+     {
+      "kind": "startProcess",
+      "file": "chrome.exe",
+      "args": "http://localhost:18777/shop"
+     },
+     {
+      "kind": "wait",
+      "ms": 2500
+     },
+     {
+      "kind": "focusWindow",
+      "process": "chrome"
+     }
+    ]
+   }
+  ],
+  "setup": [
+   {
+    "kind": "startProcess",
+    "file": "chrome.exe",
+    "args": "http://localhost:18777/shop"
+   },
+   {
+    "kind": "wait",
+    "ms": 2500
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   }
+  ],
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   }
+  ]
+ },
+ {
+  "id": "p3.native-snap-then-close",
+  "name": "Open Paint, snap it left, close it",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "native"
+  ],
+  "preconditions": [],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Open Paint.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "windows": [
+       {
+        "process": "mspaint"
+       }
+      ]
+     }
+    },
+    "settleMs": 2500
+   },
+   {
+    "transcript": "Snap it to the left.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "windows": [
+       {
+        "process": "mspaint",
+        "snapped": "Left"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "transcript": "Close it.",
+    "expect": {
+     "outcome": "Complete",
+     "directSteps": {
+      "include": [
+       "CloseWindow"
+      ]
+     }
+    },
+    "settleMs": 1500
+   }
+  ],
+  "cleanup": []
+ },
+ {
+  "id": "p3.native-two-windows",
+  "name": "Two windows, follow-up to the one opened first",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "native"
+  ],
+  "preconditions": [],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Open Character Map.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "windows": [
+       {
+        "process": "charmap"
+       }
+      ]
+     }
+    },
+    "settleMs": 2000
+   },
+   {
+    "transcript": "Open Paint.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "windows": [
+       {
+        "process": "mspaint"
+       }
+      ]
+     }
+    },
+    "settleMs": 2500
+   },
+   {
+    "transcript": "Close the first one I opened.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "windows": [
+       {
+        "process": "charmap",
+        "exists": false
+       },
+       {
+        "process": "mspaint"
+       }
+      ]
+     }
+    },
+    "settleMs": 2200
+   },
+   {
+    "transcript": "Close it.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "windows": [
+       {
+        "process": "mspaint",
+        "exists": false
+       }
+      ]
+     }
+    },
+    "settleMs": 2200
+   }
+  ],
+  "cleanup": []
+ },
+ {
+  "id": "p3.native-stale-window",
+  "name": "Reference to a window that was already closed",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "native",
+   "stale"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   },
+   {
+    "kind": "foregroundProcess",
+    "process": "chrome"
+   },
+   {
+    "kind": "activeTabOrigin",
+    "contains": "localhost:18777"
+   }
+  ],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Open Character Map.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "windows": [
+       {
+        "process": "charmap"
+       }
+      ]
+     }
+    },
+    "settleMs": 2000
+   },
+   {
+    "transcript": "Close it.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "windows": [
+       {
+        "process": "charmap",
+        "exists": false
+       }
+      ]
+     }
+    },
+    "settleMs": 2200
+   },
+   {
+    "transcript": "Maximize it.",
+    "expect": {
+     "outcome": "Clarify",
+     "acceptedOutcomes": [
+      "Clarify",
+      "Complete",
+      "Failed"
+     ]
+    },
+    "before": [
+     {
+      "kind": "focusWindow",
+      "process": "chrome"
+     }
+    ]
+   }
+  ],
+  "setup": [
+   {
+    "kind": "startProcess",
+    "file": "chrome.exe",
+    "args": "http://localhost:18777/docs"
+   },
+   {
+    "kind": "wait",
+    "ms": 2500
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   }
+  ],
+  "cleanup": []
+ },
+ {
+  "id": "p3.cross-browser-then-native",
+  "name": "Earlier browser page, foreground native app: 'it' is the native window",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "cross"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   },
+   {
+    "kind": "foregroundProcess",
+    "process": "chrome"
+   },
+   {
+    "kind": "activeTabOrigin",
+    "contains": "localhost:18777"
+   }
+  ],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Open the API reference.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "docs/api"
+     }
+    }
+   },
+   {
+    "transcript": "Open Character Map.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "windows": [
+       {
+        "process": "charmap"
+       }
+      ]
+     }
+    },
+    "settleMs": 2000
+   },
+   {
+    "transcript": "Close it.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "windows": [
+       {
+        "process": "charmap",
+        "exists": false
+       },
+       {
+        "process": "chrome"
+       }
+      ]
+     }
+    },
+    "settleMs": 2200
+   }
+  ],
+  "setup": [
+   {
+    "kind": "startProcess",
+    "file": "chrome.exe",
+    "args": "http://localhost:18777/docs"
+   },
+   {
+    "kind": "wait",
+    "ms": 2500
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   }
+  ],
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   }
+  ]
+ },
+ {
+  "id": "p3.cross-native-then-browser",
+  "name": "Earlier native window, foreground browser: 'it' stays with the browser",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "cross"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   },
+   {
+    "kind": "foregroundProcess",
+    "process": "chrome"
+   },
+   {
+    "kind": "activeTabOrigin",
+    "contains": "localhost:18777"
+   }
+  ],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Open Character Map.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "windows": [
+       {
+        "process": "charmap"
+       }
+      ]
+     }
+    },
+    "settleMs": 2000
+   },
+   {
+    "transcript": "Open the API reference.",
+    "expect": {
+     "outcome": "Complete",
+     "acceptedOutcomes": [
+      "Complete",
+      "Clarify"
+     ],
+     "final": {
+      "activeTabUrlContains": "docs/api"
+     }
+    },
+    "before": [
+     {
+      "kind": "focusWindow",
+      "process": "chrome"
+     }
+    ]
+   },
+   {
+    "transcript": "Snap it to the right.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "windows": [
+       {
+        "process": "chrome",
+        "snapped": "Right"
+       }
+      ]
+     }
+    }
+   },
+   {
+    "transcript": "Close Character Map.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "windows": [
+       {
+        "process": "charmap",
+        "exists": false
+       }
+      ]
+     }
+    },
+    "settleMs": 2200
+   }
+  ],
+  "setup": [
+   {
+    "kind": "startProcess",
+    "file": "chrome.exe",
+    "args": "http://localhost:18777/docs"
+   },
+   {
+    "kind": "wait",
+    "ms": 2500
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   }
+  ],
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   },
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   }
+  ]
+ },
+ {
+  "id": "p3.fresh-wiki-other",
+  "name": "Two mountains, then the other one",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "fresh",
+   "browser",
+   "other"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   }
+  ],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Open the Wikipedia page for Mount Kilimanjaro.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "Kilimanjaro"
+     }
+    }
+   },
+   {
+    "transcript": "Open the Wikipedia page for Mount Elbrus.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "Elbrus"
+     }
+    }
+   },
+   {
+    "transcript": "Now open the other one.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "Kilimanjaro"
+     }
+    }
+   }
+  ],
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   }
+  ]
+ },
+ {
+  "id": "p3.fresh-wiki-property",
+  "name": "Two Mercury pages, follow-up by property",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "fresh",
+   "browser",
+   "property"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   }
+  ],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Open the Wikipedia page for Mercury the planet.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "Mercury_(planet)"
+     }
+    }
+   },
+   {
+    "transcript": "Open the Wikipedia page for Mercury the chemical element.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "Mercury_(element)"
+     }
+    }
+   },
+   {
+    "transcript": "Go back to the planet one.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "Mercury_(planet)"
+     }
+    }
+   }
+  ],
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   }
+  ]
+ },
+ {
+  "id": "p3.fresh-mdn-return",
+  "name": "Bring an earlier docs page back",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "fresh",
+   "browser",
+   "return"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   }
+  ],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Open the MDN documentation for Array map.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabOriginContains": "developer.mozilla.org"
+     }
+    }
+   },
+   {
+    "transcript": "Open the Wikipedia page for the Eiffel Tower.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "Eiffel_Tower"
+     }
+    }
+   },
+   {
+    "transcript": "Bring that MDN page back up.",
+    "expect": {
+     "outcome": "Complete",
+     "newTabs": {
+      "max": 1
+     },
+     "final": {
+      "activeTabOriginContains": "developer.mozilla.org"
+     }
+    }
+   }
+  ],
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   }
+  ]
+ },
+ {
+  "id": "p3.fresh-python-again",
+  "name": "Open a docs page, open another, open the first again",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "fresh",
+   "browser",
+   "item"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   }
+  ],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Open the Python documentation for the pathlib module.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "pathlib"
+     }
+    }
+   },
+   {
+    "transcript": "Open the Python documentation for the itertools module.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "itertools"
+     }
+    }
+   },
+   {
+    "transcript": "Open the pathlib one again.",
+    "expect": {
+     "outcome": "Complete",
+     "final": {
+      "activeTabUrlContains": "pathlib"
+     }
+    }
+   }
+  ],
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   }
+  ]
+ },
+ {
+  "id": "p3.tab-cleanup",
+  "name": "Housekeeping: close leftover fixture tabs",
+  "family": "pass3-referents",
+  "tags": [
+   "pass3",
+   "multi-turn",
+   "reference",
+   "housekeeping"
+  ],
+  "preconditions": [],
+  "timeoutSeconds": 90,
+  "turns": [
+   {
+    "transcript": "Open Chrome.",
+    "expect": {
+     "outcome": "Complete",
+     "acceptedOutcomes": [
+      "Complete",
+      "Clarify"
+     ]
+    },
+    "settleMs": 500
+   }
+  ],
+  "cleanup": [
+   {
+    "kind": "focusWindow",
+    "process": "chrome"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   },
+   {
+    "kind": "closeFixtureTab"
+   }
+  ]
+ }
+]

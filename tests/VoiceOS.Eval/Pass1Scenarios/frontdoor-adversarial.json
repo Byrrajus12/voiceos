@@ -1,0 +1,316 @@
+[
+  {
+    "id": "frontdoor.close-tab",
+    "name": "Close this tab",
+    "family": "frontdoor-adversarial",
+    "tags": [
+      "adversarial"
+    ],
+    "safety": {
+      "unattended": true,
+      "mutatesExternalState": false
+    },
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://example.org"
+      },
+      {
+        "kind": "wait",
+        "ms": 1500
+      },
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://en.wikipedia.org/wiki/Octopus"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      }
+    ],
+    "transcript": "Close this tab",
+    "timeoutSeconds": 90,
+    "expect": {
+      "acceptedOutcomes": [
+        "Complete",
+        "Clarify",
+        "Unsupported"
+      ],
+      "directSteps": {
+        "exclude": [
+          "FocusWindow",
+          "CloseWindow",
+          "MinimizeWindow",
+          "MaximizeWindow",
+          "SnapWindow",
+          "MoveWindow",
+          "OpenApp"
+        ]
+      },
+      "newTabs": {
+        "max": 0
+      },
+      "noMediaCommand": true
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "frontdoor.cookie-banner",
+    "name": "Close the cookie banner",
+    "family": "frontdoor-adversarial",
+    "tags": [
+      "adversarial"
+    ],
+    "safety": {
+      "unattended": true,
+      "mutatesExternalState": false
+    },
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://www.imdb.com/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      }
+    ],
+    "transcript": "Close the cookie banner",
+    "timeoutSeconds": 90,
+    "expect": {
+      "acceptedOutcomes": [
+        "Complete",
+        "Clarify",
+        "Unsupported"
+      ],
+      "directSteps": {
+        "exclude": [
+          "FocusWindow",
+          "CloseWindow",
+          "MinimizeWindow",
+          "MaximizeWindow",
+          "SnapWindow",
+          "MoveWindow",
+          "OpenApp"
+        ]
+      },
+      "newTabs": {
+        "max": 0
+      },
+      "noMediaCommand": true
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "frontdoor.official-site",
+    "name": "Open the official site",
+    "family": "frontdoor-adversarial",
+    "tags": [
+      "adversarial"
+    ],
+    "safety": {
+      "unattended": true,
+      "mutatesExternalState": false
+    },
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://www.google.com/search?q=Python+official+site"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      }
+    ],
+    "transcript": "Open the official site",
+    "timeoutSeconds": 90,
+    "expect": {
+      "acceptedOutcomes": [
+        "Complete",
+        "Clarify",
+        "Unsupported"
+      ],
+      "directSteps": {
+        "exclude": [
+          "FocusWindow",
+          "CloseWindow",
+          "MinimizeWindow",
+          "MaximizeWindow",
+          "SnapWindow",
+          "MoveWindow",
+          "OpenApp"
+        ]
+      },
+      "newTabs": {
+        "max": 0
+      },
+      "noMediaCommand": true
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "frontdoor.volume",
+    "name": "Turn it up a little",
+    "family": "frontdoor-adversarial",
+    "tags": [
+      "adversarial"
+    ],
+    "safety": {
+      "unattended": true,
+      "mutatesExternalState": false
+    },
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://en.wikipedia.org/wiki/Octopus"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      }
+    ],
+    "transcript": "Turn it up a little",
+    "timeoutSeconds": 90,
+    "expect": {
+      "acceptedOutcomes": [
+        "Complete",
+        "Clarify",
+        "Unsupported"
+      ],
+      "directSteps": {
+        "exclude": [
+          "FocusWindow",
+          "CloseWindow",
+          "MinimizeWindow",
+          "MaximizeWindow",
+          "SnapWindow",
+          "MoveWindow",
+          "OpenApp"
+        ]
+      },
+      "newTabs": {
+        "max": 0
+      },
+      "noMediaCommand": true
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "frontdoor.video-player",
+    "name": "Minimize the video player",
+    "family": "frontdoor-adversarial",
+    "tags": [
+      "adversarial"
+    ],
+    "safety": {
+      "unattended": true,
+      "mutatesExternalState": false
+    },
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://www.youtube.com/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      }
+    ],
+    "transcript": "Minimize the video player",
+    "timeoutSeconds": 90,
+    "expect": {
+      "acceptedOutcomes": [
+        "Complete",
+        "Clarify",
+        "Unsupported"
+      ],
+      "directSteps": {
+        "exclude": [
+          "FocusWindow",
+          "CloseWindow",
+          "MinimizeWindow",
+          "MaximizeWindow",
+          "SnapWindow",
+          "MoveWindow",
+          "OpenApp"
+        ]
+      },
+      "newTabs": {
+        "max": 0
+      },
+      "noMediaCommand": true
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  }
+]

@@ -1,0 +1,92 @@
+// Dataflow dogfood: three bounded searches, each run once.
+[
+ {
+  "id": "df.onepiece-figurine",
+  "name": "Dataflow: second most popular character, then figurine",
+  "family": "alpha-dataflow",
+  "tags": [
+   "alpha-dataflow",
+   "browser",
+   "chrome"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   }
+  ],
+  "timeoutSeconds": 180,
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   }
+  ],
+  "transcript": "Find the second most popular One Piece character, then find me a figurine for that character.",
+  "expect": {
+   "outcome": "Complete"
+  }
+ },
+ {
+  "id": "df.onepiece-page7",
+  "name": "Search then go to page 7",
+  "family": "alpha-dataflow",
+  "tags": [
+   "alpha-dataflow",
+   "browser",
+   "chrome"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   }
+  ],
+  "timeoutSeconds": 180,
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   }
+  ],
+  "transcript": "Search for One Piece Anime and go to page 7 of the results.",
+  "expect": {
+   "outcome": "Complete"
+  }
+ },
+ {
+  "id": "df.andor-actor",
+  "name": "Dataflow: actor who plays Luthen Rael, then their movies",
+  "family": "alpha-dataflow",
+  "tags": [
+   "alpha-dataflow",
+   "browser",
+   "chrome"
+  ],
+  "preconditions": [
+   {
+    "kind": "companionConnected"
+   }
+  ],
+  "timeoutSeconds": 180,
+  "cleanup": [
+   {
+    "kind": "closeNewTabs"
+   }
+  ],
+  "transcript": "Find the actor who plays Luthen Rael in Andor, then search for movies with that actor.",
+  "expect": {
+   "outcome": "Complete"
+  }
+ },
+ {
+  "id": "df.dean-other-show", "name": "Informational dataflow: actor, then a different show; stop when identified", "family": "alpha-dataflow",
+  "tags": ["alpha-dataflow", "browser", "chrome"], "preconditions": [ { "kind": "companionConnected" } ], "timeoutSeconds": 180,
+  "cleanup": [ { "kind": "closeNewTabs" } ],
+  "transcript": "Find out who played Dean in Supernatural and find me a different show he's part of.",
+  "expect": { "outcome": "Complete" }
+ },
+ {
+  "id": "df.sam-imdb", "name": "Dataflow into a final destination: actor, recent show, open it on IMDb", "family": "alpha-dataflow",
+  "tags": ["alpha-dataflow", "browser", "chrome"], "preconditions": [ { "kind": "companionConnected" } ], "timeoutSeconds": 240,
+  "cleanup": [ { "kind": "closeNewTabs" } ],
+  "transcript": "Find out who played Sam in Supernatural, find me a recent show he's part of, and open that show on IMDb.",
+  "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "imdb.com" } }
+ }
+]

@@ -1,0 +1,1383 @@
+[
+  {
+    "id": "fresh.catalog-lantern",
+    "name": "table row details link",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "confusable"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/lab/catalog"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Show me the details for the trail lantern.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "lab/item/trail-lantern"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.catalog-kettle",
+    "name": "table row details link 2",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "confusable"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/lab/catalog"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "I'd like to see the camp kettle.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "lab/item/camp-kettle"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.breadcrumb-guides",
+    "name": "breadcrumb up",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/lab/guides/setup"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Take me back up to the guides.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "acceptedOutcomes": [
+        "Complete",
+        "Clarify"
+      ],
+      "final": {
+        "activeTabUrlContains": "lab/guides"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.page-two",
+    "name": "numbered pagination",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/lab/list"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Go to page two.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "page=2"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.next-page",
+    "name": "next pagination",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/lab/list"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Next page please.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "page=2"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.manual-troubleshoot",
+    "name": "sidebar section",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/lab/manual"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Jump to troubleshooting.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "manual/troubleshooting"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.tab-billing",
+    "name": "tab widget (same page)",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "samepage"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/lab/tabs"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Switch to the billing tab.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "lab/tabs"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.faq-returns",
+    "name": "accordion (same page)",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "samepage"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/lab/faq"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the question about returns.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "lab/faq"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.terms-window",
+    "name": "noopener new window",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "adopted"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/lab/legal"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the terms of service.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "lab/terms"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.privacy-window",
+    "name": "blank target",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "adopted"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/lab/legal"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Read the privacy notice.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "lab/privacy"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.annual-report",
+    "name": "two-hop same-origin redirect",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate",
+      "redirect"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/lab/reports"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open the annual report.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "final-report"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.find-tidal",
+    "name": "search with query param",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "find"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/lab/find"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Search articles for tidal energy.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "query=tidal"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.find-open",
+    "name": "search then open",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "find",
+      "activate",
+      "multistep"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/lab/find"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Search for solar panels and open the practice article.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "lab/item/b"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.lab-help",
+    "name": "nav from home",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "http://localhost:18777/lab"
+      },
+      {
+        "kind": "wait",
+        "ms": 2500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "localhost:18777"
+      }
+    ],
+    "transcript": "Open help.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "lab/faq"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.py-glossary",
+    "name": "docs by name",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "docs",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://docs.python.org/3/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "docs.python.org"
+      }
+    ],
+    "transcript": "Open the glossary.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "glossary"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.mdn-elements",
+    "name": "docs reference",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "docs",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://developer.mozilla.org/en-US/docs/Web/HTML"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "developer.mozilla.org"
+      }
+    ],
+    "transcript": "Show me the HTML elements reference.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "HTML/Element"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.gutenberg-top",
+    "name": "ordinal popular",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "shop",
+      "activate",
+      "ordinal"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://www.gutenberg.org/browse/scores/top"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "gutenberg.org"
+      }
+    ],
+    "transcript": "Open the most popular book.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "ebooks/"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.books-mystery",
+    "name": "product category",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "shop",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://books.toscrape.com/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "books.toscrape.com"
+      }
+    ],
+    "transcript": "Show me the mystery category.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "category/books/mystery"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.wiki-intertidal",
+    "name": "inline article link",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "docs",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://en.wikipedia.org/wiki/Tide_pool"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "wikipedia.org"
+      }
+    ],
+    "transcript": "Open the article about the intertidal zone.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "Intertidal_zone"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.hn-ask",
+    "name": "nav link",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "news",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://news.ycombinator.com/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "news.ycombinator.com"
+      }
+    ],
+    "transcript": "Open the Ask HN section.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "/ask"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.npr-second",
+    "name": "second story",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "news",
+      "activate",
+      "ordinal"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://text.npr.org/"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "text.npr.org"
+      }
+    ],
+    "transcript": "Open the second story.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "text.npr.org/"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.status-404",
+    "name": "numbered link",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "setup-page",
+      "activate"
+    ],
+    "setup": [
+      {
+        "kind": "startProcess",
+        "file": "chrome.exe",
+        "args": "https://the-internet.herokuapp.com/status_codes"
+      },
+      {
+        "kind": "wait",
+        "ms": 3500
+      },
+      {
+        "kind": "focusWindow",
+        "process": "chrome"
+      }
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      },
+      {
+        "kind": "foregroundProcess",
+        "process": "chrome"
+      },
+      {
+        "kind": "activeTabOrigin",
+        "contains": "the-internet.herokuapp.com"
+      }
+    ],
+    "transcript": "Open the 404 page.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "max": 1
+      },
+      "final": {
+        "activeTabUrlContains": "status_codes/404"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.dest-pypi",
+    "name": "surface named site",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "destination",
+      "surface"
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      }
+    ],
+    "transcript": "Open the Python package index.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "min": 0,
+        "max": 1
+      },
+      "final": {
+        "activeTabOriginContains": "pypi.org"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.dest-kernel",
+    "name": "surface named site 2",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "destination",
+      "surface"
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      }
+    ],
+    "transcript": "Go to the Linux kernel website.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "min": 0,
+        "max": 1
+      },
+      "final": {
+        "activeTabOriginContains": "kernel.org"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  },
+  {
+    "id": "fresh.dest-apache",
+    "name": "surface named site 3",
+    "family": "pass2-fresh",
+    "tags": [
+      "pass2",
+      "fresh",
+      "browser",
+      "chrome",
+      "destination",
+      "surface"
+    ],
+    "preconditions": [
+      {
+        "kind": "companionConnected"
+      }
+    ],
+    "transcript": "Take me to the Apache Software Foundation.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": {
+        "min": 0,
+        "max": 1
+      },
+      "final": {
+        "activeTabOriginContains": "apache.org"
+      }
+    },
+    "cleanup": [
+      {
+        "kind": "closeNewTabs"
+      }
+    ]
+  }
+]

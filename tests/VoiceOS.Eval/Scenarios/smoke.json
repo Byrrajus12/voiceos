@@ -1,0 +1,52 @@
+[
+  // Seam-proving scenarios only — these prove the harness runs the real pipeline end to end,
+  // not the real product suite. See README.md for the scenario schema.
+  {
+    "id": "smoke.direct.switch-to-notepad",
+    "name": "Switch focus to an already-running Notepad",
+    "family": "direct-windows",
+    "tags": ["smoke", "direct"],
+    "safety": { "unattended": true, "mutatesExternalState": false },
+    "preconditions": [
+      { "kind": "windowOpen", "process": "notepad" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+    ],
+    "setup": [
+      { "kind": "startProcess", "file": "notepad.exe" },
+      { "kind": "wait", "ms": 1500 },
+      { "kind": "focusWindow", "process": "chrome" },
+      { "kind": "wait", "ms": 500 },
+    ],
+    "transcript": "switch to notepad",
+    "expect": {
+      "outcome": "Complete",
+      "route": ["DirectCapability"],
+      "scope": ["Direct"],
+      "directSteps": { "exclude": ["MediaControl"] },
+      "newTabs": { "max": 0 },
+      "final": { "foregroundProcess": "notepad" },
+    },
+  },
+  {
+    "id": "smoke.browser.open-wikipedia",
+    "name": "Open Wikipedia in a new task tab",
+    "family": "browser-destination",
+    "tags": ["smoke", "browser"],
+    "safety": { "unattended": true, "mutatesExternalState": false },
+    "preconditions": [
+      { "kind": "companionConnected" },
+    ],
+    "transcript": "open wikipedia",
+    "expect": {
+      "outcome": "Complete",
+      "route": ["ComputerUse"],
+      "scope": ["NewTaskTab"],
+      "newTabs": { "max": 1 },
+      "noMediaCommand": true,
+      "final": { "activeTabOriginContains": "wikipedia.org" },
+    },
+    "cleanup": [
+      { "kind": "closeNewTabs" },
+    ],
+  },
+]

@@ -1,0 +1,158 @@
+// Regression sentinels: familiar debugging cases for bugs already fixed. They use their own
+// family ("sentinel") and the "sentinel" tag, so family runs and the "generalization" tag never
+// include them. Exclude them from any pure generalization score.
+[
+  {
+    "id": "sentinel.youtube-ordinal-video",
+    "name": "Ordinal selection on a YouTube results page",
+    "family": "sentinel",
+    "tags": ["sentinel", "browser", "chrome", "setup-page", "ordinal"],
+    "safety": { "note": "Starts video playback (audio)." },
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://www.youtube.com/results?search_query=lofi+hip+hop" },
+      { "kind": "wait", "ms": 4000 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "foregroundProcess", "process": "chrome" },
+      { "kind": "activeTabOrigin", "contains": "youtube.com" },
+    ],
+    "transcript": "Play the second video.",
+    "timeoutSeconds": 90,
+    "expect": {
+      "outcome": "Complete",
+      "scope": ["ActiveTab"],
+      "noMediaCommand": true,
+      "newTabs": { "max": 0 },
+      "final": { "activeTabUrlContains": "youtube.com/watch" },
+    },
+  },
+  {
+    "id": "sentinel.explicit-service-reddit",
+    "name": "Explicit registered service destination",
+    "family": "sentinel",
+    "tags": ["sentinel", "browser", "chrome", "known-service"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Open Reddit.",
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 1 },
+      "maxBrowserDecisions": 1,
+      "final": { "activeTabOriginContains": "reddit.com" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "sentinel.installed-pwa-youtube-music",
+    "name": "Service with installed app opens the app, not a browser search",
+    "family": "sentinel",
+    "tags": ["sentinel", "requires-app"],
+    "preconditions": [ { "kind": "appInstalled", "app": "YouTube Music" } ],
+    "transcript": "Open YouTube Music.",
+    "settleMs": 3000,
+    "expect": {
+      "outcome": "Complete",
+      "noMediaCommand": true,
+      "final": { "foregroundTitleContains": "YouTube Music" },
+    },
+  },
+  {
+    // Known bug class: "go back" after playing a video must be browser Back, not media Previous.
+    "id": "sentinel.back-not-media-previous",
+    "name": "Back after opening a video returns to results",
+    "family": "sentinel",
+    "tags": ["sentinel", "browser", "chrome", "multi-turn", "setup-page", "back"],
+    "safety": { "note": "Starts video playback (audio)." },
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://www.youtube.com/results?search_query=jazz+piano" },
+      { "kind": "wait", "ms": 4000 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "activeTabOrigin", "contains": "youtube.com" },
+    ],
+    "timeoutSeconds": 90,
+    "turns": [
+      {
+        "transcript": "Play the first video.",
+        "expect": { "outcome": "Complete", "final": { "activeTabUrlContains": "youtube.com/watch" } },
+      },
+      {
+        "transcript": "Go back.",
+        "expect": {
+          "outcome": "Complete",
+          "noMediaCommand": true,
+          "final": { "activeTabUrlContains": "youtube.com/results" },
+        },
+      },
+    ],
+  },
+  {
+    "id": "sentinel.blank-new-tab",
+    "name": "Literal blank new tab needs no browser reasoning",
+    "family": "sentinel",
+    "tags": ["sentinel", "browser", "chrome"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Open a new tab.",
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "min": 1, "max": 1 },
+      "maxBrowserDecisions": 0,
+      "noMediaCommand": true,
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "sentinel.named-tab-switch",
+    "name": "Switch to an existing named service tab",
+    "family": "sentinel",
+    "tags": ["sentinel", "browser", "chrome", "setup-page", "named-tab"],
+    "setup": [
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://www.reddit.com/" },
+      { "kind": "wait", "ms": 3000 },
+      { "kind": "startProcess", "file": "chrome.exe", "args": "https://www.youtube.com/" },
+      { "kind": "wait", "ms": 3000 },
+    ],
+    "preconditions": [
+      { "kind": "companionConnected" },
+      { "kind": "activeTabOrigin", "contains": "youtube.com" },
+    ],
+    "transcript": "Switch to the Reddit tab.",
+    "expect": {
+      "outcome": "Complete",
+      "scope": ["ExistingNamedTab"],
+      "newTabs": { "max": 0 },
+      "final": { "activeTabOriginContains": "reddit.com" },
+    },
+  },
+  {
+    "id": "sentinel.search-react",
+    "name": "Bare search command",
+    "family": "sentinel",
+    "tags": ["sentinel", "browser", "chrome"],
+    "preconditions": [ { "kind": "companionConnected" } ],
+    "transcript": "Search React.",
+    "expect": {
+      "outcome": "Complete",
+      "newTabs": { "max": 1 },
+      "noMediaCommand": true,
+      "final": { "activeTabUrlContains": "react" },
+    },
+    "cleanup": [ { "kind": "closeNewTabs" } ],
+  },
+  {
+    "id": "sentinel.direct-open-discord",
+    "name": "Installed native app opens natively",
+    "family": "sentinel",
+    "tags": ["sentinel", "direct", "requires-app"],
+    "preconditions": [ { "kind": "appInstalled", "app": "Discord" } ],
+    "transcript": "Open Discord.",
+    "settleMs": 4000,
+    "expect": {
+      "outcome": "Complete",
+      "route": ["DirectCapability", "NativeInteraction"],
+      "newTabs": { "max": 0 },
+      "final": { "foregroundProcess": "Discord" },
+    },
+  },
+]

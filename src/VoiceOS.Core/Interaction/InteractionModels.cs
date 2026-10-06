@@ -1,6 +1,7 @@
 namespace VoiceOS.Core.Interaction;
 
-public sealed record InteractionGoal(string Text)
+/// <param name="Step">Optional framed outcome; null keeps legacy behavior for every caller.</param>
+public sealed record InteractionGoal(string Text, OutcomeStep? Step = null)
 {
     public bool IsValid => !string.IsNullOrWhiteSpace(Text);
 }
@@ -15,6 +16,7 @@ public enum InteractionActionKind
     Scroll,
     PressKey,
     GoBack,
+    GoForward,
     Wait,
     Complete
 }
@@ -45,7 +47,8 @@ public sealed record InteractionObservation(
     long Revision,
     string StateKey,
     string Evidence,
-    IReadOnlyList<InteractionCandidate> Candidates);
+    IReadOnlyList<InteractionCandidate> Candidates,
+    IReadOnlyList<Effect>? Effects = null);
 
 public enum InteractionResultStatus
 {
@@ -61,13 +64,16 @@ public enum InteractionResultStatus
     PlatformFailure
 }
 
-public sealed record InteractionActionResult(InteractionResultStatus Status, string? Detail = null)
+public sealed record InteractionActionResult(
+    InteractionResultStatus Status, string? Detail = null, IReadOnlyList<Effect>? Effects = null)
 {
     public bool Succeeded => Status == InteractionResultStatus.Success;
     public bool IsFailure => !Succeeded;
 
-    public static InteractionActionResult Ok(string? detail = null) => new(InteractionResultStatus.Success, detail);
-    public static InteractionActionResult Fail(InteractionResultStatus status, string detail) => new(status, detail);
+    public static InteractionActionResult Ok(string? detail = null, IReadOnlyList<Effect>? effects = null)
+        => new(InteractionResultStatus.Success, detail, effects);
+    public static InteractionActionResult Fail(InteractionResultStatus status, string detail, IReadOnlyList<Effect>? effects = null)
+        => new(status, detail, effects);
 }
 
 public enum InteractionCompletionState
@@ -89,14 +95,21 @@ public sealed record InteractionDecision(
     InteractionAction? Action = null,
     string? Detail = null,
     IReadOnlyList<InteractionChoice>? Choices = null,
-    double GoalConfidence = 0)
+    double GoalConfidence = 0,
+    TargetBinding? TargetBinding = null,
+    string? ReasonCode = null,
+    PendingChoice? Pending = null)
 {
     public static InteractionDecision Act(InteractionAction action, string? detail = null)
         => new(InteractionCompletionState.Incomplete, action, detail);
     public static InteractionDecision Done(string? detail = null)
         => new(InteractionCompletionState.Complete, Detail: detail);
-    public static InteractionDecision Unsure(string? detail = null, IReadOnlyList<InteractionChoice>? choices = null)
-        => new(InteractionCompletionState.Uncertain, Detail: detail, Choices: choices);
+    public static InteractionDecision Unsure(string? detail = null, IReadOnlyList<InteractionChoice>? choices = null,
+        string? reasonCode = null)
+        => new(InteractionCompletionState.Uncertain, Detail: detail, Choices: choices, ReasonCode: reasonCode);
+    /// <summary>The step cannot safely choose between several real options: suspend it and ask the user which.</summary>
+    public static InteractionDecision NeedsChoice(PendingChoice pending)
+        => new(InteractionCompletionState.Uncertain, Detail: pending.Reason, ReasonCode: "user_choice", Pending: pending);
 }
 
 public sealed record InteractionHistoryEntry(
@@ -139,7 +152,8 @@ public sealed record InteractionDecisionContext(
     InteractionObservation Observation,
     IReadOnlyList<InteractionHistoryEntry> RecentHistory,
     InteractionBudget Budget,
-    InteractionProgress Progress);
+    InteractionProgress Progress,
+    IReadOnlyList<Effect>? Effects = null);
 
 public sealed record InteractionRunResult(
     InteractionCompletionState Completion,
@@ -147,11 +161,19 @@ public sealed record InteractionRunResult(
     IReadOnlyList<InteractionHistoryEntry> RecentHistory,
     InteractionProgress Progress,
     string? Detail = null,
-    IReadOnlyList<InteractionChoice>? Choices = null);
+    IReadOnlyList<InteractionChoice>? Choices = null,
+    IReadOnlyList<Effect>? Effects = null,
+    IReadOnlyList<ProofRecord>? Proof = null,
+    string? ReasonCode = null,
+    PendingChoice? Pending = null);
 
 public interface IInteractionSurface
 {
     ValueTask<InteractionObservation> ObserveAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>May reuse state the surface obtained as the direct result of its last executed action; otherwise observes fresh.</summary>
+    ValueTask<InteractionObservation> ObserveAfterActionAsync(CancellationToken cancellationToken = default)
+        => ObserveAsync(cancellationToken);
 
     ValueTask<InteractionActionResult> ExecuteAsync(
         InteractionAction action,

@@ -42,6 +42,10 @@ public sealed class TypeSafeJevGateway : IJevGateway
                 using var request = new HttpRequestMessage(HttpMethod.Post, Endpoint);
                 request.Headers.Authorization = new("Bearer", _apiKey);
                 request.Content = JsonContent.Create(new { model = _model, state, questions });
+                using var modelCall = Activation.LatencyTrace.Current?.BeginModelCall(
+                    questions.ContainsKey("route") ? "route" : questions.ContainsKey("surface") ? "scope_surface"
+                    : questions.ContainsKey("tab") ? "scope_named_tab" : questions.ContainsKey("app") ? "scope_app"
+                    : questions.ContainsKey("operation") ? "browser_decision" : "completion_confirmation");
                 using var response = await _http.SendAsync(request, cancellationToken).ConfigureAwait(false);
                 if (!response.IsSuccessStatusCode)
                     throw new HttpRequestException($"Jev returned HTTP {(int)response.StatusCode}.", null, response.StatusCode);
@@ -103,7 +107,13 @@ public static class JevAnswerParser
             if (element.TryGetProperty("choice", out var choiceElement))
                 choice = choiceElement.GetString();
             confidence = ReadProbability(element, "confidence") ?? 0;
-            foreach (var property in element.EnumerateObject())
+            if (element.TryGetProperty("probabilities", out var nested) && nested.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var property in nested.EnumerateObject())
+                    if (ReadProbability(nested, property.Name) is { } probability)
+                        probabilities[property.Name] = probability;
+            }
+            else foreach (var property in element.EnumerateObject())
             {
                 if (property.Name is "type" or "choice" or "confidence" || property.Value.ValueKind != JsonValueKind.Number)
                     continue;

@@ -1,4 +1,5 @@
 using System.IO.Pipes;
+using System.Linq;
 using System.Text.Json;
 using Microsoft.Extensions.Logging;
 
@@ -64,6 +65,9 @@ public sealed class ChromeCompanionTransport : IChromeCompanionTransport, IDispo
     public async ValueTask FocusTaskTabAsync(string sessionId, int tabId, CancellationToken cancellationToken = default)
         => _ = await SendSnapshotAsync("FOCUS_TASK_TAB", new { sessionId, tabId }, cancellationToken).ConfigureAwait(false);
 
+    public async ValueTask CloseTaskTabAsync(string sessionId, int tabId, CancellationToken cancellationToken = default)
+        => _ = await SendAsync("CLOSE_TASK_TAB", new { sessionId, tabId }, cancellationToken).ConfigureAwait(false);
+
     public async ValueTask<IReadOnlyList<BrowserTabInfo>> ListTabsAsync(CancellationToken cancellationToken = default)
     {
         if (!IsConnected) return [];
@@ -89,11 +93,33 @@ public sealed class ChromeCompanionTransport : IChromeCompanionTransport, IDispo
         CancellationToken cancellationToken)
     {
         var result = await SendAsync(command, payload, cancellationToken).ConfigureAwait(false);
+        if (result.TryGetProperty("timings", out var timings) && timings.ValueKind == JsonValueKind.Object)
+        {
+            var formatted = string.Join(" ", timings.EnumerateObject()
+                .Select(property => $"{property.Name}={FormatTimingValue(property.Value)}"));
+            _logger.LogInformation("Browser companion timings command={Command} {Timings}", command, formatted);
+        }
         if (!result.TryGetProperty("snapshot", out var snapshot))
             throw new InvalidDataException("Chrome companion response omitted result.snapshot.");
-        return snapshot.Deserialize<BrowserSnapshot>(JsonOptions)
+        var parsed = snapshot.Deserialize<BrowserSnapshot>(JsonOptions)
             ?? throw new InvalidDataException("Chrome companion returned an invalid snapshot.");
+        return command == "ACT" ? parsed with { Signals = ReadSignals(result) } : parsed;
     }
+
+    internal static BrowserActionSignals? ReadSignals(JsonElement result)
+    {
+        if (!result.TryGetProperty("timings", out var timings) || timings.ValueKind != JsonValueKind.Object
+            || OptionalString(timings, "signal") is not { } signal)
+            return null;
+        return new(signal, OptionalString(timings, "settleReason"));
+    }
+
+    private static string FormatTimingValue(JsonElement value) => value.ValueKind switch
+    {
+        JsonValueKind.String => value.GetString() ?? "",
+        JsonValueKind.Null => "null",
+        _ => value.GetRawText()
+    };
 
     private async ValueTask<JsonElement> SendAsync<T>(
         string command, T payload, CancellationToken cancellationToken)

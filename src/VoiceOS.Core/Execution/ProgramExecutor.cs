@@ -48,7 +48,8 @@ public sealed class ProgramExecutor
         VoiceProgram program,
         IReadOnlyList<WindowCandidate> snapshot,
         DisplayTopology? topology = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default,
+        Action<VoiceStep>? onStepStarting = null)
     {
         topology ??= DisplayTopology.Empty;
 
@@ -59,6 +60,7 @@ public sealed class ProgramExecutor
 
         foreach (var step in program.Steps)
         {
+            onStepStarting?.Invoke(step);
             var stepResult = await ExecuteStepAsync(step, effectiveSnapshot, context, topology, ct);
             results.Add(stepResult);
             context.Record(stepResult);
