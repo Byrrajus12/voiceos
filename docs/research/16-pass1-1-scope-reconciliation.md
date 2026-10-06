@@ -1,5 +1,7 @@
 # VOS Pass 1.1 — scope reconciliation
 
+> Historical checkpoint from the Pass 1.1 investigation. Its branch status, test counts, live findings, and next-pass instructions describe that checkpoint, not the current Alpha baseline. See the [current README](../../README.md) for the integrated implementation.
+
 Baseline: `vnext/pass1-grounded-frontdoor`, `8727780762795a3a13250aef7b8f82b01e7fad8c`; working tree clean before changes. Implementation branch: `vnext/pass1-1-scope-reconciliation`. Pass 1 remains unchanged.
 
 ## Generic rules
