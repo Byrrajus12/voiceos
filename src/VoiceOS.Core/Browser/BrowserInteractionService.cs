@@ -658,7 +658,7 @@ public sealed class BrowserInteractionService(
                 }
                 else
                     (result, plan, repairReason) = await RunStepAsync(engine, plan, goal, scope, turnId ?? surface.SessionId,
-                    surface, decisions, carry, overall.Token).ConfigureAwait(false);
+                    surface, decisions, carry, effects, overall.Token).ConfigureAwait(false);
                 step = plan.Current;
                 // The step ran out of road without proving its target: the page it ended on may still state the entity.
                 if (step.Kind == PlanStepKind.Locate && !step.Reveal && result.Completion != InteractionCompletionState.Complete
@@ -955,7 +955,7 @@ public sealed class BrowserInteractionService(
     private async ValueTask<(InteractionRunResult Result, InteractionPlan Plan, string? RepairReason)> RunStepAsync(
         InteractionEngine engine, InteractionPlan plan, BrowserGoal goal, BrowserExecutionScope? scope, string turnId,
         BrowserSurface surface, TypeSafeBrowserDecisionSource decisions, InteractionObservation? carry,
-        CancellationToken cancellationToken)
+        IReadOnlyList<Effect> priorEffects, CancellationToken cancellationToken)
     {
         OutcomeStep Framed(InteractionPlan p) => PlanFraming.Frame(p, goal, scope, turnId);
         Task<InteractionRunResult> Run(InteractionPlan p, IInteractionDecisionSource source, InteractionObservation? start)
@@ -968,6 +968,18 @@ public sealed class BrowserInteractionService(
         // A history step is one traversal: a fixed decision, never recovered, never repeated.
         if (plan.Current.Kind == PlanStepKind.History)
             return (await Run(plan, new HistoryDecisions(plan.Current.Target), carry).ConfigureAwait(false), plan, null);
+        // "Play it" right after the step that opened the media: when playback is already positively observed, there is nothing
+        // left to do (no action, no blocker assessment, no repair). When it is not, the step runs normally.
+        if (plan.CurrentStepIndex > 0 && plan.Completed.LastOrDefault()?.Kind == PlanStepKind.Open && BrowserMediaState.IsPlayRequest(plan.Current))
+        {
+            var seen = carry is not null && BrowserMediaState.EstablishedPlaying(carry.Evidence, priorEffects) ? carry : await surface.ObserveAsync(cancellationToken).ConfigureAwait(false);
+            if (BrowserMediaState.EstablishedPlaying(seen.Evidence, priorEffects))
+            {
+                logger?.LogInformation("Browser step already_established kind=media_playing step={Step} actions=0", plan.CurrentStepIndex + 1);
+                return (new InteractionRunResult(InteractionCompletionState.Complete, seen, [], new(0, 0, 0, 0), "already_established:playing"), plan, null);
+            }
+            carry = seen;
+        }
         var result = await Run(plan, decisions, carry).ConfigureAwait(false);
         var recoverable = Recoverable(result);
         // A step that simply ran out of road is not repaired, but a blocker may still be what stopped it.
