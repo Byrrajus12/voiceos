@@ -513,8 +513,8 @@ public sealed class BrowserInteractionService(
         compiled = compiled with { Plan = RevealIntent.Correct(compiled.Plan) };
         applied = goal with { Normalization = compiled.Normalization, Plan = compiled.Plan };
         if (compiled.Normalization is { } normalized)
-            logger?.LogInformation("Browser normalization=used reason={Reason} objective={Objective} end_state={EndState} resource_type={ResourceType} service={Service} entity={Entity} queries={Queries} corrections={Corrections} steps={Steps}",
-                "semantic_goal", normalized.Objective, normalized.EndState, normalized.ResourceType, normalized.PreferredService,
+            logger?.LogInformation("Browser normalization=used transcript={Transcript} reason={Reason} objective={Objective} end_state={EndState} resource_type={ResourceType} service={Service} entity={Entity} queries={Queries} corrections={Corrections} steps={Steps}",
+                goal.OriginalUtterance, "semantic_goal", normalized.Objective, normalized.EndState, normalized.ResourceType, normalized.PreferredService,
                 normalized.Entity, string.Join(" | ", normalized.SearchQueries),
                 string.Join(" | ", normalized.CorrectedTerms.Select(x => $"{x.Heard}->{x.Interpreted} ({x.Confidence:F2})")),
                 string.Join(" > ", compiled.Plan.Steps.Select(x => $"{x.Kind}:{x.Description}")));

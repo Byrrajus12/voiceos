@@ -131,10 +131,41 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
         required = new[] { "finalGoal", "endState", "resourceType", "preferredService", "preferredServiceUrl", "steps", "correctedTerms" }
     };
 
+    /// <summary>Provider usage metadata for one compile call (absent fields stay null); never contains the key or the utterance.</summary>
+    public sealed record CompileUsage(int? PromptTokens, int? CompletionTokens, int? ReasoningTokens, string? FinishReason, string? Provider)
+    {
+        public static CompileUsage From(JsonElement body)
+        {
+            static int? Int(JsonElement e, string name) => e.ValueKind == JsonValueKind.Object && e.TryGetProperty(name, out var v) && v.TryGetInt32(out var n) ? n : null;
+            body.TryGetProperty("usage", out var usage);
+            var reasoning = usage.ValueKind == JsonValueKind.Object && usage.TryGetProperty("completion_tokens_details", out var details) ? Int(details, "reasoning_tokens") : null;
+            string? finish = null;
+            if (body.TryGetProperty("choices", out var choices) && choices.GetArrayLength() > 0
+                && choices[0].TryGetProperty("finish_reason", out var f) && f.ValueKind == JsonValueKind.String) finish = f.GetString();
+            var provider = body.TryGetProperty("provider", out var pv) && pv.ValueKind == JsonValueKind.String ? pv.GetString() : null;
+            return new(Int(usage, "prompt_tokens"), Int(usage, "completion_tokens"), reasoning, finish, provider);
+        }
+    }
+
+    /// <summary>Where one compile spent its time. <c>provider</c> is send to complete body; with a non-streaming call the first byte arrives when generation ends, so <c>firstByte</c> is that wait and <c>read</c> the remainder.</summary>
+    public sealed record CompileTiming(double BuildMs, double FirstByteMs, double ReadMs, double ParseValidateMs, double TotalMs, int Repairs, CompileUsage? Usage)
+    {
+        public double ProviderMs => FirstByteMs + ReadMs;
+        public string Format()
+            => $"build={BuildMs:F0}ms provider={ProviderMs:F0}ms (first_byte={FirstByteMs:F0}ms read={ReadMs:F0}ms) parse+validate={ParseValidateMs:F0}ms repair={Repairs} total={TotalMs:F0}ms"
+               + (Usage is null ? "" : $" prompt_tokens={Usage.PromptTokens?.ToString() ?? "?"} completion_tokens={Usage.CompletionTokens?.ToString() ?? "?"}"
+                   + $" reasoning_tokens={Usage.ReasoningTokens?.ToString() ?? "?"} finish={Usage.FinishReason ?? "?"} upstream={Usage.Provider ?? "?"}");
+    }
+
+    // Measured knobs, overridable per process so a dogfood run can A/B them against the timing log without a rebuild.
+    private static int MaxCompletionTokens => int.TryParse(Environment.GetEnvironmentVariable("VOICEOS_COMPILER_MAX_TOKENS"), out var n) && n is >= 300 and <= 4000 ? n : 1200;
+    private static string ReasoningEffort => Environment.GetEnvironmentVariable("VOICEOS_COMPILER_REASONING") is ("minimal" or "low" or "medium") and { } effort ? effort : "low";
+
     public async ValueTask<CompiledBrowserTask?> CompileAsync(string utterance, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(apiKey))
             throw new InfrastructureUnavailableException(UnavailableReason.BrowserGoalService, "Browser help is unavailable right now.");
+        var total = System.Diagnostics.Stopwatch.StartNew();
         using var request = new HttpRequestMessage(HttpMethod.Post, "https://openrouter.ai/api/v1/chat/completions");
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         request.Content = JsonContent.Create(new
@@ -143,22 +174,29 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
             messages = new object[] { new { role = "system", content = Prompt }, new { role = "user", content = utterance } },
             response_format = new { type = "json_schema", json_schema = new { name = "browser_plan", strict = true, schema = Schema } },
             // Reasoning tokens count against this: a six-step plan with dataflow was cut off mid-JSON at 500.
-            max_completion_tokens = 1200,
-            reasoning = new { effort = "low" }
+            max_completion_tokens = MaxCompletionTokens,
+            reasoning = new { effort = ReasoningEffort }
         });
+        var buildMs = total.Elapsed.TotalMilliseconds;
         string content;
+        CompileUsage? usage;
+        double firstByteMs, readMs;
         try
         {
             // A provider stall must not cost the 15 s transport timeout: compile has its own, shorter, hard limit.
             using var limit = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
             limit.CancelAfter(CompileTimeout);
             using var modelCall = Activation.LatencyTrace.Current?.BeginModelCall("compile");
-            using var response = await http.SendAsync(request, limit.Token).ConfigureAwait(false);
+            var sent = System.Diagnostics.Stopwatch.StartNew();
+            using var response = await http.SendAsync(request, HttpCompletionOption.ResponseHeadersRead, limit.Token).ConfigureAwait(false);
+            firstByteMs = sent.Elapsed.TotalMilliseconds;
             if (!response.IsSuccessStatusCode)
                 throw new InfrastructureUnavailableException(UnavailableReason.BrowserGoalService, "Browser help is unavailable right now.");
             using var body = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync(limit.Token), cancellationToken: limit.Token).ConfigureAwait(false);
+            readMs = sent.Elapsed.TotalMilliseconds - firstByteMs;
             content = body.RootElement.GetProperty("choices")[0].GetProperty("message").GetProperty("content").GetString()
                 ?? throw new InvalidOperationException("Missing provider content.");
+            usage = CompileUsage.From(body.RootElement);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (InfrastructureUnavailableException) { throw; }
@@ -167,9 +205,13 @@ public sealed class OpenRouterBrowserStepCompiler(HttpClient http, string? apiKe
             throw new InfrastructureUnavailableException(UnavailableReason.BrowserGoalService, "Browser help is unavailable right now.");
         }
         var diagnostics = new CompileDiagnostics();
+        var parseTimer = System.Diagnostics.Stopwatch.StartNew();
         var compiled = Parse(content, utterance, diagnostics);
+        parseTimer.Stop();
         foreach (var repair in diagnostics.Repairs)
             logger?.LogInformation("Browser compile structural repair {Repair}", repair);
+        logger?.LogInformation("Browser compile timing {Timing}", new CompileTiming(buildMs, firstByteMs, readMs,
+            parseTimer.Elapsed.TotalMilliseconds, total.Elapsed.TotalMilliseconds, diagnostics.Repairs.Count, usage).Format());
         if (compiled is null)
             logger?.LogWarning("Browser compile rejected reason={Reason} {Detail} length={Length} plan={Plan}", diagnostics.Reason ?? "malformed",
                 diagnostics.Detail ?? "-", content.Length, diagnostics.Plan ?? (content.Length > 600 ? content[..600] : content));
