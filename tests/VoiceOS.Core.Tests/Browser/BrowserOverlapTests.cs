@@ -222,6 +222,79 @@ public sealed class BrowserOverlapTests
         Assert.Equal(2, normalizer.Calls);
     }
 
+    // -- surface preparation overlapped with the plan compile ----------------------------------------------------
+
+    [Fact]
+    public async Task NamedDestination_BeginsLoadingAndSaysSo_WhileTheCompileIsInFlight_AndNothingSemanticRunsYet()
+    {
+        var normalizer = new ControlledNormalizer();
+        var transport = new ControlledTransport();
+        var service = new BrowserInteractionService(transport, BlockedGateway(), normalizer);
+        var activity = new List<BrowserActivity>();
+        service.ActionStarting += activity.Add;
+        var scope = new BrowserExecutionScope(BrowserScopeKind.NewTaskTab, Destination: new Uri("https://www.youtube.com/"));
+
+        var run = service.RunAsync("play hello on youtube", scope: scope).AsTask();
+
+        Assert.Equal(1, transport.Opens);                       // the destination is already loading
+        Assert.Equal(0, transport.Acts);                        // no plan yet, so no semantic action
+        var first = Assert.Single(activity);
+        Assert.True(first.OpeningTab);
+        Assert.Null(first.Query);                               // nothing is claimed about the task yet
+        normalizer.Complete(ControlledNormalizer.Result);
+        await run;
+    }
+
+    [Fact]
+    public async Task GenericWebTask_PreparesTheSearchSurface_WhileCompiling_AndKeepsItWhenThePlanStartsThere()
+    {
+        var normalizer = new ControlledNormalizer();
+        var transport = new ControlledTransport();
+        var service = new BrowserInteractionService(transport, BlockedGateway(), normalizer);
+        var activity = new List<BrowserActivity>();
+        service.ActionStarting += activity.Add;
+        var scope = new BrowserExecutionScope(BrowserScopeKind.NewTaskTab) { ContextDependency = ContextDependency.SelfContained };
+
+        var run = service.RunAsync("find out who plays the lead in a ripgrep documentary", scope: scope).AsTask();
+
+        Assert.Equal(1, transport.Opens);
+        Assert.Equal(0, transport.Acts);
+        Assert.Equal("Preparing web search", Assert.Single(activity).StepText);
+        normalizer.Complete(ControlledNormalizer.Result);        // names no service in the words, so the default surface stands
+        await run;
+        Assert.Equal(1, transport.Opens);
+        Assert.Equal(0, transport.Closes);
+    }
+
+    [Fact]
+    public async Task GenericWebTask_DiscardsThePreparedSurface_WhenThePlanStartsElsewhere()
+    {
+        var normalizer = new ControlledNormalizer();
+        var transport = new ControlledTransport();
+        var service = new BrowserInteractionService(transport, BlockedGateway(), normalizer);
+        var scope = new BrowserExecutionScope(BrowserScopeKind.NewTaskTab) { ContextDependency = ContextDependency.SelfContained };
+
+        var run = service.RunAsync("find ripgrep on GitHub", scope: scope).AsTask();
+        Assert.Equal(1, transport.Opens);
+        normalizer.Complete(ControlledNormalizer.Result);        // the user named GitHub
+        await run;
+
+        Assert.Equal(1, transport.Closes);                       // the speculative search tab is closed, not left behind
+        Assert.Equal(2, transport.Opens);                        // and the plan's own origin is opened
+    }
+
+    [Fact]
+    public async Task AContextDependentOrUncertainRequest_DoesNotPrepareASurfaceEarly()
+    {
+        var normalizer = new ControlledNormalizer();
+        var transport = new ControlledTransport();
+        var service = new BrowserInteractionService(transport, BlockedGateway(), normalizer);
+        var run = service.RunAsync("do that again", scope: new BrowserExecutionScope(BrowserScopeKind.NewTaskTab)).AsTask();
+        Assert.Equal(0, transport.Opens);
+        normalizer.Complete(ControlledNormalizer.Result);
+        await run;
+    }
+
     [Fact]
     public async Task ADuplicatePrefetchOfTheSameUtteranceInOneActivation_CompilesOnce_AndAnUnusedOneIsCancelled()
     {
@@ -348,8 +421,13 @@ public sealed class BrowserOverlapTests
             return ValueTask.FromResult(Snapshot(sessionId, tabId));
         }
 
+        public int Acts { get; private set; }
+
         public ValueTask<BrowserSnapshot> ActAsync(BrowserActionRequest action, CancellationToken cancellationToken = default)
-            => ValueTask.FromResult(Snapshot(action.SessionId, action.TabId));
+        {
+            Acts++;
+            return ValueTask.FromResult(Snapshot(action.SessionId, action.TabId));
+        }
 
         public ValueTask SelectTabAsync(string sessionId, int tabId, string expectedUrl,
             bool requireActive, CancellationToken cancellationToken = default)

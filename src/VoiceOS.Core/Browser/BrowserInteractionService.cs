@@ -169,7 +169,15 @@ public sealed class BrowserInteractionService(
             if (scope?.IsSurfaceOnly != true && scope?.Kind == BrowserScopeKind.NewTaskTab
                 && scope.TabId is null && destinationKnownWithoutNormalization)
                 return await RunKnownDestinationNewTabAsync(goal, scope!, sessionId, activationId,
-                    framingTimer, cancellationToken).ConfigureAwait(false);
+                    framingTimer, speculative: false, cancellationToken).ConfigureAwait(false);
+
+            // A self-contained generic web task names no destination: the search surface it will start on is the default one,
+            // so it can be prepared while the plan compiles. Nothing semantic runs until the plan exists, and a plan that
+            // turns out to need another origin discards the prepared tab.
+            if (_compiler is not null && scope is { Kind: BrowserScopeKind.NewTaskTab, TabId: null, IsSurfaceOnly: false,
+                    ContextDependency: ContextDependency.SelfContained } && string.IsNullOrWhiteSpace(scope.NamedServiceHint))
+                return await RunKnownDestinationNewTabAsync(goal, scope, sessionId, activationId,
+                    framingTimer, speculative: true, cancellationToken).ConfigureAwait(false);
 
             // Tab-scoped runs (ActiveTab / ExistingNamedTab / RecentOwnedTaskTab): the tab is
             // fixed by scope already, so foreground verification + selection can run while
@@ -364,10 +372,13 @@ public sealed class BrowserInteractionService(
     /// </summary>
     private async ValueTask<BrowserInteractionOutcome> RunKnownDestinationNewTabAsync(
         BrowserGoal goal, BrowserExecutionScope scope, string sessionId, string? activationId,
-        Stopwatch framingTimer, CancellationToken cancellationToken)
+        Stopwatch framingTimer, bool speculative, CancellationToken cancellationToken)
     {
         var destination = BrowserGoal.BootstrapUrl(goal);
         var raceClock = Stopwatch.StartNew();
+        // The computer visibly starts on what is already deterministic; the understood task replaces this text at the join.
+        ActionStarting?.Invoke(speculative ? new(OpeningTab: true, StepText: "Preparing web search") : ActivityFor(goal, scope, null));
+        logger?.LogInformation("Browser surface prepare=early speculative={Speculative} origin={Origin}", speculative, BrowserSurface.LogOrigin(destination));
         double? startupDoneAtMs = null;
         LatencyTrace.Current?.MarkExternalAction();
 
@@ -429,6 +440,14 @@ public sealed class BrowserInteractionService(
         var destinationTimer = Stopwatch.StartNew();
         var finalDestination = BrowserGoal.BootstrapUrl(goal);
         destinationTimer.Stop();
+        var prepared = true;
+        if (speculative && !SameOrigin(destination, finalDestination))
+        {
+            // The plan needs a different starting origin than the one prepared: discard it and start where the plan says.
+            logger?.LogInformation("Browser surface prepare=discarded from={From} to={To}", BrowserSurface.LogOrigin(destination), BrowserSurface.LogOrigin(finalDestination));
+            await CleanupStartupAsync(startupTask, sessionId).ConfigureAwait(false);
+            prepared = false;
+        }
         logger?.LogInformation("Browser stage framing_ms={FramingMs:F0} normalization_ms={NormalizationMs:F0} destination_ms={DestinationMs:F0} scope={Scope} destination_origin={Destination} destination_reason={DestinationReason}",
             framingTimer.Elapsed.TotalMilliseconds,
             normalizationTimer.Elapsed.TotalMilliseconds, destinationTimer.Elapsed.TotalMilliseconds,
@@ -445,10 +464,14 @@ public sealed class BrowserInteractionService(
         // The prepared startup observation is consumed once whichever finished first; only one so old that the page has surely
         // moved on (well beyond any normal compile) is observed again.
         var reuse = startupDoneAtMs is not { } doneAt || (normalizationDoneAtMs - doneAt) <= _preparedFreshnessThresholdMs;
-        surface.Prepare(startupSnapshot, reuse);
+        if (prepared) surface.Prepare(startupSnapshot, reuse);
         ActionStarting?.Invoke(ActivityFor(goal, scope, null) with { StepText = goal.Plan?.Current.Progress });
         return await RunSurfaceAsync(goal, surface, decisions, cancellationToken, scope, activationId).ConfigureAwait(false);
     }
+
+    private static bool SameOrigin(string a, string b)
+        => Uri.TryCreate(a, UriKind.Absolute, out var x) && Uri.TryCreate(b, UriKind.Absolute, out var y)
+            && x.GetLeftPart(UriPartial.Authority).Equals(y.GetLeftPart(UriPartial.Authority), StringComparison.OrdinalIgnoreCase);
 
     private static bool IsWebContent(string? url)
         => Uri.TryCreate(url, UriKind.Absolute, out var uri) && uri.Scheme is "http" or "https";
