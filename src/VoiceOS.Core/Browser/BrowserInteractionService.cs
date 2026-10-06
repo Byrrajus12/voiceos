@@ -758,12 +758,21 @@ public sealed class BrowserInteractionService(
             ActionStarting?.Invoke(new(StepText: step.Progress));
             var fresh = await s.Surface.ObserveAsync(cancellationToken).ConfigureAwait(false);
             // The selected semantic option, found again among what is on the page now; nothing else is ever activated.
-            if (Rebind(option, fresh) is not { } target)
+            var rebound = Rebind(option, fresh);
+            if (rebound.Kind == RebindKind.Missing)
             {
-                logger?.LogInformation("Browser pending choice resume=rebind_failed step={Step}", s.Choice.StepId);
-                return new(InteractionCompletionState.Incomplete, BrowserStepMessages.ChoiceGone, null, s.Surface.LatestSnapshot?.Url,
+                // Dynamic pages move: one bounded second look before concluding it is gone.
+                var again = await s.Surface.ObserveAsync(cancellationToken).ConfigureAwait(false);
+                if (!StringComparer.Ordinal.Equals(again.StateKey, fresh.StateKey)) { fresh = again; rebound = Rebind(option, fresh); }
+            }
+            if (rebound.Target is not { } target)
+            {
+                logger?.LogInformation("Browser pending choice resume=rebind_failed step={Step} reason={Reason}", s.Choice.StepId, rebound.Kind);
+                return new(InteractionCompletionState.Incomplete,
+                    rebound.Kind == RebindKind.Ambiguous ? BrowserStepMessages.ChoiceAmbiguous : BrowserStepMessages.ChoiceGone, null, s.Surface.LatestSnapshot?.Url,
                     s.Surface.LatestSnapshot?.Title, s.DecisionCount, s.ActionCount, s.Surface.TabId, s.Surface.SessionId);
             }
+            logger?.LogInformation("Browser pending choice rebound via={Via}", rebound.Via);
             logger?.LogInformation("Browser pending choice resume step={Step} resolution={Resolution}", s.Choice.StepId, s.Choice.Resolution);
             var engine = new InteractionEngine(new PlannedStepEvaluator(s.Goal), ProofMode.On);
             OutcomeStep Framed(InteractionPlan p) => PlanFraming.Frame(p, s.Goal, s.Scope, s.TurnId);
@@ -814,28 +823,14 @@ public sealed class BrowserInteractionService(
     }
 
     /// <summary>
-    /// The offered control that is the option the user picked: the same words (and address, when it had one) among the controls
-    /// now on the page. Two controls that still look identical (twins told apart by their nearby text) are told apart by it; a
-    /// choice that still matches several is refused rather than guessed.
+    /// The offered control that is the option the user picked, found again by semantic identity (see ChoiceRebinder);
+    /// several remaining matches are refused rather than guessed.
     /// </summary>
-    private static (InteractionCandidate Candidate, InteractionAction Click)? Rebind(ChoiceOption option, InteractionObservation fresh)
+    private static (RebindKind Kind, (InteractionCandidate Candidate, InteractionAction Click)? Target, string Via) Rebind(ChoiceOption option, InteractionObservation fresh)
     {
-        static string Norm(string? text) => string.Join(' ', BrowserCompletionEvidence.Tokens(text));
-        var wanted = Norm(option.DisplayText);
-        // Identity, narrowed in order: the words, the kind of control, where it leads, the text around it, its place in a list.
-        // A step that still leaves more than one is refused: another same-named control is never substituted.
-        var same = BrowserEvidence.Elements(fresh.Evidence).Where(e => e.Enabled
-                && Norm(!string.IsNullOrWhiteSpace(e.Name) ? e.Name : e.Value) == wanted).ToArray();
-        T[] Narrow<T>(T[] items, Func<T, bool> keep) => items.Length > 1 && items.Any(keep) ? items.Where(keep).ToArray() : items;
-        if (same.Length > 1 && option.Role is not null) same = Narrow(same, e => string.Equals(e.Role, option.Role, StringComparison.OrdinalIgnoreCase));
-        if (same.Length > 1 && option.Href is not null)
-            same = Narrow(same, e => string.Equals(e.Href, option.Href, StringComparison.OrdinalIgnoreCase));
-        else if (same.Length == 1 && option.Href is not null && same[0].Href is not null
-            && !string.Equals(same[0].Href, option.Href, StringComparison.OrdinalIgnoreCase)) return null;   // same words, somewhere else
-        if (same.Length > 1 && option.Context is not null) same = Narrow(same, e => Norm(e.Context) == Norm(option.Context));
-        if (same.Length > 1 && option.Position is not null) same = Narrow(same, e => e.Position == option.Position);
-        if (same.Length != 1) return null;
-        return BlockerPolicy.Offered(fresh, same[0].Id) is { } offered ? offered : null;
+        var found = ChoiceRebinder.Find(option, BrowserEvidence.Elements(fresh.Evidence), id => BlockerPolicy.Offered(fresh, id) is not null);
+        return found.Kind == RebindKind.Found && BlockerPolicy.Offered(fresh, found.ElementId!) is { } offered
+            ? (RebindKind.Found, offered, found.Via) : (found.Kind == RebindKind.Found ? RebindKind.Missing : found.Kind, null, found.Via);
     }
 
     private static InteractionRunResult Unresolved(InteractionObservation observation, string code)

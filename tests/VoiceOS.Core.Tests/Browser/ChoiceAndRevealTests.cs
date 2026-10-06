@@ -521,7 +521,7 @@ public sealed class ChoiceAndRevealTests
         var pending2 = Assert.IsType<PendingChoice>((await service2.RunAsync("open Hello, then stop", scope: Active)).Pending);
         moved = true;
         var resumed = await service2.ResumeChoiceAsync(pending2.Options[0].ChoiceId);
-        Assert.Equal(BrowserStepMessages.ChoiceGone, resumed.Detail);
+        Assert.Equal(BrowserStepMessages.ChoiceAmbiguous, resumed.Detail);
         Assert.Empty(twins.Acts);
     }
 

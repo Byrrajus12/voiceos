@@ -21,12 +21,13 @@ public static class BrowserStepMessages
     public const string HumanOther = "This page needs something only you can do before I can continue.";
     public const string ChoiceExpired = "That choice has expired.";
     public const string ChoiceGone = "I couldn't find that option on the page any more.";
+    public const string ChoiceAmbiguous = "That option now matches more than one thing on the page.";
     public const string ChoiceUnknown = "That isn't one of the choices.";
 
     private static readonly string[] Known =
         [NoSearchControl, NoChange, NoMatch, Stalled, TooLong, NotUnderstood,
             "There is no earlier page in this tab.", "That tab has no previous page.", "That tab has no next page.", "Nothing was done on the current page yet.",
-            Captcha, SignIn, Verification, Payment, HumanOther, ChoiceExpired, ChoiceGone, ChoiceUnknown];
+            Captcha, SignIn, Verification, Payment, HumanOther, ChoiceExpired, ChoiceGone, ChoiceAmbiguous, ChoiceUnknown];
 
     /// <summary>True for a message this class already worded for the user (shown as is).</summary>
     public static bool IsUserFacing(string? detail)
