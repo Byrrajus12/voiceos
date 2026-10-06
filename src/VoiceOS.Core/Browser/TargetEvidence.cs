@@ -117,8 +117,15 @@ internal static class TargetEvidence
         };
     }
 
-    private static string PathWords(string? href)
+    /// <summary>A bare clock reading (4:08) that labels a duration, never a target.</summary>
+    internal static bool IsTimestamp(string? text) => text is not null && ClockLabel.IsMatch(text.Trim());
+
+    // A duration badge, optionally with the playback state the page words beside it ("6:07 Now playing"): never a thing to choose.
+    private static readonly System.Text.RegularExpressions.Regex ClockLabel =
+        new(@"^\d{1,2}(:\d{2}){1,2}(\s+(now playing|watched|live|premiere))?$", System.Text.RegularExpressions.RegexOptions.Compiled | System.Text.RegularExpressions.RegexOptions.IgnoreCase);
+
+    internal static string PathWords(string? href)
         => Uri.TryCreate(href, UriKind.Absolute, out var uri) ? Uri.UnescapeDataString(uri.AbsolutePath) : "";
 
-    private static string Singular(string term) => term.Length > 3 && term.EndsWith('s') ? term[..^1] : term;
+    internal static string Singular(string term) => term.Length > 3 && term.EndsWith('s') ? term[..^1] : term;
 }

@@ -14,10 +14,12 @@ public enum ChoiceResolution
 /// are the site's/app's own words (accessible name, value, nearby text), never generated. <see cref="TargetRef"/> is the
 /// candidate's reference in the observation the choice was built from; <see cref="InternalConfidence"/> is kept for
 /// diagnostics and is never shown. <see cref="Href"/>, <see cref="Role"/>, <see cref="Context"/> and <see cref="Position"/> are the
-/// identity the option is found again by once references have gone stale; they are never displayed.
+/// identity the option is found again by once references have gone stale; they are never displayed. <see cref="AlternateLabels"/> are
+/// the names of the same result's other handles (thumbnail, duration-adjacent node).
 /// </summary>
 public sealed record ChoiceOption(string ChoiceId, string TargetRef, string DisplayText, string? SecondaryText = null,
-    double? InternalConfidence = null, string? Href = null, string? Role = null, string? Context = null, int? Position = null);
+    double? InternalConfidence = null, string? Href = null, string? Role = null, string? Context = null, int? Position = null,
+    IReadOnlyList<string>? AlternateLabels = null);
 
 /// <summary>
 /// A step the runtime suspended because several real, grounded options each satisfy the user's intent and only the user
